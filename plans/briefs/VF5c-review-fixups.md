@@ -26,6 +26,24 @@ public repo, made-up keys only, red first, commit nothing.
    `<profile>/.credentials.json` exists (any file type), not only when `subscription_refused`.
 5. **L5: echo comes back after Ctrl-\, a hang-up or a kill.** In `stop_on_interrupt`, install the same
    handler for SIGTERM, SIGHUP and SIGQUIT, so `read_key` returns through its guard.
+6. **A mistyped key reads as signed out at the first call.** Measured by V1 on Claude Code 2.1.311
+   (2026-11-14, throwaway `CLAUDE_CONFIG_DIR`, a made-up well-shaped key): `claude auth status` checks
+   nothing over the network and reads `"loggedIn": true, "authMethod": "api_key"`, so `save_key` keeps
+   any well-shaped key. The first `-p` call then exits 1 with `"is_error": true`,
+   `"api_error_status": 401` and `"result": "Invalid API key · Fix external API key"`, which
+   `signed_out` (`claude.rs`) doesn't match, so the person sees `text::FAILED`. Fix: `signed_out` also
+   matches a result containing `Invalid API key`, so that reply is judged `signed-out` with
+   `text::SIGNED_OUT` (on a Mac without the subscription feature it already says to paste the key on
+   Connect Claude). Red first: a stub reply with exactly that JSON is judged `signed-out`. Don't add a
+   network check to `save_key`.
+
+## 1b. Tests and checks
+
+Red first for each fix, then green, from the repo root (two test threads, the computer is busy):
+`cargo test --locked -p voice-agent -p voice-api -p voice-cli -- --test-threads=2`, the same with
+`--features claude-subscription`, `cargo fmt --all`, and both clippy runs from VF5b's brief §2.5.
+Your sandbox can't bind localhost: report the tests that fail for that, and run everything else.
+Report the files changed and the exact commands you ran with their results.
 
 ## 2. Records to correct (V1 does these, not Codex)
 
