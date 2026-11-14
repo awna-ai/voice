@@ -1,7 +1,7 @@
-# VF5d brief: the two LOW findings from VF5b's security review
+# VF5d brief: the two LOW findings from VF5b's security review, and VF5c's sign-out
 
-The security review of VF5b (`1c13b54`) found no HIGH or MEDIUM findings and two LOW ones. Fix both
-after VF5c is in the working tree (VF5c adds `claude::forget_key`, used below). Same rules as VF5b's
+The security review of VF5b (`1c13b54`) found no HIGH or MEDIUM findings and two LOW ones. Fix both, and item 3 from
+V1's review of VF5c, after VF5c (committed at `1445370`; VF5c adds `claude::forget_key`, used below). Same rules as VF5b's
 brief: public repo, made-up keys only (`sk-ant-api03-` followed by `a` characters), red first,
 **commit nothing**, and never touch `.ai/`.
 
@@ -35,6 +35,20 @@ Skills: `~/.codex/skills/tdd-skill/SKILL.md`, `~/.codex/skills/security-and-hard
      `invalid_and_linked_stores_are_unreadable` does): a check with a bad-shaped stored value is not
      ready, says `KEY_UNREADABLE`, and has `can_sign_in` and `console_takes_key` true; saving a valid
      made-up key then replaces it and reads ready; a later check is ready.
+3. **Sign-out says it worked only when it did** (V1's review of VF5c). VF5c's sign-out, in the CLI's
+   `claude_sign_out` (`builder/cli/src/main.rs`) and the API's `claude_sign_out_in`
+   (`builder/api/src/assistants.rs`), skips `sign_out` on *any* `find`/`find_in` error and then
+   reports success. VF5c's brief allowed that only when Claude Code isn't installed: a profile error
+   (`text::PROFILE_FAILED`) can leave Claude Code's own login file in place. Fix, in both places:
+   after `claude::forget_key(home)?`, match the `find`/`find_in` result: `Ok(claude)` runs
+   `claude.sign_out(home)?` as now; an error whose message is exactly `text::NOT_INSTALLED` (compare
+   as `claude_message` does) carries on to the success report; any other error is returned as the
+   failure (the CLI's `?`; the API's `failure(&claude_message(error))`), with the key already forgotten.
+   Red first, in both `builder/cli/tests/agent.rs` and `builder/api/tests/claude_sign_in.rs`: with a
+   runnable stub `claude` and a stored made-up key, make Voice's profile folder unpreparable by
+   writing a regular file at `claude::profile_folder(home)`'s *parent* (the `Voice` app folder);
+   sign-out then fails with `text::PROFILE_FAILED`, prints no `SIGN_OUT_SUCCESS`, and the stored key
+   is gone. VF5c's not-installed tests must stay green.
 
 ## 2. Tests and checks
 
