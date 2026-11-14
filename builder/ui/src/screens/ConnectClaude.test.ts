@@ -483,3 +483,20 @@ it.each([
   expect((wrapper.get('#console-key').element as HTMLInputElement).value).toBe('')
   expect(button(wrapper, 'Save the key').attributes('disabled')).toBeDefined()
 })
+
+it.each(['Check again', 'Sign in with a Claude subscription (testers)'])(
+  'clears an unsaved key after %s even when the key field is offered again', async action => {
+    const offered = { ...keyStatus, canSignInWithSubscription: true }
+    const backend = fakeBackend({
+      claudeCheck: vi.fn().mockResolvedValue(offered),
+      claudeSignIn: vi.fn().mockResolvedValue(offered),
+    })
+    const wrapper = screen(ConnectClaude, backend, { assistant })
+    await flushPromises()
+    await wrapper.get('#console-key').setValue(`sk-ant-api03-${'a'.repeat(40)}`)
+    await button(wrapper, action).trigger('click')
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('#console-key').element.value).toBe('')
+    expect(button(wrapper, 'Save the key').attributes('disabled')).toBeDefined()
+  },
+)

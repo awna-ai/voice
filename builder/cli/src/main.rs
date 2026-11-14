@@ -1671,8 +1671,10 @@ fn claude_sign_out() -> Result<()> {
     let home = home()?;
     let path = std::env::var_os("PATH");
     voice_agent::claude::forget_key(&home)?;
-    if let Ok(claude) = voice_agent::claude::find(path.as_deref(), &home) {
-        claude.sign_out(&home)?;
+    match voice_agent::claude::find(path.as_deref(), &home) {
+        Ok(claude) => claude.sign_out(&home)?,
+        Err(Error::Invalid(message)) if message == voice_agent::text::NOT_INSTALLED => {}
+        Err(error) => return Err(error),
     }
     println!("{}", voice_agent::text::SIGN_OUT_SUCCESS);
     Ok(())

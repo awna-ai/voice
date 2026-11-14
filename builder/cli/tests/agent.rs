@@ -997,3 +997,24 @@ fn sign_out_forgets_malformed_keys_before_finding_claude() {
         );
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sign_out_reports_profile_failure_after_forgetting_the_key() {
+    let f = Fixture::new();
+    f.stub("exit 0");
+    let store = f.home.join(".voice-test-claude-console-key");
+    fs::write(&store, format!("sk-ant-api03-{}", "a".repeat(40))).unwrap();
+    let profile = voice_agent::claude::profile_folder(&f.home);
+    let parent = profile.parent().unwrap();
+    fs::create_dir_all(parent.parent().unwrap()).unwrap();
+    fs::write(parent, "not a folder").unwrap();
+    let out = f.run(&["claude", "sign-out"]);
+    assert!(!store.exists());
+    assert!(!out.status.success());
+    assert_eq!(
+        text(&out.stderr),
+        format!("voice: {}\n", voice_agent::text::PROFILE_FAILED)
+    );
+    assert!(!text(&out.stdout).contains(voice_agent::text::SIGN_OUT_SUCCESS));
+}

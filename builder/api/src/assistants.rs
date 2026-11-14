@@ -732,6 +732,17 @@ fn unavailable_status(error: Error) -> dto::ClaudeStatus {
         console_takes_key: claude::takes_key(claude::SignIn::Console),
     }
 }
+fn unreadable_key_status() -> dto::ClaudeStatus {
+    dto::ClaudeStatus {
+        subscription: false,
+        ready: false,
+        message: text::KEY_UNREADABLE.into(),
+        note: None,
+        can_sign_in: true,
+        can_sign_in_with_subscription: claude::SUBSCRIPTION_OFFERED,
+        console_takes_key: true,
+    }
+}
 pub fn claude_check_in(
     home: &Path,
     path: Option<&OsStr>,
@@ -739,6 +750,9 @@ pub fn claude_check_in(
 ) -> Result<dto::ClaudeStatus> {
     let claude = match claude::find_in(home, path, fallbacks) {
         Ok(claude) => claude,
+        Err(Error::Invalid(message)) if message == text::KEY_UNREADABLE => {
+            return Ok(unreadable_key_status());
+        }
         Err(error) => return Ok(unavailable_status(error)),
     };
     Ok(match claude.status(home) {
@@ -976,7 +990,16 @@ pub fn claude_save_key_in(
         *state = Some(Arc::new(AtomicBool::new(false)));
     }
     let _guard = ClaudeSignInGuard(sign_ins);
-    let claude = match claude::find_in(home, path, fallbacks) {
+    let found = match claude::find_in(home, path, fallbacks) {
+        Err(Error::Invalid(message)) if message == text::KEY_UNREADABLE => {
+            if claude::forget_key(home).is_err() {
+                return Ok(unreadable_key_status());
+            }
+            claude::find_in(home, path, fallbacks)
+        }
+        found => found,
+    };
+    let claude = match found {
         Ok(claude) => claude,
         Err(error) => return Ok(unavailable_status(error)),
     };
@@ -1033,10 +1056,12 @@ pub fn claude_sign_out_in(
     }
     let _guard = ClaudeSignOutGuard(sign_ins);
     claude::forget_key(home).map_err(|error| failure(&claude_message(error)))?;
-    if let Ok(claude) = claude::find_in(home, path, fallbacks) {
-        claude
+    match claude::find_in(home, path, fallbacks) {
+        Ok(claude) => claude
             .sign_out(home)
-            .map_err(|error| failure(&claude_message(error)))?;
+            .map_err(|error| failure(&claude_message(error)))?,
+        Err(Error::Invalid(message)) if message == text::NOT_INSTALLED => {}
+        Err(error) => return Err(failure(&claude_message(error))),
     }
     let mut status = claude_check_in(home, path, fallbacks)?;
     status.note = Some(text::SIGN_OUT_SUCCESS.into());

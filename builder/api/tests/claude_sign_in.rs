@@ -755,3 +755,45 @@ fn sign_out_forgets_valid_or_malformed_keys_without_claude_installed() {
         assert_eq!(status.note.as_deref(), Some(text::SIGN_OUT_SUCCESS));
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn unreadable_stored_key_can_be_checked_and_replaced() {
+    let stub = Stub::new("exit 1");
+    let store = stub.0.join(".voice-test-claude-console-key");
+    fs::write(&store, "not-a-key").unwrap();
+    let program = stub.0.join("claude");
+    let status = claude_check_in(&stub.0, None, std::slice::from_ref(&program)).unwrap();
+    assert!(!status.ready);
+    assert_eq!(status.message, text::KEY_UNREADABLE);
+    assert!(status.can_sign_in);
+    assert!(status.console_takes_key);
+    let key = format!("sk-ant-api03-{}", "a".repeat(40));
+    fs::write(
+        &program,
+        fs::read_to_string(&program).unwrap().replace(
+            "[ -f \"$here/ready\" ]",
+            &format!("[ \"$ANTHROPIC_API_KEY\" = '{key}' ]"),
+        ),
+    )
+    .unwrap();
+    assert!(save_key(&stub, &ClaudeSignIns::new(), &key).unwrap().ready);
+    assert_eq!(fs::read_to_string(store).unwrap(), key);
+    assert!(claude_check_in(&stub.0, None, &[program]).unwrap().ready);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sign_out_reports_profile_failure_after_forgetting_the_key() {
+    let stub = Stub::new("exit 1");
+    let store = stub.0.join(".voice-test-claude-console-key");
+    fs::write(&store, format!("sk-ant-api03-{}", "a".repeat(40))).unwrap();
+    let profile = voice_agent::claude::profile_folder(&stub.0);
+    let parent = profile.parent().unwrap();
+    fs::create_dir_all(parent.parent().unwrap()).unwrap();
+    fs::write(parent, "not a folder").unwrap();
+    let result = stub.sign_out(&ClaudeSignIns::new());
+    assert!(!store.exists());
+    assert_eq!(result.unwrap_err().message, text::PROFILE_FAILED);
+    assert!(!stub.runs().contains("auth logout"));
+}

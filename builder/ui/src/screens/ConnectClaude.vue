@@ -18,6 +18,7 @@ const signingOut = ref(false)
 const signOutError = ref('')
 const signOutMessage = ref('')
 async function check() {
+  key.value = ''
   loading.value = true
   signOutError.value = ''
   signOutMessage.value = ''
@@ -39,6 +40,7 @@ async function check() {
   }
 }
 async function signIn(subscription: boolean) {
+  key.value = ''
   signingIn.value = true
   signOutError.value = ''
   signOutMessage.value = ''
@@ -102,7 +104,10 @@ async function cancelSignIn() {
     // The pending sign-in still ends even if cancelling fails.
   }
 }
-onUnmounted(() => { if (signingIn.value) void cancelSignIn() })
+onUnmounted(() => {
+  key.value = ''
+  if (signingIn.value) void cancelSignIn()
+})
 const limit = ref<SpendingLimit>()
 const day = ref('')
 const step = ref('')
