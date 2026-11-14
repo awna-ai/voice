@@ -205,7 +205,7 @@ onMounted(loadLimit)
             <form v-else class="mb-3" @submit.prevent="saveKey">
               <label for="console-key" class="form-label">Anthropic Console API key</label>
               <input id="console-key" v-model="key" type="password" class="form-control" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="console-key-help" :disabled="savingKey" />
-              <div id="console-key-help" class="form-text">Make a key at console.anthropic.com, under API keys. Voice keeps it in this Mac's Keychain and gives it only to Claude Code. What Claude Code does with it is billed to your Console account.</div>
+              <div id="console-key-help" class="form-text">Make a key at console.anthropic.com, under API keys. Voice keeps it in this computer's password store and gives it only to Claude Code. What Claude Code does with it is billed to your Console account.</div>
               <button type="submit" class="btn btn-primary mt-3" :disabled="savingKey || !key.trim()">Save the key</button>
             </form>
           </template>
@@ -214,7 +214,7 @@ onMounted(loadLimit)
           <button type="button" :class="status.canSignIn ? 'btn btn-outline-secondary ms-2' : 'btn btn-primary'" @click="check">Check again</button>
         </template>
       </template>
-      <p v-if="status?.consoleTakesKey" class="text-secondary mt-3 mb-0">Voice never sees your password. On a Mac it keeps your Anthropic Console API key in the Keychain and gives it only to Claude Code. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later.</p>
+      <p v-if="status?.consoleTakesKey" class="text-secondary mt-3 mb-0">Voice never sees your password. It keeps your Anthropic Console API key in this computer's password store and gives it only to Claude Code. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later.</p>
       <p v-else class="text-secondary mt-3 mb-0">Voice never sees your password: you sign in on Anthropic's own page. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later.</p>
     </div>
   </section>

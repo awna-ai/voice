@@ -352,8 +352,8 @@ it.each([
   expect(wrapper.text()).not.toContain('Signed out of Claude Code in Voice.')
   expect(button(wrapper, 'Sign out').attributes('disabled')).toBeUndefined()
 })
-it('keeps Console sign-in available and shows the Mac refusal from the backend', async () => {
-  const message = "Signing in with a Console account doesn't work on a Mac yet. A later update adds it."
+it('keeps Console sign-in available and shows a refusal from the backend', async () => {
+  const message = 'Claude Code could not start the sign-in.'
   const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue(signedOut), claudeSignIn: vi.fn().mockResolvedValue({ ...signedOut, message }) })
   const wrapper = screen(ConnectClaude, backend, { assistant })
   await flushPromises()
@@ -434,7 +434,7 @@ it('keeps the Console first paragraph while checking and changes it after a read
 })
 
 const keyStatus = { ...signedOut, consoleTakesKey: true }
-const keyFooter = "Voice never sees your password. On a Mac it keeps your Anthropic Console API key in the Keychain and gives it only to Claude Code. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later."
+const keyFooter = "Voice never sees your password. It keeps your Anthropic Console API key in this computer's password store and gives it only to Claude Code. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later."
 it('offers a password key field instead of Console sign-in on a Mac', async () => {
   const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue(keyStatus) })
   const wrapper = screen(ConnectClaude, backend, { assistant })
@@ -448,7 +448,7 @@ it('offers a password key field instead of Console sign-in on a Mac', async () =
   expect(backend.claudeSaveKey).not.toHaveBeenCalled()
   expect(wrapper.findAll('button').some(item => item.text() === 'Sign in with Anthropic Console')).toBe(false)
   expect(wrapper.get('p.text-secondary.mt-3.mb-0').text()).toBe(keyFooter)
-  expect(wrapper.get('#console-key-help').text()).toBe("Make a key at console.anthropic.com, under API keys. Voice keeps it in this Mac's Keychain and gives it only to Claude Code. What Claude Code does with it is billed to your Console account.")
+  expect(wrapper.get('#console-key-help').text()).toBe("Make a key at console.anthropic.com, under API keys. Voice keeps it in this computer's password store and gives it only to Claude Code. What Claude Code does with it is billed to your Console account.")
 })
 it('clears the key before sending it, waits, and shows the ready reply', async () => {
   const pending = deferred<ClaudeStatus>()
