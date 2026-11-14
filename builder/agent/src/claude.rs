@@ -157,7 +157,7 @@ fn find_in_impl(
         tmutil,
     )?;
     let api_key = if cfg!(target_os = "macos") {
-        console_key::load(home).map_err(|_| invalid(text::KEY_UNREADABLE))?
+        console_key::load(home)?
     } else {
         None
     };
@@ -542,7 +542,7 @@ impl Claude {
         open: &(dyn Fn(&str) -> std::io::Result<()> + Sync),
     ) -> Result<()> {
         // VF5: the Mac's Console sign-in takes a pasted key; browser sign-in stays key-less.
-        if takes_key(sign_in) || !starts(sign_in) {
+        if takes_key(sign_in) {
             return Err(invalid(text::CONSOLE_TAKES_KEY));
         }
         let args = login_args(sign_in).ok_or_else(|| invalid(text::SUBSCRIPTION_NOT_OFFERED))?;

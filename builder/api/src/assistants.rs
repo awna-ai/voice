@@ -21,6 +21,7 @@ use voice_core::{
     existing, old_files,
 };
 use voice_ingest::private::{read_private_optional, remove_private, write_private};
+use voice_save::secret::Secret;
 
 type Result<T> = std::result::Result<T, dto::Failure>;
 const LOOK: &str = "Voice couldn't look for your assistants. Close it and open it again.";
@@ -706,6 +707,7 @@ fn ready_status(status: claude::Status) -> dto::ClaudeStatus {
         note: None,
         can_sign_in: false,
         can_sign_in_with_subscription: false,
+        console_takes_key: claude::takes_key(claude::SignIn::Console),
     }
 }
 fn subscription_refused_status() -> dto::ClaudeStatus {
@@ -716,6 +718,7 @@ fn subscription_refused_status() -> dto::ClaudeStatus {
         note: None,
         can_sign_in: true,
         can_sign_in_with_subscription: claude::SUBSCRIPTION_OFFERED,
+        console_takes_key: claude::takes_key(claude::SignIn::Console),
     }
 }
 fn unavailable_status(error: Error) -> dto::ClaudeStatus {
@@ -726,6 +729,7 @@ fn unavailable_status(error: Error) -> dto::ClaudeStatus {
         note: None,
         can_sign_in: false,
         can_sign_in_with_subscription: false,
+        console_takes_key: claude::takes_key(claude::SignIn::Console),
     }
 }
 pub fn claude_check_in(
@@ -750,6 +754,7 @@ pub fn claude_check_in(
             note: None,
             can_sign_in: true,
             can_sign_in_with_subscription: claude::SUBSCRIPTION_OFFERED,
+            console_takes_key: claude::takes_key(claude::SignIn::Console),
         },
         Err(error) => unavailable_status(error),
     })
@@ -791,8 +796,6 @@ pub(crate) fn claude_message(error: Error) -> String {
                 text::SUBSCRIPTION_NOT_OFFERED,
                 text::PLAN_STOPPED,
                 text::CONSOLE_TAKES_KEY,
-                text::KEY_HOW,
-                text::KEY_PROMPT,
                 text::KEY_SHAPE,
                 text::KEY_NOT_KEPT,
                 text::KEY_UNREADABLE,
@@ -873,6 +876,7 @@ fn stopped_sign_in_status() -> dto::ClaudeStatus {
         note: None,
         can_sign_in: true,
         can_sign_in_with_subscription: claude::SUBSCRIPTION_OFFERED,
+        console_takes_key: claude::takes_key(claude::SignIn::Console),
     }
 }
 pub fn claude_sign_in_in(
@@ -900,6 +904,7 @@ pub fn claude_sign_in_in(
                 note: None,
                 can_sign_in: true,
                 can_sign_in_with_subscription: false,
+                console_takes_key: claude::takes_key(claude::SignIn::Console),
             });
         }
         if state.is_some() {
@@ -946,8 +951,70 @@ pub fn claude_sign_in_in(
         note: None,
         can_sign_in: true,
         can_sign_in_with_subscription: claude::SUBSCRIPTION_OFFERED,
+        console_takes_key: claude::takes_key(claude::SignIn::Console),
     })
 }
+pub fn claude_save_key_in(
+    home: &Path,
+    path: Option<&OsStr>,
+    fallbacks: &[PathBuf],
+    sign_ins: &ClaudeSignIns,
+    mut request: dto::ClaudeKeyRequest,
+) -> Result<dto::ClaudeStatus> {
+    let key = Secret::new(std::mem::take(&mut request.api_key));
+    if !claude::takes_key(claude::SignIn::Console) {
+        return Err(failure(text::FAILED));
+    }
+    {
+        let mut state = sign_ins.state.lock().unwrap_or_else(|p| p.into_inner());
+        if sign_ins.signing_out.load(Ordering::SeqCst) {
+            return Err(failure(text::SIGN_IN_DURING_SIGN_OUT));
+        }
+        if state.is_some() {
+            return Err(failure(SIGN_IN_BUSY));
+        }
+        *state = Some(Arc::new(AtomicBool::new(false)));
+    }
+    let _guard = ClaudeSignInGuard(sign_ins);
+    let claude = match claude::find_in(home, path, fallbacks) {
+        Ok(claude) => claude,
+        Err(error) => return Ok(unavailable_status(error)),
+    };
+    match claude.status(home) {
+        Ok(status) if status.signed_in => return Ok(ready_status(status)),
+        Err(error) => return Ok(unavailable_status(error)),
+        _ => {}
+    }
+    Ok(match claude.save_key(home, key) {
+        Ok(claude) => match claude.status(home) {
+            Ok(status) if status.signed_in => ready_status(status),
+            _ => unavailable_status(Error::Invalid(text::KEY_REFUSED.into())),
+        },
+        Err(error) => dto::ClaudeStatus {
+            subscription: false,
+            ready: false,
+            message: claude_message(error),
+            note: None,
+            can_sign_in: true,
+            can_sign_in_with_subscription: claude::SUBSCRIPTION_OFFERED,
+            console_takes_key: true,
+        },
+    })
+}
+
+pub fn claude_save_key(request: dto::ClaudeKeyRequest) -> Result<dto::ClaudeStatus> {
+    let Ok(home) = home(text::FAILED) else {
+        return Ok(unavailable_status(Error::Invalid(text::FAILED.into())));
+    };
+    claude_save_key_in(
+        &home,
+        std::env::var_os("PATH").as_deref(),
+        &claude::fallbacks(&home),
+        claude_sign_ins(),
+        request,
+    )
+}
+
 pub fn claude_sign_out_in(
     home: &Path,
     path: Option<&OsStr>,
@@ -1030,6 +1097,49 @@ pub fn claude_sign_in_shutdown(wait: Duration) {
 #[cfg(test)]
 mod server_message_tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn saving_key_respects_a_reserved_sign_in_slot() {
+        let sign_ins = ClaudeSignIns::new();
+        *sign_ins.state.lock().unwrap() = Some(Arc::new(AtomicBool::new(false)));
+        let error = claude_save_key_in(
+            Path::new("/fictional"),
+            None,
+            &[],
+            &sign_ins,
+            dto::ClaudeKeyRequest {
+                api_key: "invented".into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.message, SIGN_IN_BUSY);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn saving_key_respects_a_reserved_sign_out() {
+        let sign_ins = ClaudeSignIns::new();
+        sign_ins.signing_out.store(true, Ordering::SeqCst);
+        let error = claude_save_key_in(
+            Path::new("/fictional"),
+            None,
+            &[],
+            &sign_ins,
+            dto::ClaudeKeyRequest {
+                api_key: "invented".into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.message, text::SIGN_IN_DURING_SIGN_OUT);
+    }
+
+    #[test]
+    fn key_prompts_never_cross_the_failure_boundary() {
+        for message in [text::KEY_HOW, text::KEY_PROMPT] {
+            assert_eq!(claude_message(Error::Invalid(message.into())), text::FAILED);
+        }
+    }
 
     #[test]
     fn model_server_failures_cross_the_app_boundary() {

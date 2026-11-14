@@ -118,6 +118,9 @@ pub struct ClaudeStatus {
     /// The screen also offers the testers' subscription sign-in; true only when can_sign_in
     /// and the build has the feature.
     pub can_sign_in_with_subscription: bool,
+    /// The Console sign-in on this computer is an API key the person pastes (a Mac), so the
+    /// screen shows a key field instead of the Console button.
+    pub console_takes_key: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -125,6 +128,26 @@ pub struct ClaudeStatus {
 #[ts(export)]
 pub struct ClaudeSignInRequest {
     pub subscription: bool,
+}
+
+#[derive(Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct ClaudeKeyRequest {
+    pub api_key: String,
+}
+
+impl std::fmt::Debug for ClaudeKeyRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeKeyRequest")
+            .field("api_key", &"hidden")
+            .finish()
+    }
+}
+impl Drop for ClaudeKeyRequest {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.api_key);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

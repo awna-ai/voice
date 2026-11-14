@@ -61,6 +61,13 @@ pub fn claude_sign_in(
 }
 
 #[tauri::command(async)]
+pub fn claude_save_key(
+    request: voice_api::dto::ClaudeKeyRequest,
+) -> Result<voice_api::dto::ClaudeStatus, voice_api::dto::Failure> {
+    voice_api::claude_save_key(request)
+}
+
+#[tauri::command(async)]
 pub fn claude_sign_out() -> Result<voice_api::dto::ClaudeStatus, voice_api::dto::Failure> {
     voice_api::claude_sign_out()
 }

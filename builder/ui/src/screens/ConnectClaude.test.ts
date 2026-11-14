@@ -5,7 +5,7 @@ import ConnectClaude from './ConnectClaude.vue'
 import type { ClaudeStatus } from '../types/generated/ClaudeStatus'
 
 it('announces checking and shows ready with its note', async () => {
-  const wrapper = screen(ConnectClaude, fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ready: true, subscription: false, message: 'Ready.', note: 'API key is set.', canSignIn: false, canSignInWithSubscription: false }) }), { assistant })
+  const wrapper = screen(ConnectClaude, fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ready: true, subscription: false, message: 'Ready.', note: 'API key is set.', canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false }) }), { assistant })
   expect(wrapper.get('[role="status"]').text()).toBe('Checking Claude Code…')
   await flushPromises()
   expect(wrapper.get('.alert-success').text()).toBe('Ready.')
@@ -15,7 +15,7 @@ it('announces checking and shows ready with its note', async () => {
 })
 it('shows not-ready text without links and checks again', async () => {
   const pending = deferred<ClaudeStatus>()
-  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValueOnce({ ready: false, subscription: false, message: 'Visit https://example.test/setup <a>setup</a>', note: null, canSignIn: false, canSignInWithSubscription: false }).mockReturnValueOnce(pending.promise) })
+  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValueOnce({ ready: false, subscription: false, message: 'Visit https://example.test/setup <a>setup</a>', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false }).mockReturnValueOnce(pending.promise) })
   const wrapper = screen(ConnectClaude, backend, { assistant })
   await flushPromises()
   expect(wrapper.get('.alert-warning').text()).toBe('Visit https://example.test/setup <a>setup</a>')
@@ -23,7 +23,7 @@ it('shows not-ready text without links and checks again', async () => {
   await button(wrapper, 'Check again').trigger('click')
   expect(wrapper.get('[role="status"]').text()).toBe('Checking Claude Code…')
   expect(backend.claudeCheck).toHaveBeenCalledTimes(2)
-  pending.resolve({ ready: true, subscription: false, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false })
+  pending.resolve({ ready: true, subscription: false, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false })
   await flushPromises()
   expect(wrapper.get('.alert-success').text()).toBe('Ready.')
 })
@@ -36,7 +36,7 @@ it('shows the safe bridge rejection and retry', async () => {
 })
 
 it('loads the dollar limits even when Claude Code is not ready, and saves unchanged defaults', async () => {
-  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ready: false, subscription: false, message: 'Not ready.', note: null, canSignIn: false, canSignInWithSubscription: false }), spendingLimit: vi.fn().mockResolvedValue({ dailyUsd: 50, callUsd: 5 }) })
+  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ready: false, subscription: false, message: 'Not ready.', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false }), spendingLimit: vi.fn().mockResolvedValue({ dailyUsd: 50, callUsd: 5 }) })
   const wrapper = screen(ConnectClaude, backend, { assistant })
   await flushPromises()
   expect(backend.spendingLimit).toHaveBeenCalledExactlyOnceWith({ slug: assistant.slug })
@@ -147,7 +147,7 @@ it('explains the account, daily use and provider choice while checking and after
   expect(card.text()).toContain('Claude is the only choice for now.')
   expect(card.text()).toContain('Other AI providers come later.')
   expect(wrapper.findAll('.card')[1]!.text()).not.toContain(explanation)
-  check.resolve({ ready: true, subscription: false, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false })
+  check.resolve({ ready: true, subscription: false, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false })
   await flushPromises()
   expect(card.get('p.text-secondary.mt-3.mb-0').text()).toBe(explanation)
 })
@@ -207,7 +207,7 @@ it('explains that either field can have no limit', async () => {
   expect(wrapper.text()).toContain('Enter 0 in either box for no limit.')
 })
 
-const signedOut: ClaudeStatus = { ready: false, subscription: false, message: 'Sign in for Voice.', note: null, canSignIn: true, canSignInWithSubscription: false }
+const signedOut: ClaudeStatus = { ready: false, subscription: false, message: 'Sign in for Voice.', note: null, canSignIn: true, canSignInWithSubscription: false, consoleTakesKey: false }
 const waiting = "Finish signing in on the page that opened in your browser. Voice carries on when you're done."
 
 it('offers only Console sign-in and a secondary check in the public build', async () => {
@@ -219,7 +219,7 @@ it('offers only Console sign-in and a secondary check in the public build', asyn
   expect(button(wrapper, 'Check again').classes()).toEqual(['btn', 'btn-outline-secondary', 'ms-2'])
 })
 it('offers only a primary check when Claude Code is not installed', async () => {
-  const wrapper = screen(ConnectClaude, fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ...signedOut, canSignIn: false, canSignInWithSubscription: false }) }), { assistant })
+  const wrapper = screen(ConnectClaude, fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ...signedOut, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false }) }), { assistant })
   await flushPromises()
   expect(wrapper.findAll('button').map(item => item.text())).not.toContain('Sign in with Anthropic Console')
   expect(button(wrapper, 'Check again').classes()).toContain('btn-primary')
@@ -241,7 +241,7 @@ it('waits for sign-in, cancels, and replaces the status with the answer', async 
   expect(wrapper.findAll('button').map(item => item.text())).not.toContain('Check again')
   await button(wrapper, 'Cancel').trigger('click')
   expect(backend.claudeSignInCancel).toHaveBeenCalledExactlyOnceWith()
-  pending.resolve({ ready: true, subscription: false, message: 'Ready after signing in.', note: null, canSignIn: false, canSignInWithSubscription: false })
+  pending.resolve({ ready: true, subscription: false, message: 'Ready after signing in.', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false })
   await flushPromises()
   expect(wrapper.find('#limit-day').exists()).toBe(true)
   expect(wrapper.find('#limit-step').exists()).toBe(true)
@@ -293,7 +293,7 @@ it('cancels sign-in when the screen unmounts while waiting', async () => {
 
 it('offers both sign-ins in a testers build and sends the subscription request', async () => {
   const pending = deferred<ClaudeStatus>()
-  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ...signedOut, canSignInWithSubscription: true }), claudeSignIn: vi.fn().mockReturnValue(pending.promise) })
+  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ...signedOut, canSignInWithSubscription: true, consoleTakesKey: false }), claudeSignIn: vi.fn().mockReturnValue(pending.promise) })
   const wrapper = screen(ConnectClaude, backend, { assistant })
   await flushPromises()
   expect(wrapper.findAll('button').filter(item => item.text().startsWith('Sign in with')).map(item => item.text())).toEqual([
@@ -305,7 +305,7 @@ it('offers both sign-ins in a testers build and sends the subscription request',
   expect(backend.claudeSignIn).toHaveBeenCalledExactlyOnceWith({ subscription: true })
   expect(wrapper.get('[role="status"]').text()).toBe(waiting)
   expect(wrapper.findAll('button').some(item => item.text().startsWith('Sign in with'))).toBe(false)
-  pending.resolve({ ready: true, subscription: false, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false })
+  pending.resolve({ ready: true, subscription: false, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false })
   await flushPromises()
   expect(wrapper.get('.alert-success').text()).toBe('Ready.')
 })
@@ -374,7 +374,7 @@ it('uses the backend sign-out confirmation instead of keeping its own sentence',
 })
 
 it('shows no daily limit or dollars for a ready subscription', async () => {
-  const wrapper = screen(ConnectClaude, fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ready: true, subscription: true, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false }) }), { assistant })
+  const wrapper = screen(ConnectClaude, fakeBackend({ claudeCheck: vi.fn().mockResolvedValue({ ready: true, subscription: true, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false }) }), { assistant })
   await flushPromises()
   const card = wrapper.findAll('section')[1]!
   expect(card.findAll('p').map(p => p.text())).toEqual(["Signed in with your Claude subscription, Voice has no daily limit: it stops for the day when Claude Code says your plan is nearly used up, and leaves the rest for you. The daily limit is for an Anthropic Console sign-in only."])
@@ -388,7 +388,7 @@ it('hides limit fields until the Claude check finishes', async () => {
   await flushPromises()
   expect(wrapper.find('#limit-day').exists()).toBe(false)
   expect(wrapper.find('#limit-step').exists()).toBe(false)
-  pending.resolve({ ready: true, subscription: false, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false })
+  pending.resolve({ ready: true, subscription: false, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false })
   await flushPromises()
   expect(wrapper.find('#limit-day').exists()).toBe(true)
   expect(button(wrapper, 'Save the limit').exists()).toBe(true)
@@ -431,4 +431,55 @@ it('keeps the Console first paragraph while checking and changes it after a read
   pending.resolve({ ...signedOut, ready: true, subscription: true }); await flushPromises()
   expect(wrapper.findAll('.card')[0]!.findAll('h2 + p')).toHaveLength(1)
   expect(wrapper.get('h2 + p').text()).toBe('Voice works through your own Claude Code, signed in with your own Claude subscription, so what it does uses your plan.')
+})
+
+const keyStatus = { ...signedOut, consoleTakesKey: true }
+const keyFooter = "Voice never sees your password. On a Mac it keeps your Anthropic Console API key in the Keychain and gives it only to Claude Code. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later."
+it('offers a password key field instead of Console sign-in on a Mac', async () => {
+  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue(keyStatus) })
+  const wrapper = screen(ConnectClaude, backend, { assistant })
+  await flushPromises()
+  const input = wrapper.get('#console-key')
+  expect(input.attributes()).toMatchObject({ type: 'password', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-describedby': 'console-key-help' })
+  expect(button(wrapper, 'Save the key').attributes('disabled')).toBeDefined()
+  await input.setValue('  ')
+  expect(button(wrapper, 'Save the key').attributes('disabled')).toBeDefined()
+  await wrapper.get('form').trigger('submit')
+  expect(backend.claudeSaveKey).not.toHaveBeenCalled()
+  expect(wrapper.findAll('button').some(item => item.text() === 'Sign in with Anthropic Console')).toBe(false)
+  expect(wrapper.get('p.text-secondary.mt-3.mb-0').text()).toBe(keyFooter)
+  expect(wrapper.get('#console-key-help').text()).toBe("Make a key at console.anthropic.com, under API keys. Voice keeps it in this Mac's Keychain and gives it only to Claude Code. What Claude Code does with it is billed to your Console account.")
+})
+it('clears the key before sending it, waits, and shows the ready reply', async () => {
+  const pending = deferred<ClaudeStatus>()
+  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue(keyStatus) })
+  const wrapper = screen(ConnectClaude, backend, { assistant })
+  backend.claudeSaveKey = vi.fn().mockReturnValue(pending.promise)
+  await flushPromises()
+  const apiKey = `sk-ant-api03-${'a'.repeat(40)}`
+  await wrapper.get('#console-key').setValue(`  ${apiKey}  `)
+  await wrapper.get('form').trigger('submit')
+  expect(backend.claudeSaveKey).toHaveBeenCalledExactlyOnceWith({ apiKey })
+  expect(wrapper.find('#console-key').exists()).toBe(false)
+  expect(wrapper.get('[role="status"]').text()).toBe('Checking your key with Claude Code…')
+  expect(wrapper.find('[role="status"] .spinner-border').exists()).toBe(true)
+  pending.resolve({ ...keyStatus, ready: true, canSignIn: false, message: 'Ready with the key.' })
+  await flushPromises()
+  expect(wrapper.get('.alert-success').text()).toBe('Ready with the key.')
+  expect(wrapper.get('p.text-secondary.mt-3.mb-0').text()).toBe(keyFooter)
+})
+it.each([
+  [new Error('private detail'), "Voice couldn't keep your key. Close it and open it again."],
+  [{ message: 'Try copying the key again.' }, 'Try copying the key again.'],
+])('clears a refused key and shows a safe failure', async (failure, message) => {
+  const backend = fakeBackend({ claudeCheck: vi.fn().mockResolvedValue(keyStatus) })
+  backend.claudeSaveKey = vi.fn().mockRejectedValue(failure)
+  const wrapper = screen(ConnectClaude, backend, { assistant })
+  await flushPromises()
+  await wrapper.get('#console-key').setValue(`sk-ant-api03-${'a'.repeat(40)}`)
+  await wrapper.get('form').trigger('submit')
+  await flushPromises()
+  expect(wrapper.get('.alert-warning').text()).toBe(message)
+  expect((wrapper.get('#console-key').element as HTMLInputElement).value).toBe('')
+  expect(button(wrapper, 'Save the key').attributes('disabled')).toBeDefined()
 })

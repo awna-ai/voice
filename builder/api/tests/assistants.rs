@@ -251,6 +251,7 @@ fn claude_status_uses_only_safe_messages() {
             note: None,
             can_sign_in: false,
             can_sign_in_with_subscription: false,
+            console_takes_key: cfg!(target_os = "macos"),
         }
     );
     let bin = h.join("bin");
@@ -381,6 +382,7 @@ fn missing_home_claude_check_returns_a_status() {
                 note: None,
                 can_sign_in: false,
                 can_sign_in_with_subscription: false,
+                console_takes_key: cfg!(target_os = "macos"),
             }
         );
         return;

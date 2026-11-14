@@ -588,3 +588,148 @@ fn subscription_status_is_only_true_for_ready_subscription() {
             .subscription
     );
 }
+
+#[test]
+fn key_request_debug_hides_the_key_and_checks_the_boundary_shape() {
+    let key = format!("sk-ant-api03-{}", "a".repeat(40));
+    let request: dto::ClaudeKeyRequest =
+        serde_json::from_value(serde_json::json!({"apiKey": key})).unwrap();
+    assert!(!format!("{request:?}").contains(&key));
+    assert_eq!(
+        format!("{request:?}"),
+        "ClaudeKeyRequest { api_key: \"hidden\" }"
+    );
+    for value in [
+        serde_json::json!({}),
+        serde_json::json!({"apiKey": null}),
+        serde_json::json!({"apiKey": "invented", "extra": true}),
+    ] {
+        assert!(serde_json::from_value::<dto::ClaudeKeyRequest>(value).is_err());
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn save_key(
+    stub: &Stub,
+    state: &ClaudeSignIns,
+    key: &str,
+) -> std::result::Result<ClaudeStatus, dto::Failure> {
+    claude_save_key_in(
+        &stub.0,
+        None,
+        &[stub.0.join("claude")],
+        state,
+        dto::ClaudeKeyRequest {
+            api_key: key.into(),
+        },
+    )
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn pasted_key_signs_in_and_a_later_check_loads_it() {
+    let stub = Stub::new("exit 1");
+    let key = format!("sk-ant-api03-{}", "a".repeat(40));
+    let program = stub.0.join("claude");
+    let script = fs::read_to_string(&program).unwrap().replace(
+        "[ -f \"$here/ready\" ]",
+        &format!("[ \"$ANTHROPIC_API_KEY\" = '{key}' ]"),
+    );
+    fs::write(&program, script).unwrap();
+    let answer = save_key(&stub, &ClaudeSignIns::new(), &key);
+    assert!(answer.is_ok(), "saving a key should return its status");
+    let status = answer.unwrap();
+    assert!(status.ready);
+    let later = claude_check_in(&stub.0, None, &[program]).unwrap();
+    assert!(later.ready);
+    assert!(!stub.runs().contains(&key));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn bad_key_shape_can_be_retried_and_releases_the_slot() {
+    let stub = Stub::new("exit 1");
+    let state = ClaudeSignIns::new();
+    for _ in 0..2 {
+        let answer = save_key(&stub, &state, "bad-shape");
+        assert!(
+            answer.is_ok(),
+            "a bad shape should return a retryable status"
+        );
+        let status = answer.unwrap();
+        assert!(!status.ready);
+        assert_eq!(status.message, text::KEY_SHAPE);
+        assert!(status.can_sign_in);
+        assert!(status.console_takes_key);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn key_save_is_refused_while_signing_in() {
+    let stub = Stub::new("exit 1");
+    let program = stub.0.join("claude");
+    fs::write(
+        &program,
+        fs::read_to_string(&program).unwrap().replace(
+            "'auth status')",
+            "'auth status') touch \"$here/status-started\"; sleep 1; ",
+        ),
+    )
+    .unwrap();
+    let state = ClaudeSignIns::new();
+    thread::scope(|scope| {
+        let pending = scope.spawn(|| stub.sign_in(&state));
+        let begun = Instant::now();
+        while !stub.0.join("status-started").exists() && begun.elapsed() < Duration::from_secs(3) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(stub.0.join("status-started").exists());
+        let result = save_key(&stub, &state, "bad-shape");
+        claude_sign_in_cancel_in(&state).unwrap();
+        pending.join().unwrap();
+        assert_eq!(result.unwrap_err().message, SIGN_IN_BUSY);
+    });
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn key_save_is_refused_while_signing_out() {
+    let stub = Stub::new("exit 1");
+    let state = ClaudeSignIns::new();
+    stub.logout("touch \"$here/logout\"; sleep 1");
+    thread::scope(|scope| {
+        let pending = scope.spawn(|| stub.sign_out(&state));
+        stub.wait_for_logout();
+        let result = save_key(&stub, &state, "bad-shape");
+        pending.join().unwrap().unwrap();
+        assert_eq!(result.unwrap_err().message, text::SIGN_IN_DURING_SIGN_OUT);
+    });
+}
+
+#[test]
+fn check_status_reports_key_support_in_every_state() {
+    let stub = Stub::new("exit 1");
+    let program = stub.0.join("claude");
+    let check = || claude_check_in(&stub.0, None, std::slice::from_ref(&program)).unwrap();
+    assert_eq!(check().console_takes_key, cfg!(target_os = "macos"));
+    stub.ready();
+    assert_eq!(check().console_takes_key, cfg!(target_os = "macos"));
+    fs::write(
+        &program,
+        fs::read_to_string(&program)
+            .unwrap()
+            .replace("api_key", "claude.ai"),
+    )
+    .unwrap();
+    assert_eq!(check().console_takes_key, cfg!(target_os = "macos"));
+    fs::write(&program, "#!/bin/sh\nexit 1\n").unwrap();
+    assert_eq!(check().console_takes_key, cfg!(target_os = "macos"));
+    fs::remove_file(program).unwrap();
+    assert_eq!(
+        claude_check_in(&stub.0, Some(std::ffi::OsStr::new("")), &[])
+            .unwrap()
+            .console_takes_key,
+        cfg!(target_os = "macos")
+    );
+}

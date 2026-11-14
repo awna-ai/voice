@@ -105,6 +105,7 @@ export const tauriBackend: Backend = {
   consentText: () => invoke<ConsentText>('consent_text'),
   agreeConsent: request => invoke<Consent>('agree_consent', { request }),
   claudeCheck: () => invoke<ClaudeStatus>('claude_check'),
+  claudeSaveKey: request => invoke<ClaudeStatus>('claude_save_key', { request }),
   claudeSignIn: request => invoke<ClaudeStatus>('claude_sign_in', { request }),
   claudeSignInCancel: () => invoke<void>('claude_sign_in_cancel'),
   claudeSignOut: () => invoke<ClaudeStatus>('claude_sign_out'),

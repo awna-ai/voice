@@ -12,6 +12,8 @@ const backend = useBackend()
 const status = ref<ClaudeStatus>()
 const loading = ref(true)
 const signingIn = ref(false)
+const key = ref('')
+const savingKey = ref(false)
 const signingOut = ref(false)
 const signOutError = ref('')
 const signOutMessage = ref('')
@@ -30,6 +32,7 @@ async function check() {
       note: null,
       canSignIn: false,
       canSignInWithSubscription: false,
+      consoleTakesKey: false,
     }
   } finally {
     loading.value = false
@@ -49,9 +52,33 @@ async function signIn(subscription: boolean) {
       note: null,
       canSignIn: true,
       canSignInWithSubscription: false,
+      consoleTakesKey: false,
     }
   } finally {
     signingIn.value = false
+  }
+}
+async function saveKey() {
+  if (savingKey.value || !key.value.trim()) return
+  savingKey.value = true
+  signOutError.value = ''
+  signOutMessage.value = ''
+  const apiKey = key.value.trim()
+  key.value = ''
+  try {
+    status.value = await backend.claudeSaveKey({ apiKey })
+  } catch (failure) {
+    status.value = {
+      ready: false,
+      subscription: false,
+      message: failureMessage(failure, "Voice couldn't keep your key. Close it and open it again."),
+      note: null,
+      canSignIn: true,
+      canSignInWithSubscription: false,
+      consoleTakesKey: true,
+    }
+  } finally {
+    savingKey.value = false
   }
 }
 async function signOut() {
@@ -168,12 +195,22 @@ onMounted(loadLimit)
           <button type="button" class="btn btn-outline-secondary ms-2" :disabled="signingOut" @click="signOut">Sign out</button>
         </template>
         <template v-if="!status.ready">
-          <button v-if="status.canSignIn" type="button" class="btn btn-primary" @click="signIn(false)">Sign in with Anthropic Console</button>
+          <template v-if="status.canSignIn && status.consoleTakesKey">
+            <div v-if="savingKey" class="mb-3" role="status"><span class="spinner-border spinner-border-sm me-2" aria-hidden="true"></span>Checking your key with Claude Code…</div>
+            <form v-else class="mb-3" @submit.prevent="saveKey">
+              <label for="console-key" class="form-label">Anthropic Console API key</label>
+              <input id="console-key" v-model="key" type="password" class="form-control" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="console-key-help" :disabled="savingKey" />
+              <div id="console-key-help" class="form-text">Make a key at console.anthropic.com, under API keys. Voice keeps it in this Mac's Keychain and gives it only to Claude Code. What Claude Code does with it is billed to your Console account.</div>
+              <button type="submit" class="btn btn-primary mt-3" :disabled="savingKey || !key.trim()">Save the key</button>
+            </form>
+          </template>
+          <button v-else-if="status.canSignIn" type="button" class="btn btn-primary" @click="signIn(false)">Sign in with Anthropic Console</button>
           <button v-if="status.canSignInWithSubscription" type="button" class="btn btn-outline-secondary ms-2" @click="signIn(true)">Sign in with a Claude subscription (testers)</button>
           <button type="button" :class="status.canSignIn ? 'btn btn-outline-secondary ms-2' : 'btn btn-primary'" @click="check">Check again</button>
         </template>
       </template>
-      <p class="text-secondary mt-3 mb-0">Voice never sees your password: you sign in on Anthropic's own page. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later.</p>
+      <p v-if="status?.consoleTakesKey" class="text-secondary mt-3 mb-0">Voice never sees your password. On a Mac it keeps your Anthropic Console API key in the Keychain and gives it only to Claude Code. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later.</p>
+      <p v-else class="text-secondary mt-3 mb-0">Voice never sees your password: you sign in on Anthropic's own page. Its sign-in is separate from the Claude app and from the Claude Code you use yourself. Claude is the only choice for now. Other AI providers come later.</p>
     </div>
   </section>
   <section class="card mt-3">

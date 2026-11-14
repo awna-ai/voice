@@ -34,6 +34,7 @@ it.each([
   expect(invoke).toHaveBeenCalledExactlyOnceWith(command)
 })
 it.each([
+  ['claudeSaveKey', 'claude_save_key', { apiKey: `sk-ant-api03-${'a'.repeat(40)}` }],
   ['claudeSignIn', 'claude_sign_in', { subscription: false }],
   ['claudeSignIn', 'claude_sign_in', { subscription: true }],
   ['findExisting', 'find_existing', { name: 'Ari' }],

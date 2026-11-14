@@ -170,7 +170,7 @@ it('derives selected seats from the selection alone', async () => {
 it('shows the subscription note for a ready subscription', async () => {
   const backend = fakeBackend({
     listAssistants: vi.fn().mockResolvedValue(assistants),
-    claudeCheck: vi.fn().mockResolvedValue({ ready: true, subscription: true, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false }),
+    claudeCheck: vi.fn().mockResolvedValue({ ready: true, subscription: true, message: 'Ready.', note: null, canSignIn: false, canSignInWithSubscription: false, consoleTakesKey: false }),
   })
   const wrapper = screen(NewPanel, backend); await flushPromises()
   expect(wrapper.get('form > p').text()).toBe("Each assistant's turns use your Claude plan, and stop for the day when Claude Code says your plan is nearly used up.")
@@ -194,7 +194,7 @@ it('keeps the Console note and assistant list without an error when the Claude c
 it('keeps the Console note for a subscription that is not ready', async () => {
   const backend = fakeBackend({
     listAssistants: vi.fn().mockResolvedValue(assistants),
-    claudeCheck: vi.fn().mockResolvedValue({ ready: false, subscription: true, message: 'Sign in for Voice.', note: null, canSignIn: true, canSignInWithSubscription: false }),
+    claudeCheck: vi.fn().mockResolvedValue({ ready: false, subscription: true, message: 'Sign in for Voice.', note: null, canSignIn: true, canSignInWithSubscription: false, consoleTakesKey: false }),
   })
   const wrapper = screen(NewPanel, backend); await flushPromises()
   expect(wrapper.get('form > p').text()).toBe("Each assistant's turns use your Claude plan and count toward that assistant's daily limit.")

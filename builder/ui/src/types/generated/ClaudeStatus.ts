@@ -14,4 +14,9 @@ canSignIn: boolean,
  * The screen also offers the testers' subscription sign-in; true only when can_sign_in
  * and the build has the feature.
  */
-canSignInWithSubscription: boolean, };
+canSignInWithSubscription: boolean, 
+/**
+ * The Console sign-in on this computer is an API key the person pastes (a Mac), so the
+ * screen shows a key field instead of the Console button.
+ */
+consoleTakesKey: boolean, };

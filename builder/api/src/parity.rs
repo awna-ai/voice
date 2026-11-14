@@ -49,6 +49,10 @@ pub const PARITY: &[Parity] = &[
         cli: &[&["claude", "sign-in"]],
     },
     Parity {
+        app: "claude_save_key",
+        cli: &[&["claude", "sign-in"]],
+    },
+    Parity {
         app: "claude_sign_out",
         cli: &[&["claude", "sign-out"]],
     },
