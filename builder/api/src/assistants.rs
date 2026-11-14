@@ -815,6 +815,7 @@ pub(crate) fn claude_message(error: Error) -> String {
                 text::KEY_UNREADABLE,
                 text::KEY_NOT_FORGOTTEN,
                 text::KEY_REFUSED,
+                text::KEY_INVALID,
                 text::SIGN_OUT_FAILED,
                 text::SIGN_OUT_FILE_LEFT,
                 text::SIGN_IN_FAILED,
@@ -992,6 +993,17 @@ pub fn claude_save_key_in(
     let _guard = ClaudeSignInGuard(sign_ins);
     let found = match claude::find_in(home, path, fallbacks) {
         Err(Error::Invalid(message)) if message == text::KEY_UNREADABLE => {
+            if !voice_agent::console_key::valid(key.expose()) {
+                return Ok(dto::ClaudeStatus {
+                    subscription: false,
+                    ready: false,
+                    message: text::KEY_SHAPE.into(),
+                    note: None,
+                    can_sign_in: true,
+                    can_sign_in_with_subscription: claude::SUBSCRIPTION_OFFERED,
+                    console_takes_key: true,
+                });
+            }
             if claude::forget_key(home).is_err() {
                 return Ok(unreadable_key_status());
             }
@@ -1060,7 +1072,12 @@ pub fn claude_sign_out_in(
         Ok(claude) => claude
             .sign_out(home)
             .map_err(|error| failure(&claude_message(error)))?,
-        Err(Error::Invalid(message)) if message == text::NOT_INSTALLED => {}
+        Err(Error::Invalid(message)) if message == text::NOT_INSTALLED => {
+            match fs::symlink_metadata(claude::profile_folder(home).join(".credentials.json")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => return Err(failure(text::SIGN_OUT_FILE_LEFT)),
+            }
+        }
         Err(error) => return Err(failure(&claude_message(error))),
     }
     let mut status = claude_check_in(home, path, fallbacks)?;
@@ -1165,6 +1182,14 @@ mod server_message_tests {
         for message in [text::KEY_HOW, text::KEY_PROMPT] {
             assert_eq!(claude_message(Error::Invalid(message.into())), text::FAILED);
         }
+    }
+
+    #[test]
+    fn rejected_key_guidance_crosses_the_app_boundary() {
+        assert_eq!(
+            claude_message(Error::Invalid(text::KEY_INVALID.into())),
+            text::KEY_INVALID
+        );
     }
 
     #[test]

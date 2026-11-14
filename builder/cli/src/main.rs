@@ -1670,13 +1670,33 @@ fn claude_check() -> Result<()> {
 fn claude_sign_out() -> Result<()> {
     let home = home()?;
     let path = std::env::var_os("PATH");
-    voice_agent::claude::forget_key(&home)?;
-    match voice_agent::claude::find(path.as_deref(), &home) {
-        Ok(claude) => claude.sign_out(&home)?,
-        Err(Error::Invalid(message)) if message == voice_agent::text::NOT_INSTALLED => {}
+    claude_sign_out_in(
+        &home,
+        path.as_deref(),
+        &voice_agent::claude::fallbacks(&home),
+    )?;
+    println!("{}", voice_agent::text::SIGN_OUT_SUCCESS);
+    Ok(())
+}
+
+fn claude_sign_out_in(
+    home: &std::path::Path,
+    path: Option<&std::ffi::OsStr>,
+    fallbacks: &[PathBuf],
+) -> Result<()> {
+    voice_agent::claude::forget_key(home)?;
+    match voice_agent::claude::find_in(home, path, fallbacks) {
+        Ok(claude) => claude.sign_out(home)?,
+        Err(Error::Invalid(message)) if message == voice_agent::text::NOT_INSTALLED => {
+            match std::fs::symlink_metadata(
+                voice_agent::claude::profile_folder(home).join(".credentials.json"),
+            ) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                _ => return Err(Error::Invalid(voice_agent::text::SIGN_OUT_FILE_LEFT.into())),
+            }
+        }
         Err(error) => return Err(error),
     }
-    println!("{}", voice_agent::text::SIGN_OUT_SUCCESS);
     Ok(())
 }
 
@@ -1781,7 +1801,14 @@ fn claude_sign_in(sign_in: voice_agent::claude::SignIn) -> Result<()> {
     }
     if claude::takes_key(sign_in) {
         let key = read_key(stop)?;
+        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::Invalid(text::SIGN_IN_STOPPED.into()));
+        }
         claude.save_key(&home, key)?;
+        if stop.load(std::sync::atomic::Ordering::SeqCst) {
+            claude::forget_key(&home)?;
+            return Err(Error::Invalid(text::SIGN_IN_STOPPED.into()));
+        }
         println!("{}", text::ready(&status.version));
         return Ok(());
     }
@@ -3204,5 +3231,46 @@ mod cap_tests {
             Some(2.0)
         );
         std::fs::remove_dir_all(home).unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod sign_out_tests {
+    use super::*;
+    use std::fs;
+    #[test]
+    fn not_installed_sign_out_refuses_a_remaining_login_file() {
+        for kind in ["file", "directory", "link", "uncheckable", "missing"] {
+            let home = std::env::temp_dir()
+                .join(format!("voice-cli-sign-out-{}-{kind}", std::process::id()));
+            fs::create_dir(&home).unwrap();
+            let store = home.join(".voice-test-claude-console-key");
+            fs::write(&store, format!("sk-ant-api03-{}", "a".repeat(40))).unwrap();
+            let profile = voice_agent::claude::profile_folder(&home);
+            fs::create_dir_all(&profile).unwrap();
+            let credentials = profile.join(".credentials.json");
+            match kind {
+                "file" => fs::write(&credentials, "stale").unwrap(),
+                "directory" => fs::create_dir(&credentials).unwrap(),
+                "link" => std::os::unix::fs::symlink(home.join("missing"), &credentials).unwrap(),
+                "missing" => {}
+                _ => {
+                    fs::remove_dir(&profile).unwrap();
+                    fs::write(&profile, "not a folder").unwrap();
+                }
+            }
+            let result = claude_sign_out_in(&home, None, &[]);
+            assert!(!store.exists());
+            fs::remove_dir_all(&home).unwrap();
+            if kind == "missing" {
+                result.unwrap();
+            } else {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    voice_agent::text::SIGN_OUT_FILE_LEFT,
+                    "{kind}"
+                );
+            }
+        }
     }
 }

@@ -133,6 +133,8 @@ pub const KEY_NOT_FORGOTTEN: &str = "Voice couldn't remove your Anthropic Consol
 
 pub const KEY_REFUSED: &str = "Claude Code didn't accept that key, so Voice didn't keep it. Check you copied the whole key from console.anthropic.com, then try again.";
 
+pub const KEY_INVALID: &str = "Claude Code says your Anthropic Console API key doesn't work. Sign out on Connect Claude, or run `voice claude sign-out`, then paste a new key.";
+
 pub const CONSOLE_TAKES_KEY: &str = "On a Mac, Voice signs in with an Anthropic Console API key: paste it on Connect Claude, or run `voice claude sign-in`.";
 
 /// The command for the sign-in this build offers on this platform.

@@ -758,6 +758,51 @@ fn sign_out_forgets_valid_or_malformed_keys_without_claude_installed() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn not_installed_sign_out_refuses_a_remaining_login_file() {
+    for kind in ["file", "directory", "link", "uncheckable"] {
+        let stub = Stub::new("exit 1");
+        fs::remove_file(stub.0.join("claude")).unwrap();
+        let store = stub.0.join(".voice-test-claude-console-key");
+        fs::write(&store, format!("sk-ant-api03-{}", "a".repeat(40))).unwrap();
+        let profile = voice_agent::claude::profile_folder(&stub.0);
+        fs::create_dir_all(&profile).unwrap();
+        let credentials = profile.join(".credentials.json");
+        match kind {
+            "file" => fs::write(&credentials, "stale").unwrap(),
+            "directory" => fs::create_dir(&credentials).unwrap(),
+            "link" => std::os::unix::fs::symlink(stub.0.join("missing"), &credentials).unwrap(),
+            _ => {
+                fs::remove_dir(&profile).unwrap();
+                fs::write(&profile, "not a folder").unwrap();
+            }
+        }
+        let answer = claude_sign_out_in(&stub.0, None, &[], &ClaudeSignIns::new());
+        assert!(!store.exists());
+        assert_eq!(
+            answer.unwrap_err().message,
+            text::SIGN_OUT_FILE_LEFT,
+            "{kind}"
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn badly_shaped_paste_preserves_an_unreadable_stored_key() {
+    let stub = Stub::new("exit 1");
+    let store = stub.0.join(".voice-test-claude-console-key");
+    fs::write(&store, "old-unreadable-value").unwrap();
+    let status = save_key(&stub, &ClaudeSignIns::new(), "not-a-key").unwrap();
+    assert!(!status.ready);
+    assert_eq!(status.message, text::KEY_SHAPE);
+    assert!(status.can_sign_in);
+    assert!(status.console_takes_key);
+    assert_eq!(fs::read_to_string(store).unwrap(), "old-unreadable-value");
+    assert!(stub.runs().is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn unreadable_stored_key_can_be_checked_and_replaced() {
     let stub = Stub::new("exit 1");
     let store = stub.0.join(".voice-test-claude-console-key");

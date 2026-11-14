@@ -757,6 +757,33 @@ esac"#,
 
 #[cfg(target_os = "macos")]
 #[test]
+fn termination_during_console_key_save_stops_sign_in_and_forgets_the_key() {
+    let f = Fixture::new();
+    f.stub(
+        r#"case "$1 $2" in
+'--version ') echo '2.1.292 (Claude Code)';;
+'auth status')
+    if [ -f "$HOME/.voice-test-claude-console-key" ]; then
+        kill -TERM "$PPID"
+        echo '{"loggedIn":true,"authMethod":"api_key"}'
+    else echo '{"loggedIn":false}'; fi;;
+esac"#,
+    );
+    let out = sign_in_with_stdin(
+        &f,
+        b"sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    );
+    assert!(!out.status.success());
+    assert_eq!(
+        text(&out.stderr),
+        format!("voice: {}\n", voice_agent::text::SIGN_IN_STOPPED)
+    );
+    assert!(text(&out.stdout).is_empty());
+    assert!(!f.home.join(".voice-test-claude-console-key").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn console_sign_in_rejects_bad_and_oversized_keys_without_starting_login() {
     for input in [b"bad\n".to_vec(), vec![b'a'; 4097], vec![0xff, b'\n']] {
         let f = Fixture::new();

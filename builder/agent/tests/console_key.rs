@@ -204,6 +204,25 @@ esac"#,
     }
 
     #[test]
+    fn failed_save_reports_when_cleanup_also_fails() {
+        let home = Scratch::new("console-save-cleanup-failure");
+        let stub = stub();
+        let program = stub.program();
+        let script = fs::read_to_string(&program).unwrap();
+        fs::write(
+            &program,
+            script.replace(
+                "'auth status')",
+                "'auth status') if [ \"$n\" = 1 ]; then mkdir \"$HOME/.voice-test-claude-console-key\"; fi",
+            ),
+        )
+        .unwrap();
+        let error = found(&stub, &home).save_key(&home.0, key()).unwrap_err();
+        assert_eq!(error.to_string(), text::KEY_NOT_FORGOTTEN);
+        assert!(home.0.join(FILE).is_dir());
+    }
+
+    #[test]
     fn a_refused_key_is_forgotten() {
         let home = Scratch::new("console-refused");
         let stub = stub();

@@ -204,10 +204,9 @@ fn opens_with_slash(prompt: &str) -> bool {
         == Some('/')
 }
 
-/// The failures `claude` reports for a missing or expired login, or an invalid API key.
+/// The failures `claude` reports for a missing or expired login.
 fn signed_out(result: &str) -> bool {
-    result.contains("Invalid API key")
-        || result.contains("/login")
+    result.contains("/login")
         || result.contains("authenticate")
         || result.starts_with("Failed to authenticate")
 }
@@ -324,6 +323,14 @@ fn judge(ran: Ran, timeout: Duration) -> Option<Judged> {
         return Some(failed("unreadable", text::FAILED));
     };
     let is_error = reply.get("is_error").and_then(Value::as_bool);
+    if is_error == Some(true)
+        && reply
+            .get("result")
+            .and_then(Value::as_str)
+            .is_some_and(|result| result.contains("Invalid API key"))
+    {
+        return Some(failed("signed-out", text::KEY_INVALID));
+    }
     if is_error == Some(true)
         && reply
             .get("result")
@@ -503,7 +510,7 @@ impl Claude {
             self.logout(home)?;
         }
         if console_key::save(home, &key).is_err() {
-            let _ = console_key::forget(home);
+            console_key::forget(home)?;
             return Err(invalid(text::KEY_NOT_KEPT));
         }
         let claude = self;
@@ -1055,6 +1062,16 @@ mod review_fixup_tests {
         let judged = judge(Ran::Finished {
             status: std::process::ExitStatus::from_raw(1 << 8),
             stdout: r#"{"type":"result","is_error":true,"api_error_status":401,"result":"Invalid API key · Fix external API key"}"#.as_bytes().to_vec(),
+        }, DEFAULT_TIMEOUT).unwrap();
+        assert_eq!(judged.outcome, "signed-out");
+        assert_eq!(judged.result.unwrap_err().to_string(), text::KEY_INVALID);
+    }
+
+    #[test]
+    fn login_reply_is_signed_out() {
+        let judged = judge(Ran::Finished {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: r#"{"type":"result","is_error":true,"result":"Not logged in · Please run /login"}"#.as_bytes().to_vec(),
         }, DEFAULT_TIMEOUT).unwrap();
         assert_eq!(judged.outcome, "signed-out");
         assert_eq!(judged.result.unwrap_err().to_string(), text::SIGNED_OUT);
