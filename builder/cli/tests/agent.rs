@@ -973,3 +973,27 @@ esac"#
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sign_out_forgets_malformed_keys_before_finding_claude() {
+    for key in [
+        "bad",
+        "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ] {
+        let f = Fixture::new();
+        f.stub("exit 0");
+        let store = f.home.join(".voice-test-claude-console-key");
+        fs::write(&store, key).unwrap();
+        let out = f.run(&["claude", "sign-out"]);
+        assert!(
+            !store.exists(),
+            "sign-out must forget before finding Claude Code"
+        );
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert_eq!(
+            text(&out.stdout),
+            format!("{}\n", voice_agent::text::SIGN_OUT_SUCCESS)
+        );
+    }
+}

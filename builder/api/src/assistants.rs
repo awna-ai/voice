@@ -1032,11 +1032,12 @@ pub fn claude_sign_out_in(
         }
     }
     let _guard = ClaudeSignOutGuard(sign_ins);
-    let claude =
-        claude::find_in(home, path, fallbacks).map_err(|error| failure(&claude_message(error)))?;
-    claude
-        .sign_out(home)
-        .map_err(|error| failure(&claude_message(error)))?;
+    claude::forget_key(home).map_err(|error| failure(&claude_message(error)))?;
+    if let Ok(claude) = claude::find_in(home, path, fallbacks) {
+        claude
+            .sign_out(home)
+            .map_err(|error| failure(&claude_message(error)))?;
+    }
     let mut status = claude_check_in(home, path, fallbacks)?;
     status.note = Some(text::SIGN_OUT_SUCCESS.into());
     Ok(status)

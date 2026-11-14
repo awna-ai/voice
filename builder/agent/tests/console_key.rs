@@ -114,6 +114,96 @@ esac"#,
     }
 
     #[test]
+    fn an_existing_run_stops_using_a_forgotten_or_unreadable_key() {
+        for unreadable in [false, true] {
+            let home = Scratch::new("console-live-forget");
+            let stub = stub();
+            let claude = found(&stub, &home).save_key(&home.0, key()).unwrap();
+            found(&stub, &home).sign_out(&home.0).unwrap();
+            if unreadable {
+                fs::write(home.0.join(FILE), "bad").unwrap();
+            }
+            fs::write(
+                stub.folder.0.join("reply"),
+                ok_reply(&serde_json::json!({"labels":[]})),
+            )
+            .unwrap();
+            let session = session(&home.0);
+            let schema = schema();
+            Guard::new(vec![&claude], Ceilings::defaults())
+                .call(&session, &call("record one", &schema))
+                .unwrap();
+            assert_eq!(stub.file("key5"), "unset\n");
+        }
+    }
+
+    #[test]
+    fn stale_login_files_of_any_type_are_logged_out_before_saving() {
+        for linked in [false, true] {
+            let home = Scratch::new("console-stale");
+            let stub = stub();
+            let claude = found(&stub, &home);
+            let credentials = claude.profile().join(".credentials.json");
+            if linked {
+                symlink(home.0.join("missing"), &credentials).unwrap();
+            } else {
+                fs::write(&credentials, "stale").unwrap();
+            }
+            let program = stub.program();
+            let script = fs::read_to_string(&program).unwrap();
+            fs::write(
+                &program,
+                script.replace(
+                    "rm -f \"$here/subscription\"",
+                    "rm -f \"$here/subscription\" \"$CLAUDE_CONFIG_DIR/.credentials.json\"",
+                ),
+            )
+            .unwrap();
+            found(&stub, &home).save_key(&home.0, key()).unwrap();
+            assert_eq!(stub.argv(2).unwrap()[2..], ["auth", "logout"]);
+            assert_eq!(stub.file("key2"), "unset\n");
+            assert!(fs::symlink_metadata(credentials).is_err());
+        }
+    }
+
+    #[test]
+    fn failed_save_removes_the_store_and_refused_cleanup_failure_is_reported() {
+        for refused in [false, true] {
+            let home = Scratch::new("console-cleanup");
+            let stub = stub();
+            let program = stub.program();
+            let script = fs::read_to_string(&program).unwrap();
+            let sabotage = if refused {
+                "rm -f \"$HOME/.voice-test-claude-console-key\"; mkdir \"$HOME/.voice-test-claude-console-key\"; touch \"$here/refuse\""
+            } else {
+                "ln -s \"$here/missing\" \"$HOME/.voice-test-claude-console-key\""
+            };
+            // Sabotage during the first status (save failure) or the second (refusal).
+            let run = if refused { 3 } else { 1 };
+            fs::write(
+                &program,
+                script.replace(
+                    "'auth status')",
+                    &format!("'auth status') if [ \"$n\" = {run} ]; then {sabotage}; fi"),
+                ),
+            )
+            .unwrap();
+            let error = found(&stub, &home).save_key(&home.0, key()).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                if refused {
+                    text::KEY_NOT_FORGOTTEN
+                } else {
+                    text::KEY_NOT_KEPT
+                }
+            );
+            if !refused {
+                assert!(fs::symlink_metadata(home.0.join(FILE)).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn a_refused_key_is_forgotten() {
         let home = Scratch::new("console-refused");
         let stub = stub();

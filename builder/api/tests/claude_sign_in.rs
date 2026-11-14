@@ -733,3 +733,25 @@ fn check_status_reports_key_support_in_every_state() {
         cfg!(target_os = "macos")
     );
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sign_out_forgets_valid_or_malformed_keys_without_claude_installed() {
+    for key in [
+        "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "bad",
+    ] {
+        let stub = Stub::new("exit 1");
+        fs::remove_file(stub.0.join("claude")).unwrap();
+        let store = stub.0.join(".voice-test-claude-console-key");
+        fs::write(&store, key).unwrap();
+        let answer = claude_sign_out_in(&stub.0, None, &[], &ClaudeSignIns::new());
+        assert!(
+            !store.exists(),
+            "sign-out must forget before looking for Claude Code"
+        );
+        let status = answer.unwrap();
+        assert!(!status.ready);
+        assert_eq!(status.note.as_deref(), Some(text::SIGN_OUT_SUCCESS));
+    }
+}

@@ -63,6 +63,14 @@ pub fn takes_key(sign_in: SignIn) -> bool {
     cfg!(target_os = "macos") && sign_in == SignIn::Console
 }
 
+/// Forget Voice's Console key even when Claude Code cannot be found or the key cannot be read.
+pub fn forget_key(home: &Path) -> Result<()> {
+    if cfg!(target_os = "macos") {
+        console_key::forget(home)?;
+    }
+    Ok(())
+}
+
 fn login_args(sign_in: SignIn) -> Option<[&'static str; 3]> {
     match sign_in {
         SignIn::Console => Some(["auth", "login", "--console"]),
@@ -91,7 +99,6 @@ pub struct Ready {
 
 #[derive(Debug)]
 pub struct Claude {
-    api_key: Option<Secret>,
     program: PathBuf,
     profile: PathBuf,
     timeout: Duration,
@@ -156,15 +163,10 @@ fn find_in_impl(
         #[cfg(target_os = "macos")]
         tmutil,
     )?;
-    let api_key = if cfg!(target_os = "macos") {
-        console_key::load(home)?
-    } else {
-        None
-    };
-    Ok(Claude {
-        api_key,
-        ..Claude::at(program, profile)
-    })
+    if cfg!(target_os = "macos") {
+        console_key::load(home)?;
+    }
+    Ok(Claude::at(program, profile))
 }
 
 /// A regular file with an execute bit, links followed (the installers' launchers are links).
@@ -202,10 +204,10 @@ fn opens_with_slash(prompt: &str) -> bool {
         == Some('/')
 }
 
-/// The failures `claude` reports when its login is missing or expired: they name `/login` or
-/// authenticating.
+/// The failures `claude` reports for a missing or expired login, or an invalid API key.
 fn signed_out(result: &str) -> bool {
-    result.contains("/login")
+    result.contains("Invalid API key")
+        || result.contains("/login")
         || result.contains("authenticate")
         || result.starts_with("Failed to authenticate")
 }
@@ -495,18 +497,20 @@ impl Claude {
         if status.signed_in {
             return Ok(self);
         }
-        if status.subscription_refused {
+        if status.subscription_refused
+            || fs::symlink_metadata(self.profile.join(".credentials.json")).is_ok()
+        {
             self.logout(home)?;
         }
-        console_key::save(home, &key).map_err(|_| invalid(text::KEY_NOT_KEPT))?;
-        let claude = Claude {
-            api_key: Some(key),
-            ..self
-        };
+        if console_key::save(home, &key).is_err() {
+            let _ = console_key::forget(home);
+            return Err(invalid(text::KEY_NOT_KEPT));
+        }
+        let claude = self;
         match claude.status(home) {
             Ok(status) if status.signed_in && !status.subscription => Ok(claude),
             result => {
-                let _ = console_key::forget(home);
+                console_key::forget(home)?;
                 Err(result.err().unwrap_or_else(|| invalid(text::KEY_REFUSED)))
             }
         }
@@ -604,9 +608,7 @@ impl Claude {
 
     /// Voice forgets its Console key first; Claude Code removes its own login file.
     pub fn sign_out(&self, home: &Path) -> Result<()> {
-        if cfg!(target_os = "macos") {
-            console_key::forget(home).map_err(|_| invalid(text::KEY_NOT_FORGOTTEN))?;
-        }
+        forget_key(home)?;
         self.logout(home)
     }
 
@@ -632,7 +634,6 @@ impl Claude {
 
     pub fn at(program: PathBuf, profile: PathBuf) -> Claude {
         Claude {
-            api_key: None,
             program,
             profile,
             timeout: DEFAULT_TIMEOUT,
@@ -652,9 +653,11 @@ impl Claude {
         &self.program
     }
 
-    fn command(&self, launch: &Launch, args: &[&str]) -> Command {
+    fn command(&self, home: &Path, launch: &Launch, args: &[&str]) -> Command {
         let mut command = launch.command(args);
-        if let Some(key) = &self.api_key {
+        if cfg!(target_os = "macos")
+            && let Ok(Some(key)) = console_key::load(home)
+        {
             command.env("ANTHROPIC_API_KEY", key.expose());
         }
         command
@@ -663,7 +666,7 @@ impl Claude {
     fn ask(&self, home: &Path, args: &[&str]) -> Result<Option<Vec<u8>>> {
         let (egress, launch) = self.launch(home, false)?;
         let ran = child::run(
-            &mut self.command(&launch, args),
+            &mut self.command(home, &launch, args),
             None,
             CHECK_TIMEOUT.min(self.timeout),
             CHECK_CAP,
@@ -755,6 +758,7 @@ impl Provider for Claude {
         let schema = call.schema.to_string();
         let budget = started.budget();
         let mut command = self.command(
+            session.home(),
             &launch,
             &[
                 "-p",
@@ -847,7 +851,7 @@ extern "C" fn interrupted(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
-/// The stop flag set by Ctrl-C in the terminal.
+/// The stop flag set by terminal interrupts, hang-up and termination signals.
 pub fn stop_on_interrupt() -> &'static AtomicBool {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
@@ -858,7 +862,9 @@ pub fn stop_on_interrupt() -> &'static AtomicBool {
             action.sa_sigaction = interrupted as *const () as usize;
             libc::sigemptyset(&mut action.sa_mask);
             action.sa_flags = 0;
-            libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+                libc::sigaction(signal, &action, std::ptr::null_mut());
+            }
         }
     });
     &INTERRUPTED
@@ -985,6 +991,90 @@ mod sign_in_status_tests {
             json!({"loggedIn": "true", "authMethod": "api_key"}),
         ] {
             assert_eq!(sign_in_status(&value), (false, false, false), "{value}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod review_fixup_tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[cfg(all(target_os = "macos", feature = "test-stubs"))]
+    #[test]
+    fn commands_reload_the_key_instead_of_reusing_a_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "voice-key-reload-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let scratch = Scratch(root);
+        let home = &scratch.0;
+        let program = home.join("claude");
+        fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+        let profile = ensure_profile(home, Path::new("/usr/bin/false")).unwrap();
+        let key = "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        console_key::save(home, &Secret::new(key.into())).unwrap();
+        let claude = find_in_with_tmutil(
+            home,
+            None,
+            std::slice::from_ref(&program),
+            Path::new("/usr/bin/false"),
+        )
+        .unwrap();
+        let launch = Launch::new(&program, &profile, home, RunFolder::Fresh, 12345, false).unwrap();
+        let has_key = || {
+            claude
+                .command(home, &launch, &["-p"])
+                .get_envs()
+                .any(|(name, value)| name == "ANTHROPIC_API_KEY" && value.is_some())
+        };
+        assert!(has_key());
+        console_key::forget(home).unwrap();
+        assert!(!has_key(), "a forgotten key must not reach the next child");
+        fs::write(home.join(".voice-test-claude-console-key"), "bad").unwrap();
+        assert!(
+            !has_key(),
+            "an unreadable key must not reach the next child"
+        );
+    }
+
+    #[test]
+    fn invalid_api_key_reply_is_signed_out() {
+        let judged = judge(Ran::Finished {
+            status: std::process::ExitStatus::from_raw(1 << 8),
+            stdout: r#"{"type":"result","is_error":true,"api_error_status":401,"result":"Invalid API key · Fix external API key"}"#.as_bytes().to_vec(),
+        }, DEFAULT_TIMEOUT).unwrap();
+        assert_eq!(judged.outcome, "signed-out");
+        assert_eq!(judged.result.unwrap_err().to_string(), text::SIGNED_OUT);
+    }
+
+    #[test]
+    fn termination_signals_use_the_interrupt_handler_without_restarting_reads() {
+        stop_on_interrupt();
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT] {
+            // SAFETY: querying an installed handler writes only to this valid local struct.
+            let action = unsafe {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                assert_eq!(libc::sigaction(signal, std::ptr::null(), &mut action), 0);
+                action
+            };
+            assert_eq!(
+                action.sa_sigaction, interrupted as *const () as usize,
+                "signal {signal}"
+            );
+            assert_eq!(action.sa_flags & libc::SA_RESTART, 0);
         }
     }
 }

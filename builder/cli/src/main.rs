@@ -1670,7 +1670,10 @@ fn claude_check() -> Result<()> {
 fn claude_sign_out() -> Result<()> {
     let home = home()?;
     let path = std::env::var_os("PATH");
-    voice_agent::claude::find(path.as_deref(), &home)?.sign_out(&home)?;
+    voice_agent::claude::forget_key(&home)?;
+    if let Ok(claude) = voice_agent::claude::find(path.as_deref(), &home) {
+        claude.sign_out(&home)?;
+    }
     println!("{}", voice_agent::text::SIGN_OUT_SUCCESS);
     Ok(())
 }
