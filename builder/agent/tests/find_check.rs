@@ -253,7 +253,7 @@ fn sign_in_with_kind(kind: voice_agent::claude::SignIn) {
             panic!("stub never opens a page")
         });
     if cfg!(target_os = "macos") && kind == SignIn::Console {
-        assert_eq!(result.unwrap_err().to_string(), text::CONSOLE_NOT_AVAILABLE);
+        assert_eq!(result.unwrap_err().to_string(), text::CONSOLE_TAKES_KEY);
         assert!(!stub.ran(), "refused Console sign-in started the child");
         assert!(!voice_agent::sandbox::runs_folder(&stub.profile()).exists());
     } else if kind == SignIn::Subscription && !SUBSCRIPTION_OFFERED {

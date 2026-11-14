@@ -396,10 +396,7 @@ fn console_sign_in_reports_the_mac_limitation_without_starting_login() {
         },
     )
     .unwrap();
-    let expected =
-        "Signing in with a Console account doesn't work on a Mac yet. A later update adds it.";
-    #[cfg(feature = "claude-subscription")]
-    let expected = format!("{expected} Use Sign in with a Claude subscription instead.");
+    let expected = "On a Mac, Voice signs in with an Anthropic Console API key: paste it on Connect Claude, or run `voice claude sign-in`.";
     assert_eq!(answer.message, expected);
     assert!(!answer.ready);
     assert!(answer.can_sign_in);

@@ -261,7 +261,7 @@ fn claude_status_uses_only_safe_messages() {
     } else if voice_agent::claude::SUBSCRIPTION_OFFERED {
         "Claude Code 2.1.292 at ~/bin/claude isn't signed in for Voice yet. Voice keeps a sign-in of its own, separate from the Claude app and from the Claude Code you use yourself, so sign in once with your Claude subscription."
     } else {
-        "Claude Code 2.1.292 at ~/bin/claude isn't signed in for Voice yet. Voice keeps a sign-in of its own, separate from the Claude app and from the Claude Code you use yourself. Signing in with a Console account doesn't work on a Mac yet. A later update adds it."
+        "Claude Code 2.1.292 at ~/bin/claude isn't signed in for Voice yet. Voice keeps a sign-in of its own, separate from the Claude app and from the Claude Code you use yourself, so sign in once with an Anthropic Console API key."
     };
     for (auth, expected) in [
         ("true", text::ready("2.1.292")),

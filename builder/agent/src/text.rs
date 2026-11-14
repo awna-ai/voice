@@ -6,23 +6,24 @@ pub const NOT_INSTALLED: &str = "Voice works through your own Claude Code, and i
 #[cfg(all(target_os = "macos", feature = "claude-subscription"))]
 pub const NOT_INSTALLED: &str = "Voice works through your own Claude Code, and it isn't on this computer yet. Install it (https://code.claude.com/docs/en/setup), then try again. Voice signs it in with your Claude subscription, so what it does uses your plan.";
 #[cfg(all(target_os = "macos", not(feature = "claude-subscription")))]
-pub const NOT_INSTALLED: &str = "Voice works through your own Claude Code, and it isn't on this computer yet. Install it (https://code.claude.com/docs/en/setup), then try again. Signing in with a Console account doesn't work on a Mac yet. A later update adds it.";
+pub const NOT_INSTALLED: &str = "Voice works through your own Claude Code, and it isn't on this computer yet. Install it (https://code.claude.com/docs/en/setup), then try again. Voice signs it in with an Anthropic Console API key you paste, which is billed for what it uses (API billing).";
 pub const DOES_NOT_RUN: &str = "Claude Code is on this computer but didn't start. Open it once on its own to check it works, then try again.";
 #[cfg(not(target_os = "macos"))]
 pub const SIGNED_OUT: &str = "Claude Code isn't signed in for Voice. Sign in with your Anthropic Console account on Connect Claude, or with `voice claude sign-in`, then try again.";
 #[cfg(all(target_os = "macos", feature = "claude-subscription"))]
 pub const SIGNED_OUT: &str = "Claude Code isn't signed in for Voice. Sign in with your Claude subscription on Connect Claude, or with `voice claude sign-in --subscription`, then try again.";
 #[cfg(all(target_os = "macos", not(feature = "claude-subscription")))]
-pub const SIGNED_OUT: &str = "Claude Code isn't signed in for Voice. Signing in with a Console account doesn't work on a Mac yet. A later update adds it.";
+pub const SIGNED_OUT: &str = "Claude Code isn't signed in for Voice. Paste your Anthropic Console API key on Connect Claude, or run `voice claude sign-in`, then try again.";
 #[cfg(not(target_os = "macos"))]
 pub const SUBSCRIPTION_REFUSED: &str = "Claude Code is signed in for Voice with a Claude subscription, which this copy of Voice can't use. Sign in again with an Anthropic Console account on Connect Claude, or with `voice claude sign-in`.";
 #[cfg(target_os = "macos")]
-pub const SUBSCRIPTION_REFUSED: &str = "Claude Code is signed in for Voice with a Claude subscription, which this copy of Voice can't use. Signing in with a Console account doesn't work on a Mac yet. A later update adds it.";
+pub const SUBSCRIPTION_REFUSED: &str = "Claude Code is signed in for Voice with a Claude subscription, which this copy of Voice can't use. Paste an Anthropic Console API key on Connect Claude instead, or run `voice claude sign-in`.";
 #[cfg(not(target_os = "macos"))]
 pub const SUBSCRIPTION_NOT_OFFERED: &str =
     "This copy of Voice signs in with an Anthropic Console account only.";
 #[cfg(target_os = "macos")]
-pub const SUBSCRIPTION_NOT_OFFERED: &str = "This copy of Voice can't sign in with a Claude subscription. Signing in with a Console account doesn't work on a Mac yet. A later update adds it.";
+pub const SUBSCRIPTION_NOT_OFFERED: &str =
+    "This copy of Voice signs in with an Anthropic Console API key only.";
 
 pub const PLAN_STOPPED: &str = "Your Claude plan is nearly used up, so Voice has stopped for today and left the rest for you. Run the build again tomorrow to carry on.";
 pub const FAILED: &str = "Claude Code couldn't finish this step. Open Claude Code and check it answers you, then try again.";
@@ -117,19 +118,31 @@ pub const SIGN_OUT_DURING_SIGN_IN: &str =
 pub const SIGN_IN_DURING_SIGN_OUT: &str = "Wait for the sign-out to finish, then sign in.";
 pub const SIGN_OUT_BUSY: &str = "Voice is already signing out.";
 pub const SIGN_OUT_FAILED: &str = "Claude Code didn't finish signing out. Try again.";
-#[cfg(not(feature = "claude-subscription"))]
-pub const CONSOLE_NOT_AVAILABLE: &str =
-    "Signing in with a Console account doesn't work on a Mac yet. A later update adds it.";
-#[cfg(feature = "claude-subscription")]
-pub const CONSOLE_NOT_AVAILABLE: &str = "Signing in with a Console account doesn't work on a Mac yet. A later update adds it. Use Sign in with a Claude subscription instead.";
-/// The command for a sign-in this build can start, when one is available.
-pub fn sign_in_cli() -> Option<&'static str> {
+pub const KEY_HOW: &str = "Make a key at console.anthropic.com, under API keys. Voice keeps it in this Mac's Keychain and gives it only to Claude Code. What Claude Code does with it is billed to your Console account.";
+
+pub const KEY_PROMPT: &str =
+    "Paste your Anthropic Console API key, then press Return. It won't show on screen.";
+
+pub const KEY_SHAPE: &str = "That doesn't look like an Anthropic Console API key. Copy it again from console.anthropic.com: it starts with sk-ant-.";
+
+pub const KEY_NOT_KEPT: &str = "Voice couldn't keep your key in this Mac's Keychain, so it isn't signed in. If the Keychain is locked, unlock it, then try again.";
+
+pub const KEY_UNREADABLE: &str = "Voice couldn't read your Anthropic Console API key from this Mac's Keychain. If the Keychain is locked, unlock it, then try again.";
+
+pub const KEY_NOT_FORGOTTEN: &str = "Voice couldn't remove your Anthropic Console API key from this Mac's Keychain, so it's still signed in. If the Keychain is locked, unlock it, then sign out again.";
+
+pub const KEY_REFUSED: &str = "Claude Code didn't accept that key, so Voice didn't keep it. Check you copied the whole key from console.anthropic.com, then try again.";
+
+pub const CONSOLE_TAKES_KEY: &str = "On a Mac, Voice signs in with an Anthropic Console API key: paste it on Connect Claude, or run `voice claude sign-in`.";
+
+/// The command for the sign-in this build offers on this platform.
+pub fn sign_in_cli() -> &'static str {
     if crate::claude::starts(crate::claude::SignIn::Console) {
-        Some("Run voice claude sign-in to sign in.")
+        "Run voice claude sign-in to sign in."
     } else if crate::claude::SUBSCRIPTION_OFFERED {
-        Some("Run voice claude sign-in --subscription to sign in.")
+        "Run voice claude sign-in --subscription to sign in."
     } else {
-        None
+        "Run voice claude sign-in to paste your Anthropic Console API key."
     }
 }
 pub const SIGN_IN_WAITING: &str =
@@ -147,7 +160,7 @@ fn sign_in_once() -> &'static str {
     } else if crate::claude::SUBSCRIPTION_OFFERED {
         ", so sign in once with your Claude subscription."
     } else {
-        ". Signing in with a Console account doesn't work on a Mac yet. A later update adds it."
+        ", so sign in once with an Anthropic Console API key."
     }
 }
 /// Explain the separate sign-in for the Claude Code found on this computer.

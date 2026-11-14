@@ -835,7 +835,7 @@ enum ConsentCommand {
 enum ClaudeCommand {
     /// Check that Claude Code is installed and signed in.
     Check,
-    /// Sign in with an Anthropic Console account.
+    /// Sign in with an Anthropic Console account (on a Mac, paste its API key).
     SignIn {
         #[cfg(feature = "claude-subscription")]
         #[arg(
@@ -1660,10 +1660,8 @@ fn claude_check() -> Result<()> {
             &ready.version,
             &text::shown_program(claude.program(), &home),
         );
-        if let Some(line) = text::sign_in_cli() {
-            message.push(' ');
-            message.push_str(line);
-        }
+        message.push(' ');
+        message.push_str(text::sign_in_cli());
         return Err(Error::Invalid(message));
     }
     println!("{}", text::ready(&ready.version));
@@ -1677,6 +1675,91 @@ fn claude_sign_out() -> Result<()> {
     Ok(())
 }
 
+/// Read a pasted key without echo, keeping all input buffers zeroized on every exit.
+fn read_key(stop: &std::sync::atomic::AtomicBool) -> Result<voice_save::secret::Secret> {
+    use std::{
+        io::{Read, Write},
+        sync::atomic::Ordering,
+    };
+    use voice_agent::text;
+    use zeroize::Zeroizing;
+
+    struct EchoGuard(libc::termios);
+    impl Drop for EchoGuard {
+        fn drop(&mut self) {
+            // SAFETY: the saved settings came from fd 0 and remain live throughout the call.
+            unsafe {
+                libc::tcsetattr(0, libc::TCSANOW, &self.0);
+            }
+            eprintln!();
+        }
+    }
+
+    // SAFETY: isatty only inspects the process's stdin descriptor.
+    let _echo = if unsafe { libc::isatty(0) } == 1 {
+        eprintln!("{}", text::KEY_HOW);
+        eprintln!("{}", text::KEY_PROMPT);
+        std::io::stderr()
+            .flush()
+            .map_err(|_| Error::Invalid(text::FAILED.into()))?;
+        // SAFETY: tcgetattr initializes the termios before it is read; both pointers are valid.
+        let mut saved: libc::termios = unsafe { std::mem::zeroed() };
+        if unsafe { libc::tcgetattr(0, &mut saved) } != 0 {
+            return Err(Error::Invalid(text::FAILED.into()));
+        }
+        let guard = EchoGuard(saved);
+        let mut hidden = saved;
+        hidden.c_lflag &= !libc::ECHO;
+        // SAFETY: hidden holds the valid settings from tcgetattr, with only ECHO cleared.
+        if unsafe { libc::tcsetattr(0, libc::TCSANOW, &hidden) } != 0 {
+            return Err(Error::Invalid(text::FAILED.into()));
+        }
+        Some(guard)
+    } else {
+        None
+    };
+
+    let mut input = Zeroizing::new(Vec::with_capacity(4096));
+    let mut buffer = Zeroizing::new([0u8; 128]);
+    // Read fd 0 directly: Stdin's shared buffer cannot be zeroized here.
+    use std::os::fd::BorrowedFd;
+    // SAFETY: stdin stays open while its descriptor is borrowed and duplicated.
+    let fd = unsafe { BorrowedFd::borrow_raw(0) }
+        .try_clone_to_owned()
+        .map_err(|_| Error::Invalid(text::FAILED.into()))?;
+    let mut stdin = std::fs::File::from(fd);
+    'read: loop {
+        if stop.load(Ordering::SeqCst) {
+            return Err(Error::Invalid(text::SIGN_IN_STOPPED.into()));
+        }
+        match stdin.read(buffer.as_mut()) {
+            Ok(0) => break,
+            Ok(count) => {
+                for &byte in &buffer[..count] {
+                    if byte == b'\n' {
+                        break 'read;
+                    }
+                    if input.len() == 4096 {
+                        return Err(Error::Invalid(text::KEY_SHAPE.into()));
+                    }
+                    input.push(byte);
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                if stop.load(Ordering::SeqCst) {
+                    return Err(Error::Invalid(text::SIGN_IN_STOPPED.into()));
+                }
+            }
+            Err(_) => return Err(Error::Invalid(text::KEY_SHAPE.into())),
+        }
+    }
+    let key = std::str::from_utf8(&input).map_err(|_| Error::Invalid(text::KEY_SHAPE.into()))?;
+    Ok(voice_save::secret::Secret::new(
+        key.trim_matches(|c: char| c.is_ascii_whitespace())
+            .to_owned(),
+    ))
+}
+
 fn claude_sign_in(sign_in: voice_agent::claude::SignIn) -> Result<()> {
     use voice_agent::{claude, text};
     let stop = claude::stop_on_interrupt();
@@ -1688,6 +1771,12 @@ fn claude_sign_in(sign_in: voice_agent::claude::SignIn) -> Result<()> {
         return Err(Error::Invalid(text::SIGN_IN_STOPPED.into()));
     }
     if status.signed_in {
+        println!("{}", text::ready(&status.version));
+        return Ok(());
+    }
+    if claude::takes_key(sign_in) {
+        let key = read_key(stop)?;
+        claude.save_key(&home, key)?;
         println!("{}", text::ready(&status.version));
         return Ok(());
     }

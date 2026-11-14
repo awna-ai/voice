@@ -47,7 +47,14 @@ here="$(cd "$(dirname "$0")" && pwd -P)"
 n=$(ls "$here" | grep -c '^argv')
 for a in "$@"; do printf '%s\n' "$a"; done > "$here/argv$n"
 pwd -P > "$here/cwd"
-env > "$here/env$n"
+if [ "${ANTHROPIC_API_KEY+x}" != x ]; then
+    echo unset
+elif [ "$ANTHROPIC_API_KEY" = 'sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ]; then
+    echo match
+else
+    echo mismatch
+fi > "$here/key$n"
+(unset ANTHROPIC_API_KEY; env) > "$here/env$n"
 printf '%s %s %s\n' "$1" "${CLAUDE_CONFIG_DIR:-}" "${CLAUDECODE+set}" | sed 's/ $/ unset/' >> "$here/profiles"
 cat > "$here/stdin"
 if [ -n "${CLAUDECODE+x}" ]; then echo set; else echo unset; fi > "$here/claudecode"

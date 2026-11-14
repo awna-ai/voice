@@ -5,6 +5,7 @@
 pub mod agents;
 mod child;
 pub mod claude;
+pub mod console_key;
 pub mod egress;
 pub mod grants;
 pub mod guard;

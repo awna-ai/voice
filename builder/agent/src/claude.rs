@@ -1,12 +1,14 @@
 //! The person's own Claude Code (PB-D9): finding it, checking it is signed in, and one tool-less
 //! call. Voice starts Claude Code's own `auth login --console` off macOS; `--claudeai` is only in
-//! testers' builds (VO-D10). Voice never reads, sets or passes a token.
+//! testers' builds (VO-D10). Voice never reads Claude Code's own login. On a Mac, the Console
+//! sign-in is a key the person pastes, kept in Voice's Keychain item and passed as
+//! `ANTHROPIC_API_KEY` (VF5).
 //! Claude Code keeps its own login file in Voice's private profile, excluded from Time Machine.
 //! Source, read 2026-11-08: Claude Code 2.1.292's own bundle and `claude auth login --help`
 //! (Console uses API billing; subscription authMethod is `claude.ai` or `oauth_token`).
 //!
 //! Every `claude` runs inside the sandbox (`sandbox::Launch`) with a proxy of its own
-//! (`egress::Egress`) and an environment built from nothing, so no credential, provider switch
+//! (`egress::Egress`) and an environment built from nothing, so no ambient credential, provider switch
 //! or endpoint of the person's reaches it; see `docs/spikes/VO11-os-sandbox.md`.
 //!
 //! Sources, read 2026-10-24: `https://code.claude.com/docs/en/headless` (the JSON reply, its
@@ -18,6 +20,7 @@
 //! and `https://code.claude.com/docs/en/headless` (stream-json).
 use crate::{
     child::{self, Ran},
+    console_key,
     egress::Egress,
     guard::Sealed,
     ledger::{Line, Session},
@@ -40,6 +43,7 @@ use std::{
     time::{Duration, Instant},
 };
 use voice_core::error::{Error, Result};
+use voice_save::secret::Secret;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignIn {
@@ -52,6 +56,11 @@ pub const SUBSCRIPTION_OFFERED: bool = cfg!(feature = "claude-subscription");
 /// Whether the platform allows the requested sign-in to start.
 pub fn starts(sign_in: SignIn) -> bool {
     !cfg!(target_os = "macos") || sign_in != SignIn::Console
+}
+
+/// Whether this platform uses a pasted API key for the requested sign-in (VF5).
+pub fn takes_key(sign_in: SignIn) -> bool {
+    cfg!(target_os = "macos") && sign_in == SignIn::Console
 }
 
 fn login_args(sign_in: SignIn) -> Option<[&'static str; 3]> {
@@ -82,6 +91,7 @@ pub struct Ready {
 
 #[derive(Debug)]
 pub struct Claude {
+    api_key: Option<Secret>,
     program: PathBuf,
     profile: PathBuf,
     timeout: Duration,
@@ -146,7 +156,15 @@ fn find_in_impl(
         #[cfg(target_os = "macos")]
         tmutil,
     )?;
-    Ok(Claude::at(program, profile))
+    let api_key = if cfg!(target_os = "macos") {
+        console_key::load(home).map_err(|_| invalid(text::KEY_UNREADABLE))?
+    } else {
+        None
+    };
+    Ok(Claude {
+        api_key,
+        ..Claude::at(program, profile)
+    })
 }
 
 /// A regular file with an execute bit, links followed (the installers' launchers are links).
@@ -465,6 +483,34 @@ pub struct Status {
 pub const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 impl Claude {
+    /// Keep a pasted Console key and check Claude Code sees a Console sign-in (VF5).
+    pub fn save_key(self, home: &Path, key: Secret) -> Result<Claude> {
+        if !cfg!(target_os = "macos") {
+            return Err(invalid(text::FAILED));
+        }
+        if !console_key::valid(key.expose()) {
+            return Err(invalid(text::KEY_SHAPE));
+        }
+        let status = self.status(home)?;
+        if status.signed_in {
+            return Ok(self);
+        }
+        if status.subscription_refused {
+            self.logout(home)?;
+        }
+        console_key::save(home, &key).map_err(|_| invalid(text::KEY_NOT_KEPT))?;
+        let claude = Claude {
+            api_key: Some(key),
+            ..self
+        };
+        match claude.status(home) {
+            Ok(status) if status.signed_in && !status.subscription => Ok(claude),
+            result => {
+                let _ = console_key::forget(home);
+                Err(result.err().unwrap_or_else(|| invalid(text::KEY_REFUSED)))
+            }
+        }
+    }
     pub fn profile(&self) -> &Path {
         &self.profile
     }
@@ -495,10 +541,9 @@ impl Claude {
         sign_in: SignIn,
         open: &(dyn Fn(&str) -> std::io::Result<()> + Sync),
     ) -> Result<()> {
-        // VF3 fact 4, measured with Claude Code 2.1.292 on 2026-11-09: Console creates
-        // an API key, then fails to save it while the Keychain is closed. Wait for VF5.
-        if !starts(sign_in) {
-            return Err(invalid(text::CONSOLE_NOT_AVAILABLE));
+        // VF5: the Mac's Console sign-in takes a pasted key; browser sign-in stays key-less.
+        if takes_key(sign_in) || !starts(sign_in) {
+            return Err(invalid(text::CONSOLE_TAKES_KEY));
         }
         let args = login_args(sign_in).ok_or_else(|| invalid(text::SUBSCRIPTION_NOT_OFFERED))?;
         let (egress, launch) = self.launch(home, true)?;
@@ -557,10 +602,28 @@ impl Claude {
         }
     }
 
-    /// Claude Code removes its own login; Voice never opens or deletes that file.
+    /// Voice forgets its Console key first; Claude Code removes its own login file.
     pub fn sign_out(&self, home: &Path) -> Result<()> {
-        self.ask(home, &["auth", "logout"])?
-            .ok_or_else(|| invalid(text::SIGN_OUT_FAILED))?;
+        if cfg!(target_os = "macos") {
+            console_key::forget(home).map_err(|_| invalid(text::KEY_NOT_FORGOTTEN))?;
+        }
+        self.logout(home)
+    }
+
+    fn logout(&self, home: &Path) -> Result<()> {
+        let (egress, launch) = self.launch(home, false)?;
+        let ran = child::run(
+            &mut launch.command(&["auth", "logout"]),
+            None,
+            CHECK_TIMEOUT.min(self.timeout),
+            CHECK_CAP,
+            None,
+        );
+        drop(launch);
+        egress.stop();
+        if !matches!(ran, Ran::Finished { status, .. } if status.success()) {
+            return Err(invalid(text::SIGN_OUT_FAILED));
+        }
         match fs::symlink_metadata(self.profile.join(".credentials.json")) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             _ => Err(invalid(text::SIGN_OUT_FILE_LEFT)),
@@ -569,6 +632,7 @@ impl Claude {
 
     pub fn at(program: PathBuf, profile: PathBuf) -> Claude {
         Claude {
+            api_key: None,
             program,
             profile,
             timeout: DEFAULT_TIMEOUT,
@@ -588,10 +652,18 @@ impl Claude {
         &self.program
     }
 
+    fn command(&self, launch: &Launch, args: &[&str]) -> Command {
+        let mut command = launch.command(args);
+        if let Some(key) = &self.api_key {
+            command.env("ANTHROPIC_API_KEY", key.expose());
+        }
+        command
+    }
+
     fn ask(&self, home: &Path, args: &[&str]) -> Result<Option<Vec<u8>>> {
         let (egress, launch) = self.launch(home, false)?;
         let ran = child::run(
-            &mut launch.command(args),
+            &mut self.command(&launch, args),
             None,
             CHECK_TIMEOUT.min(self.timeout),
             CHECK_CAP,
@@ -682,27 +754,30 @@ impl Provider for Claude {
         let started = session.start(AGENT_ID, call.step, call.model)?;
         let schema = call.schema.to_string();
         let budget = started.budget();
-        let mut command = launch.command(&[
-            "-p",
-            "--system-prompt",
-            call.system,
-            "--model",
-            call.model,
-            "--safe-mode",
-            "--no-session-persistence",
-            "--tools",
-            "",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--json-schema",
-            &schema,
-            "--strict-mcp-config",
-            "--mcp-config",
-            r#"{"mcpServers":{}}"#,
-            "--permission-mode",
-            "dontAsk",
-        ]);
+        let mut command = self.command(
+            &launch,
+            &[
+                "-p",
+                "--system-prompt",
+                call.system,
+                "--model",
+                call.model,
+                "--safe-mode",
+                "--no-session-persistence",
+                "--tools",
+                "",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--json-schema",
+                &schema,
+                "--strict-mcp-config",
+                "--mcp-config",
+                r#"{"mcpServers":{}}"#,
+                "--permission-mode",
+                "dontAsk",
+            ],
+        );
         if let Some(budget) = budget {
             command.args(["--max-budget-usd", &format!("{budget:.2}")]);
         }

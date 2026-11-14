@@ -137,7 +137,7 @@ fn claude_check_says_ready_or_what_to_do() {
     } else if voice_agent::claude::SUBSCRIPTION_OFFERED {
         "voice: Claude Code 2.1.292 at ~/bin/claude isn't signed in for Voice yet. Voice keeps a sign-in of its own, separate from the Claude app and from the Claude Code you use yourself, so sign in once with your Claude subscription. Run voice claude sign-in --subscription to sign in.\n"
     } else {
-        "voice: Claude Code 2.1.292 at ~/bin/claude isn't signed in for Voice yet. Voice keeps a sign-in of its own, separate from the Claude app and from the Claude Code you use yourself. Signing in with a Console account doesn't work on a Mac yet. A later update adds it.\n"
+        "voice: Claude Code 2.1.292 at ~/bin/claude isn't signed in for Voice yet. Voice keeps a sign-in of its own, separate from the Claude app and from the Claude Code you use yourself, so sign in once with an Anthropic Console API key. Run voice claude sign-in to paste your Anthropic Console API key.\n"
     };
     assert_eq!(text(&out.stderr), expected);
 }
@@ -710,26 +710,73 @@ fn claude_sign_out_failure_has_no_success_line() {
 }
 
 #[cfg(target_os = "macos")]
+fn sign_in_with_stdin(f: &Fixture, input: &[u8]) -> Output {
+    use std::{io::Write, process::Stdio};
+    let mut child = f
+        .command(&["claude", "sign-in"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[cfg(target_os = "macos")]
 #[test]
-fn console_sign_in_reports_the_mac_limitation_without_starting_login() {
+fn console_sign_in_reads_a_key_without_showing_it_and_sign_out_forgets_it() {
     let f = Fixture::new();
     f.stub(
-        r#"here="${0%/*}"
-case "$1 $2" in
-    '--version ') echo '2.1.292 (Claude Code)';;
-    'auth status') echo '{"loggedIn":false}';;
-    'auth login') touch "$here/login"; exit 1;;
+        r#"case "$1 $2" in
+'--version ') echo '2.1.292 (Claude Code)';;
+'auth status')
+    if [ "${ANTHROPIC_API_KEY:-}" = 'sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ]; then
+        echo '{"loggedIn":true,"authMethod":"api_key"}'
+    else echo '{"loggedIn":false}'; fi;;
+'auth logout') [ ! -e "$HOME/.voice-test-claude-console-key" ] || exit 1;;
 esac"#,
     );
-    let out = f.run(&["claude", "sign-in"]);
-    assert_eq!(out.status.code(), Some(1));
-    let expected =
-        "Signing in with a Console account doesn't work on a Mac yet. A later update adds it.";
-    #[cfg(feature = "claude-subscription")]
-    let expected = format!("{expected} Use Sign in with a Claude subscription instead.");
-    assert!(text(&out.stdout).is_empty());
-    assert_eq!(text(&out.stderr), format!("voice: {expected}\n"));
-    assert!(!f.bin.join("login").exists());
+    let key = "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let out = sign_in_with_stdin(&f, format!("  {key} \n").as_bytes());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        "Claude Code 2.1.292 is installed and signed in.\n"
+    );
+    assert!(!text(&out.stdout).contains(key));
+    assert!(!text(&out.stderr).contains(key));
+    assert!(text(&out.stderr).is_empty());
+    assert!(f.home.join(".voice-test-claude-console-key").is_file());
+    let out = f.run(&["claude", "check"]);
+    assert!(out.status.success());
+    let out = f.run(&["claude", "sign-out"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(!f.home.join(".voice-test-claude-console-key").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn console_sign_in_rejects_bad_and_oversized_keys_without_starting_login() {
+    for input in [b"bad\n".to_vec(), vec![b'a'; 4097], vec![0xff, b'\n']] {
+        let f = Fixture::new();
+        f.stub(
+            r#"case "$1 $2" in
+'--version ') echo '2.1.292 (Claude Code)';;
+'auth status') echo '{"loggedIn":false}';;
+'auth login') touch "${0%/*}/login";;
+esac"#,
+        );
+        let out = sign_in_with_stdin(&f, &input);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(text(&out.stdout).is_empty());
+        assert_eq!(
+            text(&out.stderr),
+            format!("voice: {}\n", voice_agent::text::KEY_SHAPE)
+        );
+        assert!(!f.bin.join("login").exists());
+        assert!(!f.home.join(".voice-test-claude-console-key").exists());
+    }
 }
 
 #[cfg(feature = "claude-subscription")]

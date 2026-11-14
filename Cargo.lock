@@ -4537,6 +4537,7 @@ dependencies = [
  "voice-agent",
  "voice-core",
  "voice-ingest",
+ "voice-save",
 ]
 
 [[package]]
@@ -4588,6 +4589,7 @@ name = "voice-cli"
 version = "0.1.2"
 dependencies = [
  "clap",
+ "libc",
  "serde",
  "serde_json",
  "voice-agent",
@@ -4598,6 +4600,7 @@ dependencies = [
  "voice-ingest",
  "voice-save",
  "voice-steps",
+ "zeroize",
 ]
 
 [[package]]

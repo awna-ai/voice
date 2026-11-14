@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+voice-save = { path = "../save" }
 voice-core = { path = "../core" }
 voice-ingest = { path = "../ingest" }
 serde_json = { version = "1", features = ["preserve_order"] }

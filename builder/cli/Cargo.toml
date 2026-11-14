@@ -22,6 +22,9 @@ voice-grow = { path = "../grow" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
+zeroize = "=1.9.1"
+libc = "=0.2.191"
+
 [dev-dependencies]
 voice-agent = { path = "../agent", features = ["test-stubs"] }
 
