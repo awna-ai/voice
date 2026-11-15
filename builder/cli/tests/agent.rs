@@ -1048,6 +1048,30 @@ fn sign_out_reports_profile_failure_after_forgetting_the_key() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn sign_out_still_logs_out_when_the_key_cannot_be_forgotten_or_read() {
+    let f = Fixture::new();
+    f.stub(
+        r#"here="${0%/*}"
+case "$1 $2" in
+    '--version ') echo '2.1.292 (Claude Code)';;
+    'auth logout') touch "$here/logged-out";;
+esac"#,
+    );
+    let store = f.home.join(".voice-test-claude-console-key");
+    fs::create_dir(&store).unwrap();
+    let out = f.run(&["claude", "sign-out"]);
+    assert!(!out.status.success());
+    assert_eq!(
+        text(&out.stderr),
+        format!("voice: {}\n", voice_agent::text::KEY_NOT_FORGOTTEN)
+    );
+    assert!(!text(&out.stdout).contains(voice_agent::text::SIGN_OUT_SUCCESS));
+    assert!(f.bin.join("logged-out").exists());
+    assert!(store.is_dir());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn console_sign_in_replaces_an_unreadable_stored_key() {
     let f = Fixture::new();
     f.stub(
@@ -1075,7 +1099,7 @@ esac"#,
 #[test]
 fn console_sign_in_bad_paste_preserves_an_unreadable_stored_key() {
     let f = Fixture::new();
-    f.stub("exit 1");
+    f.stub("touch \"${0%/*}/ran\"; exit 1");
     let store = f.home.join(".voice-test-claude-console-key");
     fs::write(&store, "old-unreadable-value").unwrap();
     let out = sign_in_with_stdin(&f, b"not-a-key\n");
@@ -1086,4 +1110,5 @@ fn console_sign_in_bad_paste_preserves_an_unreadable_stored_key() {
         format!("voice: {}\n", voice_agent::text::KEY_SHAPE)
     );
     assert_eq!(fs::read_to_string(store).unwrap(), "old-unreadable-value");
+    assert!(!f.bin.join("ran").exists());
 }

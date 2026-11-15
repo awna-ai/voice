@@ -1069,7 +1069,7 @@ pub fn claude_sign_out_in(
     }
     let _guard = ClaudeSignOutGuard(sign_ins);
     let forgotten = claude::forget_key(home);
-    let logout = match claude::find_in(home, path, fallbacks) {
+    let logout = match claude::find_for_sign_out_in(home, path, fallbacks) {
         Ok(claude) => claude.sign_out(home),
         Err(Error::Invalid(message)) if message == text::NOT_INSTALLED => {
             match fs::symlink_metadata(claude::profile_folder(home).join(".credentials.json")) {

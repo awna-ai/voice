@@ -1685,7 +1685,7 @@ fn claude_sign_out_in(
     fallbacks: &[PathBuf],
 ) -> Result<()> {
     let forgotten = voice_agent::claude::forget_key(home);
-    let logout = match voice_agent::claude::find_in(home, path, fallbacks) {
+    let logout = match voice_agent::claude::find_for_sign_out_in(home, path, fallbacks) {
         Ok(claude) => claude.sign_out(home),
         Err(Error::Invalid(message)) if message == voice_agent::text::NOT_INSTALLED => {
             match std::fs::symlink_metadata(

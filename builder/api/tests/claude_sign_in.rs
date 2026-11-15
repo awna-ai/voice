@@ -848,6 +848,18 @@ fn sign_out_reports_profile_failure_after_forgetting_the_key() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn sign_out_still_logs_out_when_the_key_cannot_be_forgotten_or_read() {
+    let stub = Stub::new("exit 1");
+    let store = stub.0.join(".voice-test-claude-console-key");
+    fs::create_dir(&store).unwrap();
+    let error = stub.sign_out(&ClaudeSignIns::new()).unwrap_err();
+    assert_eq!(error.message, text::KEY_NOT_FORGOTTEN);
+    assert!(stub.runs().contains("auth logout"));
+    assert!(store.is_dir());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn badly_shaped_paste_starts_no_child() {
     let stub = Stub::new("exit 1");
     let status = save_key(&stub, &ClaudeSignIns::new(), "not-a-key").unwrap();

@@ -127,6 +127,24 @@ pub fn find_in(home: &Path, path: Option<&OsStr>, fallbacks: &[PathBuf]) -> Resu
         home,
         path,
         fallbacks,
+        true,
+        #[cfg(target_os = "macos")]
+        Path::new("/usr/bin/tmutil"),
+    )
+}
+
+/// `find_in` without reading Voice's Console key: sign-out runs Claude Code's logout even when
+/// the key can't be read (VF15).
+pub fn find_for_sign_out_in(
+    home: &Path,
+    path: Option<&OsStr>,
+    fallbacks: &[PathBuf],
+) -> Result<Claude> {
+    find_in_impl(
+        home,
+        path,
+        fallbacks,
+        false,
         #[cfg(target_os = "macos")]
         Path::new("/usr/bin/tmutil"),
     )
@@ -140,13 +158,14 @@ pub fn find_in_with_tmutil(
     fallbacks: &[PathBuf],
     tmutil: &Path,
 ) -> Result<Claude> {
-    find_in_impl(home, path, fallbacks, tmutil)
+    find_in_impl(home, path, fallbacks, true, tmutil)
 }
 
 fn find_in_impl(
     home: &Path,
     path: Option<&OsStr>,
     fallbacks: &[PathBuf],
+    read_key: bool,
     #[cfg(target_os = "macos")] tmutil: &Path,
 ) -> Result<Claude> {
     let on_path = path
@@ -163,7 +182,7 @@ fn find_in_impl(
         #[cfg(target_os = "macos")]
         tmutil,
     )?;
-    if cfg!(target_os = "macos") {
+    if read_key && cfg!(target_os = "macos") {
         console_key::load(home)?;
     }
     Ok(Claude::at(program, profile))
