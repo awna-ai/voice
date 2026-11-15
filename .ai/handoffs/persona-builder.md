@@ -2,6 +2,31 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF7d: the permission text says how a subscription stops, so it is version 3 (2026-11-15, lane: V1)
+
+- **Why:** the permission text said Voice "stops for the day when it reaches a daily limit". Since VF7b a build
+  signed in with a Claude subscription has no daily limit: it stops when Claude Code says the plan is nearly used up.
+  V-Q20 chose one wording for every build, a new version, and everyone agrees once more.
+- **What:** `builder/core/src/consent.rs`: the line now reads that Voice stops at your daily limit or, signed in with
+  a Claude subscription, when Claude Code says your plan is nearly used up; `VERSION` 3; `WORDING_SHA1` re-pinned
+  (`f8a42f9c…`). `builder/api/tests/assistants.rs`: the old-version test now checks versions 1 and `VERSION - 1`.
+  `.ai/DECISIONS.md` records the re-ask. No other production code changes: `read_consent` already counts a record
+  only at the current version.
+- **Brief:** `plans/briefs/VF7d-consent-subscription.md`. **Who built it:** V1, Claude-direct under the fallback rule:
+  Codex hit its usage limit (until 2026-11-18) on dispatch and wrote nothing.
+- **Verified:** red first: `wording_names_the_subscription_stop` failed on its `contains` assertion before the line
+  changed; the pinned-SHA test then failed until re-pinned. Green: `cargo test --locked -p voice-core` (all suites)
+  and `-p voice-api --test assistants` (40). Mutations, each restored with `cp` and checked with `cmp`:
+  `read_consent` accepting any version fails the old-version test on version 1; accepting version 2 and up fails it on
+  version 2. `cargo fmt --check` clean. Live: a fresh debug `voice consent show` in a scratch home prints the new line
+  and `Version 3.`
+- **Security review** (sub-agent, read-only): no findings. It traced every reader of `consent.json` (all through
+  `read_consent`), found no cached version or old wording outside dated records and the UI's version-1 test fixture
+  (imported only by `*.test.ts`), and recomputed the SHA-1 independently. Verifier: not required (spec says no).
+- **Effect:** every assistant with a version-2 yes shows as needing permission until its person agrees again.
+- **Not verified:** clippy and the full `ci-local.sh` (they run at the land); the app's permission screen (walk owed
+  to the next attended pass).
+
 ## VF19: a timestamp at the edge of the date range gets the plain error, not a traceback (2026-11-15, lane: V1)
 
 - **Why:** `scripts/crew_decisions.py` `utc()` converts with `astimezone`, which raises `OverflowError` for
