@@ -2,6 +2,31 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF19: a timestamp at the edge of the date range gets the plain error, not a traceback (2026-11-15, lane: V1)
+
+- **Why:** `scripts/crew_decisions.py` `utc()` converts with `astimezone`, which raises `OverflowError` for
+  `0001-01-01T00:00:00+01:00` and `9999-12-31T23:00:00-05:00` (probed on Python 3.9.6, 3.12.14, 3.14.8 and 3.15.0).
+  `main()` doesn't catch it, so `claudeai titles` printed a traceback. Found by VF17's security review.
+- **What:** the whole conversion sits in `utc()`'s one `try`, `OverflowError` joins the caught errors, and VF17's
+  hour-24 check raises `ValueError` inside it, so the "is not a timestamp" message is written once. `main()`'s handler
+  is unchanged. Tests: `Timestamps.test_a_timestamp_past_the_date_range_is_refused` (`tests/crew_hardening_test.py`) and
+  `Review.test_a_timestamp_past_the_date_range_is_a_plain_error` (`tests/crew_sources_test.py`: `claudeai titles`
+  exits 1 with one plain error line, no script frame, no review file).
+- **Commits:** the brief (`plans/briefs/VF19-timestamp-edge-of-date-range.md`), the code and tests, this record.
+  Stacked on VF17 (same function).
+- **Who built it:** V1 directly from the brief; Codex was at its usage limit (until 2026-11-18, re-probed this run).
+- **Verified:** red first on 3.12 (both forms raised `OverflowError`; the CLI case failed on its exit status). Green:
+  `crew_hardening` and `crew_sources` suites on 3.9.6 (one 3.11+ skip, VF17's), 3.12.14, 3.14.8 and 3.15.0. Mutation:
+  `OverflowError` taken back out of the tuple turned the new tests red (1 failure, 2 errors); restored, checked with
+  `cmp`. The CLI case runs the real script as a process (the live seam).
+- **Security review (sub-agent):** pass, no fixes needed. 17 inputs through the old and new code on 3.12 and 3.9:
+  the same inputs are accepted and refused as before, except the overflow ones (`0001-01-01T00:30:00+00:31` too),
+  which now give `Failed`. Nothing else in the wider `try` can raise the caught errors on a valid `datetime`. One
+  behaviour change to know about: a live answer line with such a timestamp is now counted under unreadable lines and
+  skipped, where the whole command used to crash.
+- **Gate:** the full `bash scripts/ci-local.sh` at the land. Verifier: not required by the spec.
+- **Not verified:** Python 3.10, 3.11 and 3.13. **Correction to VF17's record:** Homebrew's Python 3.14.8 is installed on
+  Mimi (`/opt/homebrew/bin/python3.14`); VF19's suites pass on it.
 ## VF20: the stop test waits for its stub to start before it stops it (2026-11-15, lane: V1)
 
 - **Why:** VF19's land (19:19Z, load1 ~18) went red in `builder/agent/tests/stop.rs`
