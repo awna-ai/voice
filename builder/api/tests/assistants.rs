@@ -433,23 +433,26 @@ fn unsafe_app_folder_shows_the_move_sentence() {
 }
 
 #[test]
-fn version_one_consent_is_no_permission_given() {
+fn older_consent_versions_are_no_permission_given() {
     let home = Home::new();
     let h = home.path();
     new_assistant_in(h, &h.join(".claude"), request()).unwrap();
-    agree_consent_in(h, slug("ari")).unwrap();
-    fs::write(
-        h.join(".claude/state/ari/consent.json"),
-        r#"{"version":1,"agreed_on":"2026-10-25"}"#,
-    )
-    .unwrap();
-    assert_eq!(
-        list_assistants_in(h).unwrap()[0].consent,
-        Consent {
-            agreed: false,
-            agreed_on: None
-        }
-    );
+    for version in [1, voice_core::consent::VERSION - 1] {
+        agree_consent_in(h, slug("ari")).unwrap();
+        fs::write(
+            h.join(".claude/state/ari/consent.json"),
+            format!(r#"{{"version":{version},"agreed_on":"2026-10-25"}}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            list_assistants_in(h).unwrap()[0].consent,
+            Consent {
+                agreed: false,
+                agreed_on: None
+            },
+            "version {version}"
+        );
+    }
 }
 
 #[test]

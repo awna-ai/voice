@@ -1,4 +1,4 @@
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// The private permission record, shared by the app and CLI so both reject damaged records.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -32,7 +32,7 @@ pub const SECTIONS: &[Section] = &[
         heading: "What goes to Claude",
         lines: &[
             "To build your assistant, Voice sends parts of your history to Claude through your own Claude Code, signed in to your own Claude account. The terms of your Claude account apply, as they do to anything else you send through Claude Code.",
-            "This uses your own Claude plan's usage, and a build can use a lot of it. Voice stops for the day when it reaches a daily limit, and you can stop it at any time.",
+            "This uses your own Claude plan's usage, and a build can use a lot of it. Voice stops for the day when it reaches your daily limit or, signed in with a Claude subscription, when Claude Code says your plan is nearly used up. You can stop it at any time.",
         ],
     },
     Section {
@@ -44,7 +44,7 @@ pub const SECTIONS: &[Section] = &[
     },
 ];
 /// SHA-1 (hex) of `plain_text()`. When changing the wording, bump VERSION and update this.
-pub const WORDING_SHA1: &str = "51f35478a220cb391d90d86b28dc33f7ec0a3d10";
+pub const WORDING_SHA1: &str = "f8a42f9c0c167f415415fae9e6d30c875be4de40";
 pub fn plain_text() -> String {
     let mut text = format!("{TITLE}\n\n");
     for (index, section) in SECTIONS.iter().enumerate() {
@@ -82,5 +82,14 @@ mod tests {
             WORDING_SHA1,
             "permission wording changed without updating its version and SHA-1"
         );
+    }
+    #[test]
+    fn wording_names_the_subscription_stop() {
+        let text = plain_text();
+        assert!(text.contains(
+            "This uses your own Claude plan's usage, and a build can use a lot of it. Voice stops for the day when it reaches your daily limit or, signed in with a Claude subscription, when Claude Code says your plan is nearly used up. You can stop it at any time."
+        ));
+        assert!(!text.contains("when it reaches a daily limit, and you can stop"));
+        assert_eq!(VERSION, 3);
     }
 }

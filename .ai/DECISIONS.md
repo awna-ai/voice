@@ -518,3 +518,9 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **Off a Mac nothing changes:** Claude Code's own `auth login --console` keeps its login itself.
 - **Tests never touch the Keychain:** with the agent's `test-stubs` feature the key lives in a 0600
   file in the test's home; `scripts/ci-local.sh` already fails a shipped build that has `test-stubs`.
+
+## 2026-11-15: the permission text says how a subscription stops, so it is version 3 (VF7d)
+
+- **One wording for every build:** Voice stops for the day at the person's daily limit or, signed
+  in with a Claude subscription, when Claude Code says the plan is nearly used up (VF7b's stop).
+- **The wording changed, so it is version 3:** a yes given to version 1 or 2 is asked again, once.
