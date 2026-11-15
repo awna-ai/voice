@@ -2,6 +2,40 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF17: the timestamp parity tests hold on Python 3.15 (2026-11-15, lane: V1)
+
+- **Why:** `builder/ingest/tests/claudeai_utc.rs` checks Voice's Rust `claudeai::utc` against `scripts/crew_decisions.py`
+  `utc()`, a thin wrapper on `datetime.fromisoformat`, whose reading of some forms depends on the Python version. With
+  Homebrew's Python 3.15 first on `PATH` (VF15's land, 2026-11-15 09:27Z), two tests went red on `main` too.
+- **Probe at pickup (each list, four Pythons):** 3.12.14 matches every list. 3.15.0 accepts `2026-03-01T24:00:00`
+  (as the next day's midnight) and refuses `2026-03-01T12:00:00.Z` and `2026-03-01T12:00.5` (the spec named only the
+  first two). 3.9.6 and 3.10.22 refuse six shared forms (fractions of 1, 7, 9 or 12 digits) and eight Python-only ones.
+- **What:** `utc()` refuses hour 24 on every Python: a midnight result whose text doesn't start with that day (every
+  form `fromisoformat` writes a day in, `day_forms()`) is refused with the existing `Failed` message. The test moves the
+  two forms 3.15 changed to `PYTHON_VARIES`, where only Voice's refusal is checked, and skips the Python side below
+  3.11 with a `skipped:` line (not a panic under `VOICE_REQUIRE_PARITY=1`: 3.9 is still the stated minimum).
+  `tests/crew_hardening_test.py` gains `Timestamps`: hour 24 refused, a real midnight kept, and every day form at
+  midnight kept (3.11 and newer).
+- **Commits:** the brief (`plans/briefs/VF17-timestamp-parity-python-3-15.md`), the code and tests, this record.
+- **Who built it:** V1 directly from the brief; Codex was at its usage limit (until 2026-11-18). The brief records
+  the one change made while building: the Python tests went into `crew_hardening_test.py` (it already imports
+  `crew_decisions`), not `crew_decisions_test.py`.
+- **Verified:** red first: `Timestamps` failed on 3.15 with `Failed not raised` (green on 3.12, skipped part on 3.9).
+  Green: `claudeai_utc` (parity required) 5 passed with 3.15, 3.12 and 3.9 first on `PATH`, 3.9 printing the skip;
+  `crew_hardening`, `crew_sources` and `crew_decisions` suites passed on 3.15 and 3.12; `cargo fmt --check` and
+  `cargo clippy -p voice-ingest --all-targets --locked -- -D warnings` clean. Mutations (`mutate-check.sh`, green
+  baseline first, file restored by `cmp`), each killed: the hour-24 check off (Python test on 3.15, and the Rust
+  test with `python accepted "2026-03-01T24:00:00"`, the card's symptom); the week-day forms, the Monday-only forms
+  and the basic `YYYYMMDD` form each dropped; the version guard at 3.0 under 3.9 (`python refused ...`). One
+  mutation survived and changed the brief: `strftime("%Y")` pads year 1 to `0001` on all three Pythons here, so the
+  brief's claim that macOS doesn't was wrong and is removed. Live: `claudeai titles` on an invented export refuses
+  `2026-03-01T24:00:00Z` and keeps `2026-03-02T00:00:00Z` the same way on 3.15 and 3.12.
+- **Security review (sub-agent):** pass; the new check is a fixed six-prefix `startswith`, the message is unchanged.
+  One older bug outside this diff: `utc()` on a timestamp at the edge of the date range (`0001-01-01T00:00:00+01:00`)
+  raises `OverflowError`, which `main()` doesn't catch, so the CLI prints a traceback. Filed as VF19.
+- **Gate:** the full `bash scripts/ci-local.sh` at the land. Verifier: not required by the spec.
+- **Not verified:** Python 3.11, 3.13 and 3.14 (not installed on Mimi).
+
 ## VF15: sign-out still logs out when the Console key can be neither forgotten nor read (2026-11-15, lane: V1)
 
 - **Why:** VF5's repeat Verifier found that on a Mac, when the Keychain can neither delete nor read Voice's Console
