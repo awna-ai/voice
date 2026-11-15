@@ -400,5 +400,27 @@ class TrackedPrivacy(unittest.TestCase):
         self.assertEqual(self.check().returncode, 0)
 
 
+class Timestamps(unittest.TestCase):
+    def test_hour_24_is_refused(self):
+        for when in ['2026-03-01T24:00:00', '2026-03-01T24:00', '2026-03-01T24:00:00Z']:
+            with self.subTest(when=when), self.assertRaises(crew.Failed):
+                crew.utc(when)
+
+    def test_a_real_midnight_is_kept(self):
+        self.assertEqual(crew.utc('2026-03-02T00:00:00'), '2026-03-02T00:00:00.000Z')
+        self.assertEqual(crew.utc('2026-03-02T00:00:00+01:00'), '2026-03-01T23:00:00.000Z')
+
+    @unittest.skipIf(sys.version_info < (3, 11), 'only 3.11 and newer read these forms')
+    def test_every_day_form_at_midnight_is_kept(self):
+        for when, expected in [('20260302T000000', '2026-03-02T00:00:00.000Z'),
+                               ('2026-W10-1T00:00:00', '2026-03-02T00:00:00.000Z'),
+                               ('2026W101T000000', '2026-03-02T00:00:00.000Z'),
+                               ('2026-W10T00:00', '2026-03-02T00:00:00.000Z'),
+                               ('2026-W10-3T00:00', '2026-03-04T00:00:00.000Z'),
+                               ('0001-01-01T00:00:00', '0001-01-01T00:00:00.000Z')]:
+            with self.subTest(when=when):
+                self.assertEqual(crew.utc(when), expected)
+
+
 if __name__ == '__main__':
     unittest.main()

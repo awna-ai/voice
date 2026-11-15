@@ -69,7 +69,7 @@ import uuid
 import zipfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -994,6 +994,14 @@ def cmd_claudeai_inspect(m, args):
     return 0
 
 
+def day_forms(day):
+    """Every way fromisoformat writes a day at the start of a timestamp."""
+    year, week, weekday = day.isocalendar()
+    forms = (day.isoformat(), f"{day.year:04d}{day.month:02d}{day.day:02d}",
+             f"{year:04d}-W{week:02d}-{weekday}", f"{year:04d}W{week:02d}{weekday}")
+    return forms + ((f"{year:04d}-W{week:02d}", f"{year:04d}W{week:02d}") if weekday == 1 else ())
+
+
 def utc(when):
     """An export timestamp as UTC with milliseconds and a Z, the shape Claude Code transcripts use."""
     try:
@@ -1002,6 +1010,8 @@ def utc(when):
         raise Failed(f"{when!r} is not a timestamp: the export's shape changed, run claudeai inspect")
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
+    if parsed.time() == time() and not when.startswith(day_forms(parsed.date())):
+        raise Failed(f"{when!r} is not a timestamp: the export's shape changed, run claudeai inspect")
     return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 

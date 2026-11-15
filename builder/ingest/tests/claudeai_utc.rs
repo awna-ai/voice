@@ -59,16 +59,17 @@ const PYTHON_ONLY: &[&str] = &[
     "2026-W09-1",
     "2026-03-01T1200",
     "2026-03-01T12:00:00,5Z",
-    "2026-03-01T12:00:00.Z",
     "2026-03-01T12:00:00+05",
     "2026-03-01T12:00:00+0530",
     "2026-03-01T12:00:00+05:30:15",
     "2026-03-01T12:00:00+05:30:15.5",
     "2026-03-01T12:00:00 +00:00",
-    "2026-03-01T12:00.5",
     "2026-03-01Z",
     "2026-03-01+01:00",
 ];
+/// Forms Voice refuses that some Python versions read and others don't (3.15 refuses both), so only
+/// Voice's refusal is checked.
+const PYTHON_VARIES: &[&str] = &["2026-03-01T12:00:00.Z", "2026-03-01T12:00.5"];
 
 fn python(cases: &[&str]) -> Vec<Option<String>> {
     let out = Command::new("python3")
@@ -97,9 +98,22 @@ fn python(cases: &[&str]) -> Vec<Option<String>> {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
+/// Only Python 3.11 and newer read full ISO 8601; older ones refuse forms Voice shares with them.
+fn python_reads_full_iso() -> bool {
+    let out = Command::new("python3")
+        .args(["-I", "-c", "import sys; print(sys.version_info >= (3, 11))"])
+        .output()
+        .unwrap();
+    let full = String::from_utf8_lossy(&out.stdout).trim() == "True";
+    if !full {
+        eprintln!("skipped: python3 is older than 3.11, which reads only part of ISO 8601");
+    }
+    full
+}
+
 #[test]
 fn shared_forms_agree_with_python() {
-    if !parity_tools_available() {
+    if !parity_tools_available() || !python_reads_full_iso() {
         return;
     }
     let expected = python(BOTH);
@@ -110,7 +124,7 @@ fn shared_forms_agree_with_python() {
 }
 #[test]
 fn both_refuse_the_same_bad_forms() {
-    if !parity_tools_available() {
+    if !parity_tools_available() || !python_reads_full_iso() {
         return;
     }
     for (when, py) in NEITHER.iter().zip(python(NEITHER)) {
@@ -120,11 +134,17 @@ fn both_refuse_the_same_bad_forms() {
 }
 #[test]
 fn forms_only_python_reads_are_refused() {
-    if !parity_tools_available() {
+    if !parity_tools_available() || !python_reads_full_iso() {
         return;
     }
     for (when, py) in PYTHON_ONLY.iter().zip(python(PYTHON_ONLY)) {
         assert!(py.is_some(), "python refused {when:?}");
+        assert_eq!(utc(when), None, "{when:?}");
+    }
+}
+#[test]
+fn forms_python_reads_differently_are_refused() {
+    for when in PYTHON_VARIES {
         assert_eq!(utc(when), None, "{when:?}");
     }
 }
