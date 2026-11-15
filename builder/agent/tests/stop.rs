@@ -1,6 +1,7 @@
 mod common;
 use common::*;
 use std::{
+    fs,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -19,20 +20,30 @@ fn stopped_call_kills_its_group_and_counts_the_budget() {
     let stop = Arc::new(AtomicBool::new(false));
     let claude = stub
         .claude()
-        .with_timeout(Duration::from_secs(2))
+        .with_timeout(Duration::from_secs(30))
         .with_stop(stop.clone());
-    let begun = Instant::now();
-    let error = thread::scope(|scope| {
-        scope.spawn(|| {
-            thread::sleep(Duration::from_millis(200));
+    let (error, stopped, returned) = thread::scope(|scope| {
+        // Stop the call only once the stub has written both pids: a loaded machine can take
+        // seconds to start it.
+        let stopper = scope.spawn(|| {
+            let started = Instant::now();
+            while !fs::read_to_string(stub.folder.0.join("pid"))
+                .is_ok_and(|pid| pid.trim().parse::<i32>().is_ok())
+                && started.elapsed() < Duration::from_secs(30)
+            {
+                thread::sleep(Duration::from_millis(20));
+            }
             stop.store(true, Ordering::SeqCst);
+            Instant::now()
         });
-        Guard::new(vec![&claude], Ceilings::defaults())
+        let error = Guard::new(vec![&claude], Ceilings::defaults())
             .call(&session, &call("records", &schema()))
-            .unwrap_err()
+            .unwrap_err();
+        let returned = Instant::now();
+        (error, stopper.join().unwrap(), returned)
     });
     assert_eq!(error.to_string(), STOPPED);
-    assert!(begun.elapsed() < Duration::from_secs(5));
+    assert!(returned.duration_since(stopped) < Duration::from_secs(5));
     for name in ["parent", "pid"] {
         let pid: i32 = stub.file(name).trim().parse().unwrap();
         let started = Instant::now();
