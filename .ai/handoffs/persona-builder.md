@@ -2,6 +2,30 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF20: the stop test waits for its stub to start before it stops it (2026-11-15, lane: V1)
+
+- **Why:** VF19's land (19:19Z, load1 ~18) went red in `builder/agent/tests/stop.rs`
+  `stopped_call_kills_its_group_and_counts_the_budget`: `NotFound` at `common/mod.rs:103`. The test set the stop flag
+  after a fixed 200 ms, and the stub's recording prelude (about ten shell commands) had not finished, so the stub was
+  killed before it wrote `parent` and `pid`. VF16's family (a fixed start window for a shell stub).
+- **What:** test only. The stop thread polls every 20 ms until `pid` reads as a number (at most 30 s), then stops the
+  call; the call's timeout goes from 2 s to 30 s; the speed check measures from the stop (returns within 5 s of it).
+  Every other assertion is unchanged.
+- **Commits:** the brief (`plans/briefs/VF20-stop-test-waits-for-stub.md`), the test change, this record.
+- **Who built it:** V1 directly from the brief; Codex was at its usage limit (until 2026-11-18, re-probed this run).
+- **Verified:** red first: the old test with `sleep 1` at the start of the stub body failed exactly as the land did
+  (`common/mod.rs:103`, `NotFound`). Green: the new test passes with that `sleep 1` (1.6 s) and without it. Mutation:
+  `child.rs`'s stop check turned off (`if false && …`) turned the new test red (the call ran into its 30 s timeout and
+  returned the timeout's text); restored, checked with `cmp`.
+- **Security review (sub-agent):** pass, no fixes needed. The `pid` file is read from the test's own scratch folder
+  (`fs::create_dir`, so nothing can be planted there); `kill(pid, 0)` sends no signal; a stop or a timeout still kills
+  the whole group (`child.rs` `settle`), so no `sleep 30` is left behind; the worst case is about 30 s, never a hang;
+  and the test still fails if the stub never starts, if the stop is ignored, or if only the shell dies.
+- **Gate:** a test-only slice (V-Q19): `cargo fmt --check`, `VOICE_REQUIRE_PARITY=1 VOICE_REQUIRE_SANDBOX=1 cargo test
+  --locked -p voice-agent --features claude-subscription --test stop`, and `cargo clippy --all-targets --locked -- -D
+  warnings`, through `direct-to-main.sh land --check`. Verifier: not required by the spec.
+- **Not verified:** the rest of the suite (unchanged by this slice; VF19's full-gate land runs it next).
+
 ## VF17: the timestamp parity tests hold on Python 3.15 (2026-11-15, lane: V1)
 
 - **Why:** `builder/ingest/tests/claudeai_utc.rs` checks Voice's Rust `claudeai::utc` against `scripts/crew_decisions.py`
