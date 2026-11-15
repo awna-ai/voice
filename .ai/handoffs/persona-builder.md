@@ -2,6 +2,30 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF15: sign-out still logs out when the Console key can be neither forgotten nor read (2026-11-15, lane: V1)
+
+- **Why:** VF5's repeat Verifier found that on a Mac, when the Keychain can neither delete nor read Voice's Console
+  key item (locked, say), both sign-outs answered `KEY_NOT_FORGOTTEN` and never ran Claude Code's `auth logout`,
+  because finding Claude Code (`claude::find_in`) also reads the key. VF5 recorded that as a known limit.
+- **What:** `claude::find_for_sign_out_in` (`builder/agent/src/claude.rs`) finds Claude Code the same way, through
+  the same checks, without reading the key. Only the API and CLI sign-outs use it; every run path still reads the
+  key first. The forget error still wins over the logout result. The known limit is gone from `.ai/SECURITY.md`'s
+  *A Console API key leaks (a Mac)* row, and the two new tests are in its evidence list.
+- **Commits:** `9a8de7a` brief (`plans/briefs/VF15-sign-out-logs-out-without-the-key.md`); `cc0aea8` code and
+  tests; this record.
+- **Who built it:** Codex, from the brief; V1 reviewed the diff against it and ran the tests outside Codex's sandbox.
+- **Reviews:** security review sub-agent: no findings (the new finder has two callers, both sign-outs; the logout's
+  child never gets the key; the binary search is unchanged; tests use the file-backed test store). Verifier: not
+  required by the spec.
+- **Verified (on a Mac, outside the sandbox, at `cc0aea8`):** `cargo test --locked -p voice-api -p voice-cli` on
+  `sign_out_still_logs_out_when_the_key_cannot_be_forgotten_or_read` (API and CLI) and
+  `console_sign_in_bad_paste_preserves_an_unreadable_stored_key`: all green. Mutations, each restored and checked
+  with `cmp`: both call sites back to `find_in` turns the API test red; the CLI call site alone turns the CLI test
+  red; writing the stub's `ran` file before the bad paste turns the bad-paste test red. The full `ci-local.sh`
+  (fmt, both clippy runs, both feature sets) runs at the land.
+- **Not verified:** a real locked Keychain (a directory standing in for the store makes both the delete and the read
+  fail, as the brief chose).
+
 ## VF18: the egress tests give the proxy longer to reach its test server (2026-11-15, lane: V1)
 
 - **Why:** the egress proxy's unit tests gave the proxy 500 ms (`rules()`'s `dial_time`) to connect to its loopback
