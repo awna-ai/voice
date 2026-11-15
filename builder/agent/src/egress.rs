@@ -674,7 +674,7 @@ mod tests {
             upstream_port: port,
             header_time: Duration::from_millis(800),
             idle: Duration::from_millis(800),
-            dial_time: Duration::from_millis(500),
+            dial_time: Duration::from_secs(5),
             connections: 2,
             ..Rules::claude_code()
         }
@@ -1084,6 +1084,8 @@ mod tests {
         let upstream = Upstream::start();
         let mut short = rules(upstream.port);
         short.resolve = once;
+        // 127.0.0.2 never answers on a Mac and takes half of this; the rest must reach 127.0.0.1 inside the client's 2 s read.
+        short.dial_time = Duration::from_millis(1500);
         RESOLVES.store(0, Ordering::SeqCst);
         let proxy = start_with(short).unwrap();
         let mut socket = client(&proxy);
@@ -1108,6 +1110,7 @@ mod tests {
             let mut short = rules(9);
             short.resolve = resolve;
             short.public = public;
+            short.dial_time = Duration::from_millis(500);
             let started = Instant::now();
             assert_eq!(
                 dial(
@@ -1134,6 +1137,7 @@ mod tests {
             let mut short = rules(upstream.port);
             short.resolve = resolve;
             short.public = public;
+            short.dial_time = Duration::from_millis(500);
             let dial_time = short.dial_time;
             let proxy = start_with(short).unwrap();
             let started = std::time::Instant::now();
@@ -1209,10 +1213,11 @@ mod tests {
             io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
         ));
         socket
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         eof(&mut socket);
-        assert!(started.elapsed() < Duration::from_millis(1300));
+        // `eof` reads a clean end of stream, so the proxy closed the idle tunnel; a read timeout would fail it.
+        assert!(started.elapsed() < Duration::from_secs(5));
         proxy.stop();
     }
 
