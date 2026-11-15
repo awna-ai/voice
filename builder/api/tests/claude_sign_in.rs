@@ -12,6 +12,9 @@ use voice_api::{
     dto::{ClaudeSignInRequest, ClaudeStatus},
     *,
 };
+/// How long a test waits for a stub it has started to show it is running. Only a ceiling: each poll
+/// returns as soon as the stub's file appears, so a passing run is no slower on a loaded machine.
+const STUB_START: Duration = Duration::from_secs(30);
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 struct Stub(PathBuf);
 impl Stub {
@@ -49,7 +52,7 @@ esac
     }
     fn wait_for_logout(&self) {
         let begun = Instant::now();
-        while !self.0.join("logout").exists() && begun.elapsed() < Duration::from_secs(3) {
+        while !self.0.join("logout").exists() && begun.elapsed() < STUB_START {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(self.0.join("logout").exists(), "logout did not start");
@@ -78,7 +81,7 @@ esac
     #[cfg(any(not(target_os = "macos"), feature = "claude-subscription"))]
     fn wait_for_login(&self) {
         let begun = Instant::now();
-        while !self.0.join("login").exists() && begun.elapsed() < Duration::from_secs(3) {
+        while !self.0.join("login").exists() && begun.elapsed() < STUB_START {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(self.0.join("login").exists(), "login did not start");
@@ -252,7 +255,7 @@ esac
     thread::scope(|scope| {
         let pending = scope.spawn(|| stub.sign_in(&state));
         let begun = Instant::now();
-        while !stub.0.join("status-started").exists() && begun.elapsed() < Duration::from_secs(3) {
+        while !stub.0.join("status-started").exists() && begun.elapsed() < STUB_START {
             thread::sleep(Duration::from_millis(10));
         }
         assert!(
