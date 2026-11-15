@@ -2,6 +2,49 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF5: on a Mac, the Console sign-in is an API key the person pastes (2026-11-14, lane: V1)
+
+- **Why:** Claude Code's own `auth login --console` creates an API key and keeps it only in the Keychain, which
+  Voice's sandbox keeps closed, so on a Mac that sign-in failed and left an unused key on the person's Console
+  (V-Q15, probe 7). The pasted key was chosen on 2026-11-09 (V-Q15 answer 2).
+- **What:** on a Mac the person pastes a Console API key on Connect Claude or into `voice claude sign-in` (echo
+  off, or one line on stdin). Voice checks its shape, keeps it in its own Keychain item `voice.claude-console`,
+  checks Claude Code reads it as signed in, and passes it only as `ANTHROPIC_API_KEY` to the sandboxed check and
+  call runs. Sign-out forgets it first, then runs Claude Code's own `auth logout`. Off a Mac nothing changes.
+  Decisions: `.ai/DECISIONS.md` 2026-11-14 (VF5); threat row: `.ai/SECURITY.md` *A Console API key leaks (a Mac)*.
+- **Slices, all on this branch:** VF5a agent and CLI (`ebb4fab`); VF5b API, app command and Connect Claude's key
+  field (`1c13b54`); VF5c the first security review's fix-ups (sign-out stops runs already holding the key and works
+  without Claude Code; a mistyped key reads as signed out) (`1445370`); VF5d its LOWs (an unsaved key leaves the
+  screen, an unreadable key can be replaced, sign-out reports only what worked) (`9e645d9`); VF5e the key text fits
+  any computer, fixing a wording test VF5b broke (`d7c8341`); VF5f the LOWs of the VF5c+VF5d review (`45b9ce7`);
+  VF5g the LOWs of the VF5f review (`bf8b53d`); VF5h the Verifier's should-fixes (`76769ea`).
+- **Briefs:** `plans/briefs/VF5a-console-key-agent-cli.md` to `VF5h-verifier-should-fixes.md`.
+- **Who built it:** Codex, from the briefs; V1 reviewed each diff against its brief and ran every socket-using test
+  outside Codex's sandbox.
+- **Reviews:** four security review sub-agents (VF5a, VF5b, VF5c+VF5d, VF5f): no HIGH; VF5a's two MEDIUMs fixed in
+  VF5c; every LOW fixed except one, recorded as a known limit (each run's Keychain read has no timeout of its own,
+  as the GitHub token's). Verifier (Fable, edge ⑧, over `1bc5a21..1957c27`): PASS, no must-fix, four should-fixes, all fixed in VF5h (only the
+  external-key rejection asks for a new key, verified in Claude Code 2.1.311's binary, which holds both `Invalid API
+  key` replies; a bad paste starts no child in the app; the CLI replaces an unreadable stored key; sign-out always tries
+  the logout and says it worked only when it did), and VF5g's sentence reworded to be true off a Mac. Repeat Verifier (Opus, over `1957c27..76769ea`): PASS, no
+  must-fix; one should-fix V1 judged a known limit, not a blocker (a locked Keychain that can neither delete nor read
+  the key makes sign-out skip Claude Code's logout, since `find_in` reads the key; the answer is `KEY_NOT_FORGOTTEN`,
+  "unlock it, then sign out again", and that retry does both; no leak, no false success): recorded in
+  `.ai/SECURITY.md`. A security review of VF5g+VF5h found nothing. First-pass NITs left:
+  sign-out off a Mac with no Claude Code and no login file now succeeds; an already-signed-in save drops the paste
+  silently; a SIGKILL between the save and the stop check keeps the key; tests that claim more than they check (the
+  CLI key test feeds a pipe, so echo-off is untested; the termination test proves undo after the save, not stopping).
+- **Verified:** red first in every brief. On a Mac, outside the sandbox: on `76769ea`, the default build of `voice-agent`,
+  `voice-api`, `voice-cli` and `voice-panel-runner` (`--no-fail-fast`, `VOICE_REQUIRE_PARITY=1 VOICE_REQUIRE_SANDBOX=1`):
+  48 targets green and none failed when the run's time ran out, among them agent `console_key` 12/12, API
+  `claude_sign_in` 28/28 and CLI `agent` 24/24 (the CLI's last targets and `voice-panel-runner` hadn't run yet); `cargo fmt --check` clean. On `45b9ce7` (VF5f) the same default build of the first three, 74 targets, all
+  green. Codex's in-sandbox runs can't bind localhost, so VF5g's and VF5h's red-first runs were mixed with socket
+  failures; the repeat Verifier read each new test as failing on the old code. The testers' build
+  (`claude-subscription`) and both clippy runs are left to the full `ci-local.sh` at the land.
+- **Not verified:** a real Console key end to end (made-up keys only, by the repo's rule); the Keychain itself in
+  tests (`test-stubs` keeps the key in a 0600 file); off a Mac (unchanged code paths, pinned by the same tests);
+  the Connect Claude screen by hand (walk owed).
+
 ## VF14: the other Claude Code messages name the sign-in this build can start (2026-11-14, lane: V1)
 
 - **Why:** found building VF6: `NOT_INSTALLED`, `SIGNED_OUT`, `SUBSCRIPTION_REFUSED` and `SUBSCRIPTION_NOT_OFFERED`

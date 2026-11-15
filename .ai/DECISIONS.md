@@ -489,3 +489,32 @@ Supersedes the 2026-11-04 entry's *A second Mac's run is owed for the record*.
   dot-files, the deny list, size caps, never `private.json`, and a member whose private folder is
   `~/.claude/state/<slug>`. Everything is staged and checked before an older assistant is backed up or anything
   of the person's is touched.
+
+## 2026-11-14: on a Mac, the Console sign-in is an API key the person pastes (VF5)
+
+Supersedes the 2026-11-09 entry's *Console sign-in on macOS waits for VF5*, and amends PB-D9's "Voice
+never reads, sets or passes a credential" and the VO11.1 entry's "`ANTHROPIC_API_KEY` can't either",
+for this one key (V-Q15 answer 2, 2026-11-09).
+
+- **The person pastes a Console API key** on Connect Claude or into `voice claude sign-in` (a terminal
+  prompt with echo off, or one line on stdin; never an argument). Voice checks its shape (`sk-ant-`,
+  never an Admin key's `sk-ant-admin`), keeps it in its own Keychain item (`voice.claude-console`,
+  written through `security -i` on stdin, the GitHub sign-in's store), and checks Claude Code reads it
+  as signed in before keeping it. Claude Code checks a key with the server only when it is used
+  (measured on Claude Code 2.1.311, 2026-11-14: `auth status` reads a made-up key as signed in, and the
+  first call fails with "Invalid API key"), so a mistyped key is kept, and the first call says Claude Code
+  rejects the key and to sign out, then paste a new one.
+- **Voice passes it as `ANTHROPIC_API_KEY`** to the sandboxed Claude Code on each check and call, never
+  to the sign-in or sign-out runs. The sandbox doesn't change: the Keychain stays closed to Claude Code.
+- **Sign-out forgets the key first**, even when Claude Code can't be found or the stored value is
+  unreadable, then runs Claude Code's own `auth logout` (also when forgetting failed, which it then reports), and says it worked only when Claude Code is signed out
+  or isn't installed and has left no login file. Each run reads the key from the Keychain as
+  it starts, so a sign-out also stops builds already going from using it. A key and a
+  subscription login never mix: a refused subscription login is signed out before a key is kept, and
+  a key is offered only when Voice isn't signed in. A leftover login file is signed out the same way. A stored
+  value Voice can't read doesn't lock the person out: Connect Claude and `voice claude sign-in` still take a new key, and a pasted key of the wrong shape never costs that value. Only Claude Code's reply for a key passed in the environment (`Invalid API key · Fix external API key`) asks for a new key; its other `Invalid API key` reply means its own login, so it reads as signed out.
+- **Claude Code keeps nothing of the key:** after a check and a call with a made-up key in the
+  environment, no part of it was in the throwaway `CLAUDE_CONFIG_DIR` (measured on 2.1.311).
+- **Off a Mac nothing changes:** Claude Code's own `auth login --console` keeps its login itself.
+- **Tests never touch the Keychain:** with the agent's `test-stubs` feature the key lives in a 0600
+  file in the test's home; `scripts/ci-local.sh` already fails a shipped build that has `test-stubs`.
