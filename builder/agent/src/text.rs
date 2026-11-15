@@ -112,6 +112,7 @@ pub fn limit(cap: crate::ledger::Cap) -> String {
 pub const NO_STATE_FOR_LIMIT: &str = "This assistant has no private folder yet, so there's nowhere to keep its limit. Run `voice consent agree` first.";
 
 pub const SIGN_OUT_FILE_LEFT: &str = "Claude Code signed out, but its sign-in file is still in Voice's folder. Try signing out again.";
+pub const SIGN_OUT_NOT_INSTALLED_FILE_LEFT: &str = "Voice forgot your key, but Claude Code isn't installed, so its sign-in file is still in Voice's folder. Install Claude Code, then sign out again.";
 pub const SIGN_OUT_SUCCESS: &str = "Signed out of Claude Code in Voice.";
 pub const SIGN_OUT_DURING_SIGN_IN: &str =
     "Wait for the sign-in to finish or cancel it, then sign out.";

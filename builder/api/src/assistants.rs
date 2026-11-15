@@ -818,6 +818,7 @@ pub(crate) fn claude_message(error: Error) -> String {
                 text::KEY_INVALID,
                 text::SIGN_OUT_FAILED,
                 text::SIGN_OUT_FILE_LEFT,
+                text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT,
                 text::SIGN_IN_FAILED,
                 text::SIGN_IN_TIMED_OUT,
                 text::SIGN_IN_STOPPED,
@@ -1075,7 +1076,7 @@ pub fn claude_sign_out_in(
         Err(Error::Invalid(message)) if message == text::NOT_INSTALLED => {
             match fs::symlink_metadata(claude::profile_folder(home).join(".credentials.json")) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                _ => return Err(failure(text::SIGN_OUT_FILE_LEFT)),
+                _ => return Err(failure(text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT)),
             }
         }
         Err(error) => return Err(failure(&claude_message(error))),
@@ -1189,6 +1190,16 @@ mod server_message_tests {
         assert_eq!(
             claude_message(Error::Invalid(text::KEY_INVALID.into())),
             text::KEY_INVALID
+        );
+    }
+
+    #[test]
+    fn not_installed_sign_out_guidance_crosses_the_app_boundary() {
+        assert_eq!(
+            claude_message(Error::Invalid(
+                text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT.into()
+            )),
+            text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT
         );
     }
 

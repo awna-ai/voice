@@ -135,6 +135,7 @@ fn turn_error(error: Error) -> String {
             if [
                 agent_text::PLAN_STOPPED,
                 agent_text::SIGNED_OUT,
+                agent_text::KEY_INVALID,
                 agent_text::FAILED,
                 agent_text::STOPPED,
                 agent_text::DOES_NOT_RUN,
@@ -244,6 +245,14 @@ mod tests {
         assert_eq!(all.get(Source::Mail), Ceiling::Anthropic);
         assert!(all.is_set(Source::Calendar));
         assert_eq!(panel_ceilings(&[third, second, first]), all);
+    }
+
+    #[test]
+    fn sign_in_guidance_is_shown_verbatim() {
+        use voice_agent::text;
+        for message in [text::KEY_INVALID, text::SIGNED_OUT] {
+            assert_eq!(turn_error(Error::Invalid(message.into())), message);
+        }
     }
 
     #[test]

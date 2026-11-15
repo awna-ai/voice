@@ -1692,7 +1692,11 @@ fn claude_sign_out_in(
                 voice_agent::claude::profile_folder(home).join(".credentials.json"),
             ) {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                _ => return Err(Error::Invalid(voice_agent::text::SIGN_OUT_FILE_LEFT.into())),
+                _ => {
+                    return Err(Error::Invalid(
+                        voice_agent::text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT.into(),
+                    ));
+                }
             }
         }
         Err(error) => return Err(error),
@@ -3267,7 +3271,7 @@ mod sign_out_tests {
             } else {
                 assert_eq!(
                     result.unwrap_err().to_string(),
-                    voice_agent::text::SIGN_OUT_FILE_LEFT,
+                    voice_agent::text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT,
                     "{kind}"
                 );
             }

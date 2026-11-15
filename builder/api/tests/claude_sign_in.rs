@@ -780,7 +780,7 @@ fn not_installed_sign_out_refuses_a_remaining_login_file() {
         assert!(!store.exists());
         assert_eq!(
             answer.unwrap_err().message,
-            text::SIGN_OUT_FILE_LEFT,
+            text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT,
             "{kind}"
         );
     }
