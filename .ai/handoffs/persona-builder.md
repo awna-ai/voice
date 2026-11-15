@@ -2,6 +2,32 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF18: the egress tests give the proxy longer to reach its test server (2026-11-15, lane: V1)
+
+- **Why:** the egress proxy's unit tests gave the proxy 500 ms (`rules()`'s `dial_time`) to connect to its loopback
+  test server. At load1 ~33 (VF15's second land, 2026-11-15 10:29Z) that ran out: `allowed_tunnels_round_trip` and
+  `header_size_limit` got `502` instead of `200`, and `idle_tunnel_closes` missed its 1.3 s ceiling.
+- **What (test only, `builder/agent/src/egress.rs` `mod tests`):** `rules()` dials for 5 s. `idle_tunnel_closes` keeps
+  the 800 ms idle and its 400 ms "still open" read, waits up to 10 s for the close and asserts it came within 5 s;
+  `eof` still requires a clean end of stream, so a read timeout can't pass for the proxy's close. Three tests that
+  lean on a short dial now set their own: `resolution_rejects_without_dialling` and
+  `resolution_is_checked_and_bounded` 500 ms (they time the deadline, and a 5 s `slow` resolver outlasts the test
+  client's 2 s read), `resolver_result_is_pinned` 1.5 s (`127.0.0.2` never answers on a Mac and takes half).
+  `Rules::claude_code()` is untouched.
+- **Commits:** the brief with its fix-up (`plans/briefs/VF18-egress-tests-longer-dial.md`), the test change, this record.
+- **Who built it:** Codex, from the brief and fix-up 1; V1 checked the diff against both. Codex's own test run
+  can't open sockets in its sandbox, so V1 ran the tests.
+- **Planning miss:** the spec said only tests with their own `dial_time` depended on it; the first soak showed the
+  two resolution tests and the pinning test did too (red 5 of 5), fixed by fix-up 1.
+- **Verified:** mutation (`cp`/`cmp`): `rules()` at 1 ms turned 7 tests red, both round-trip tests among them;
+  restored byte for byte. Then `voice-agent --lib --features claude-subscription` (parity and sandbox required)
+  42 passed, 5 runs in a row at load1 16 to 20 (gate on throttle).
+- **Gate (test-only, V-Q19):** `cargo fmt --check`; `voice-agent` tests with `VOICE_REQUIRE_PARITY=1
+  VOICE_REQUIRE_SANDBOX=1 --features claude-subscription`; `cargo clippy --all-targets --locked -- -D warnings`;
+  run by `direct-to-main.sh land --check`. Security review (sub-agent): no change outside `mod tests`, no test loses what it proves; one LOW accepted, the idle ceiling 1.3 s → 5 s no longer catches an idle stretched to 1.3–5 s, while `production_rules` still pins the real 5 min idle. Verifier: not
+  required by the spec.
+- **Not verified:** a red run of the old 500 ms on demand (the failure needs load1 ~30).
+
 ## VF16: the sign-in tests wait longer for a stub to start (2026-11-15, lane: V1)
 
 - **Why:** on Mimi under load (load1 10 to 27) a shell stub sometimes took longer than the 3 s the sign-in tests
