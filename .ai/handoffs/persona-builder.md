@@ -2,6 +2,23 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF16: the sign-in tests wait longer for a stub to start (2026-11-15, lane: V1)
+
+- **Why:** on Mimi under load (load1 10 to 27) a shell stub sometimes took longer than the 3 s the sign-in tests
+  allowed for it to start, so lands of unrelated slices went red with `login did not start` (VF15's two lands on
+  2026-11-15, a VF slice on 2026-11-13).
+- **What (test only):** `builder/api/tests/claude_sign_in.rs` has one constant, `STUB_START` (30 s), for the three
+  "wait until the stub has started" ceilings: `wait_for_logout`, `wait_for_login` and the `status-started` poll.
+  Each poll returns as soon as the file appears, so a passing run is no slower. The 1 s "returned quickly" checks
+  and the 5 s shutdown argument are untouched.
+- **Commits:** the brief (`plans/briefs/VF16-sign-in-stub-waits.md`), the test change, this record.
+- **Who built it:** Codex, from the brief; V1 checked the diff against it (only the three ceilings and the constant).
+- **Gate (test-only, V-Q19):** `cargo fmt --check`; the `claude_sign_in` suite with `VOICE_REQUIRE_PARITY=1
+  VOICE_REQUIRE_SANDBOX=1`, with and without `--features claude-subscription`; `cargo clippy --all-targets --locked
+  -- -D warnings`; run by `direct-to-main.sh land --check`. Security review: test-only, no product code touched.
+  Verifier: not required by the spec.
+- **Not verified:** a red run before the change on demand (the failure is load-dependent: 1 in 3 at load1 ~10).
+
 ## VF5: on a Mac, the Console sign-in is an API key the person pastes (2026-11-14, lane: V1)
 
 - **Why:** Claude Code's own `auth login --console` creates an API key and keeps it only in the Keychain, which
