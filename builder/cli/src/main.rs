@@ -1684,24 +1684,22 @@ fn claude_sign_out_in(
     path: Option<&std::ffi::OsStr>,
     fallbacks: &[PathBuf],
 ) -> Result<()> {
-    voice_agent::claude::forget_key(home)?;
-    match voice_agent::claude::find_in(home, path, fallbacks) {
-        Ok(claude) => claude.sign_out(home)?,
+    let forgotten = voice_agent::claude::forget_key(home);
+    let logout = match voice_agent::claude::find_in(home, path, fallbacks) {
+        Ok(claude) => claude.sign_out(home),
         Err(Error::Invalid(message)) if message == voice_agent::text::NOT_INSTALLED => {
             match std::fs::symlink_metadata(
                 voice_agent::claude::profile_folder(home).join(".credentials.json"),
             ) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                _ => {
-                    return Err(Error::Invalid(
-                        voice_agent::text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT.into(),
-                    ));
-                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                _ => Err(Error::Invalid(
+                    voice_agent::text::SIGN_OUT_NOT_INSTALLED_FILE_LEFT.into(),
+                )),
             }
         }
-        Err(error) => return Err(error),
-    }
-    Ok(())
+        Err(error) => Err(error),
+    };
+    forgotten.and(logout)
 }
 
 /// Read a pasted key without echo, keeping all input buffers zeroized on every exit.
@@ -1794,7 +1792,24 @@ fn claude_sign_in(sign_in: voice_agent::claude::SignIn) -> Result<()> {
     let stop = claude::stop_on_interrupt();
     let home = home()?;
     let path = std::env::var_os("PATH");
-    let claude = claude::find(path.as_deref(), &home)?;
+    let mut pasted_key = None;
+    let claude = match claude::find(path.as_deref(), &home) {
+        Err(Error::Invalid(message))
+            if message == text::KEY_UNREADABLE && claude::takes_key(sign_in) =>
+        {
+            let key = read_key(stop)?;
+            if stop.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(Error::Invalid(text::SIGN_IN_STOPPED.into()));
+            }
+            if !voice_agent::console_key::valid(key.expose()) {
+                return Err(Error::Invalid(text::KEY_SHAPE.into()));
+            }
+            claude::forget_key(&home)?;
+            pasted_key = Some(key);
+            claude::find(path.as_deref(), &home)?
+        }
+        found => found?,
+    };
     let status = claude.status(&home)?;
     if stop.load(std::sync::atomic::Ordering::SeqCst) {
         return Err(Error::Invalid(text::SIGN_IN_STOPPED.into()));
@@ -1804,7 +1819,10 @@ fn claude_sign_in(sign_in: voice_agent::claude::SignIn) -> Result<()> {
         return Ok(());
     }
     if claude::takes_key(sign_in) {
-        let key = read_key(stop)?;
+        let key = match pasted_key {
+            Some(key) => key,
+            None => read_key(stop)?,
+        };
         if stop.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(Error::Invalid(text::SIGN_IN_STOPPED.into()));
         }

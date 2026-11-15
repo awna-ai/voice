@@ -223,6 +223,17 @@ esac"#,
     }
 
     #[test]
+    fn sign_out_still_logs_out_when_forgetting_fails() {
+        let home = Scratch::new("console-logout-forget-failure");
+        let stub = stub();
+        let claude = found(&stub, &home);
+        fs::create_dir(home.0.join(FILE)).unwrap();
+        let error = claude.sign_out(&home.0).unwrap_err();
+        assert_eq!(error.to_string(), text::KEY_NOT_FORGOTTEN);
+        assert_eq!(stub.argv(0).unwrap()[2..], ["auth", "logout"]);
+    }
+
+    #[test]
     fn a_refused_key_is_forgotten() {
         let home = Scratch::new("console-refused");
         let stub = stub();

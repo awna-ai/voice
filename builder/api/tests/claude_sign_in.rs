@@ -842,3 +842,25 @@ fn sign_out_reports_profile_failure_after_forgetting_the_key() {
     assert_eq!(result.unwrap_err().message, text::PROFILE_FAILED);
     assert!(!stub.runs().contains("auth logout"));
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn badly_shaped_paste_starts_no_child() {
+    let stub = Stub::new("exit 1");
+    let status = save_key(&stub, &ClaudeSignIns::new(), "not-a-key").unwrap();
+    assert!(!status.ready);
+    assert_eq!(status.message, text::KEY_SHAPE);
+    assert!(!stub.0.join(".voice-test-claude-console-key").exists());
+    assert!(stub.runs().is_empty());
+}
+
+#[test]
+fn sign_out_fresh_ready_status_has_no_success_note() {
+    let stub = Stub::new("exit 1");
+    stub.ready();
+    stub.logout(":");
+    let status = stub.sign_out(&ClaudeSignIns::new()).unwrap();
+    assert!(status.ready);
+    assert_eq!(status.note, None);
+    assert!(stub.runs().contains("auth logout"));
+}

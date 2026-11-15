@@ -1045,3 +1045,45 @@ fn sign_out_reports_profile_failure_after_forgetting_the_key() {
     );
     assert!(!text(&out.stdout).contains(voice_agent::text::SIGN_OUT_SUCCESS));
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn console_sign_in_replaces_an_unreadable_stored_key() {
+    let f = Fixture::new();
+    f.stub(
+        r#"case "$1 $2" in
+'--version ') echo '2.1.292 (Claude Code)';;
+'auth status')
+    if [ "${ANTHROPIC_API_KEY:-}" = 'sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ]; then
+        echo '{"loggedIn":true,"authMethod":"api_key"}'
+    else echo '{"loggedIn":false}'; fi;;
+esac"#,
+    );
+    let store = f.home.join(".voice-test-claude-console-key");
+    fs::write(&store, "old-unreadable-value").unwrap();
+    let key = "sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let out = sign_in_with_stdin(&f, format!("{key}\n").as_bytes());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        "Claude Code 2.1.292 is installed and signed in.\n"
+    );
+    assert_eq!(fs::read_to_string(store).unwrap(), key);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn console_sign_in_bad_paste_preserves_an_unreadable_stored_key() {
+    let f = Fixture::new();
+    f.stub("exit 1");
+    let store = f.home.join(".voice-test-claude-console-key");
+    fs::write(&store, "old-unreadable-value").unwrap();
+    let out = sign_in_with_stdin(&f, b"not-a-key\n");
+    assert!(!out.status.success());
+    assert!(text(&out.stdout).is_empty());
+    assert_eq!(
+        text(&out.stderr),
+        format!("voice: {}\n", voice_agent::text::KEY_SHAPE)
+    );
+    assert_eq!(fs::read_to_string(store).unwrap(), "old-unreadable-value");
+}
