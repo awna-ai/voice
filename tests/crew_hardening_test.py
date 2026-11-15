@@ -406,6 +406,11 @@ class Timestamps(unittest.TestCase):
             with self.subTest(when=when), self.assertRaises(crew.Failed):
                 crew.utc(when)
 
+    def test_a_timestamp_past_the_date_range_is_refused(self):
+        for when in ['0001-01-01T00:00:00+01:00', '9999-12-31T23:00:00-05:00']:
+            with self.subTest(when=when), self.assertRaisesRegex(crew.Failed, 'is not a timestamp'):
+                crew.utc(when)
+
     def test_a_real_midnight_is_kept(self):
         self.assertEqual(crew.utc('2026-03-02T00:00:00'), '2026-03-02T00:00:00.000Z')
         self.assertEqual(crew.utc('2026-03-02T00:00:00+01:00'), '2026-03-01T23:00:00.000Z')

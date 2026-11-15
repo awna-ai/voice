@@ -193,6 +193,16 @@ class Review(unittest.TestCase):
         self.assertIn("not a timestamp", proc.stderr)
         self.assertFalse((self.h.root / "r2.tsv").exists())
 
+    def test_a_timestamp_past_the_date_range_is_a_plain_error(self):
+        edge = [dict(EXPORT[0], created_at="9999-12-31T23:00:00-05:00")]
+        (self.h.root / "edge").mkdir()
+        (self.h.root / "edge" / "conversations.json").write_text(json.dumps(edge))
+        proc = self.h.crew(self.member, "claudeai", "titles", "--export", str(self.h.root / "edge"), "--out", "r3.tsv")
+        self.assertEqual(proc.returncode, 1)
+        assert_cli_error(self, proc.stderr, "crew_decisions:")
+        self.assertIn("not a timestamp", proc.stderr)
+        self.assertFalse((self.h.root / "r3.tsv").exists())
+
     def test_mark_needs_a_selector(self):
         self.crew("titles", "--export", str(self.export.path), "--out", "review.tsv")
         proc = self.h.crew(self.member, "claudeai", "mark", "--review", "review.tsv", "--as", "y")

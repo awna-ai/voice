@@ -1006,13 +1006,13 @@ def utc(when):
     """An export timestamp as UTC with milliseconds and a Z, the shape Claude Code transcripts use."""
     try:
         parsed = datetime.fromisoformat(when.replace("Z", "+00:00"))
-    except (AttributeError, TypeError, ValueError):
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        if parsed.time() == time() and not when.startswith(day_forms(parsed.date())):
+            raise ValueError("hour 24")
+        return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    except (AttributeError, TypeError, ValueError, OverflowError):
         raise Failed(f"{when!r} is not a timestamp: the export's shape changed, run claudeai inspect")
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    if parsed.time() == time() and not when.startswith(day_forms(parsed.date())):
-        raise Failed(f"{when!r} is not a timestamp: the export's shape changed, run claudeai inspect")
-    return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def dotted(value, path):
