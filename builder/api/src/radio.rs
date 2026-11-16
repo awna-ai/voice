@@ -34,6 +34,7 @@ const LINK_OPS: &[&str] = &[
 pub mod text {
     pub const NO_COPY: &str =
         "Voice can't find its copy of Radio. Install Voice again with install.sh, then try again.";
+    pub const COPY_UNSAFE: &str = "Another user could change Voice's copy of Radio, so Voice won't run it. Install Voice again with install.sh, then try again.";
     pub const INSTALLED: &str = "Radio is installed and running.";
     pub const INSTALL_FAILED: &str = "Radio couldn't be installed on this computer. Try again; if it fails again, please report it.";
     pub const INSTALL_REFUSED: &str = "Radio refused to install for Voice. Another user may be able to change Voice where it is: move Voice to the Applications folder in your home folder, then try again.";
@@ -60,16 +61,24 @@ pub fn shipped_radio(home: &Path) -> Result<PathBuf> {
 
 fn radio_beside(voice: &Path) -> Result<PathBuf> {
     let radio = voice.with_file_name("radio");
-    if regular_file(&radio) {
-        Ok(radio)
-    } else {
-        Err(Error::Invalid(text::NO_COPY.into()))
-    }
+    copy_to_run(&radio)?;
+    Ok(radio)
 }
 
-// A link or a folder in a copy's place is a damaged copy.
-fn regular_file(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
+// A link or a folder in a copy's place is a damaged copy. A copy another user could change is
+// refused as Radio refuses such a handler: owned by someone else, or writable by group or others.
+fn copy_to_run(path: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => meta,
+        _ => return Err(Error::Invalid(text::NO_COPY.into())),
+    };
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    let euid = unsafe { libc::geteuid() };
+    if (meta.uid() != euid && meta.uid() != 0) || meta.mode() & 0o022 != 0 {
+        return Err(Error::Invalid(text::COPY_UNSAFE.into()));
+    }
+    Ok(())
 }
 
 /// Installs or upgrades Radio for Voice, or adds Voice as a client of a newer Radio already there.
@@ -83,9 +92,10 @@ pub fn install(home: &Path) -> Result<&'static str> {
 fn install_within(radio: &Path, handler: &Path, wait: Duration) -> Result<&'static str> {
     let invalid = |sentence: &str| Error::Invalid(sentence.into());
     // Only an absolute path: a bare name would be looked up on PATH.
-    if !radio.is_absolute() || !regular_file(radio) {
+    if !radio.is_absolute() {
         return Err(invalid(text::NO_COPY));
     }
+    copy_to_run(radio)?;
     let mut child = Command::new(radio)
         .args([
             "install",
@@ -394,7 +404,7 @@ pub fn status_lines(copy: Result<PathBuf>, radio: &Radio) -> (Vec<String>, bool)
         Ok(hello) => hello,
         Err(error) => {
             lines.push(error.to_string());
-            return (lines, false);
+            return (lines.into_iter().map(shown).collect(), false);
         }
     };
     lines.push(format!(

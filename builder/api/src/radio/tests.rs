@@ -387,14 +387,40 @@ fn install_gives_up_after_its_deadline() {
         &format!("sleep 30 & echo \"$$ $!\" > '{}'; wait", pids.display()),
     );
     let started = std::time::Instant::now();
-    let got = install_within(&radio, Path::new("/tmp/voice"), Duration::from_millis(300));
+    // Long enough for a loaded machine's shell to write its pids before Voice gives up.
+    let got = install_within(&radio, Path::new("/tmp/voice"), Duration::from_secs(2));
     assert_eq!(message(got.unwrap_err()), text::INSTALL_TOO_LONG);
-    for pid in fs::read_to_string(pids).unwrap().split_whitespace() {
+    let pids = fs::read_to_string(&pids).expect("the fake wrote its pids before the deadline");
+    for pid in pids.split_whitespace() {
         let pid: i32 = pid.parse().unwrap();
+        // An orphan killed with its group is reaped by launchd a moment later, and until then
+        // kill(pid, 0) still finds it: give that a second, far short of the fake's 30 s sleep.
+        let gone = Instant::now() + Duration::from_secs(1);
         // SAFETY: kill with signal 0 only checks whether the process exists.
+        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < gone {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // SAFETY: as above.
         assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "{pid} is still running");
     }
     assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+#[test]
+fn install_refuses_a_copy_others_can_change_before_running() {
+    for mode in [0o775, 0o757] {
+        let scratch = Scratch::new();
+        let (radio, args) = fake_copy(&scratch, "exit 0");
+        fs::set_permissions(&radio, fs::Permissions::from_mode(mode)).unwrap();
+        let got = install_within(&radio, Path::new("/tmp/voice"), Duration::from_secs(60));
+        assert_eq!(message(got.unwrap_err()), text::COPY_UNSAFE, "{mode:o}");
+        assert_eq!(
+            message(radio_beside(&scratch.0.join("voice")).unwrap_err()),
+            text::COPY_UNSAFE,
+            "{mode:o}"
+        );
+        assert!(!args.exists(), "{mode:o}");
+    }
 }
 
 #[test]
@@ -428,6 +454,21 @@ fn status_without_radio_says_so() {
         lines,
         vec![
             format!("Voice's copy of Radio: {}", text::NO_COPY),
+            text::NOT_RUNNING.to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn status_without_radio_still_shows_no_hidden_character() {
+    let scratch = Scratch::new();
+    let radio = Radio::at(scratch.0.join("none.sock"));
+    let (lines, answers) = status_lines(Ok(PathBuf::from("/A/Vo\u{1b}ice.app/radio")), &radio);
+    assert!(!answers);
+    assert_eq!(
+        lines,
+        vec![
+            "Voice's copy of Radio: /A/Vo?ice.app/radio".to_owned(),
             text::NOT_RUNNING.to_owned(),
         ]
     );
