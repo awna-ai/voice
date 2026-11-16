@@ -20,7 +20,7 @@ else
   other_arch=arm64
 fi
 
-fake_app() {  # path architecture
+fake_app() {  # path architecture [radio's architecture]
   mkdir -p "$1/Contents/MacOS"
   cat > "$1/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -33,7 +33,9 @@ fake_app() {  # path architecture
 PLIST
   printf 'int main(void){return 0;}\n' | cc -arch "$2" -x c - -o "$1/Contents/MacOS/voice-app"
   printf 'int main(void){return 0;}\n' | cc -arch "$2" -x c - -o "$1/Contents/MacOS/voice"
+  printf 'int main(void){return 0;}\n' | cc -arch "${3:-$2}" -x c - -o "$1/Contents/MacOS/radio"
   codesign -s - --force "$1/Contents/MacOS/voice" >/dev/null 2>&1
+  codesign -s - --force "$1/Contents/MacOS/radio" >/dev/null 2>&1
   codesign -s - --force --deep "$1" >/dev/null 2>&1
 }
 
@@ -139,6 +141,24 @@ run --no-open
 check "$scratch/err" 'This copy of Voice looks damaged. Ask for a new copy.' 'symlinked-command explanation missing'
 not_installed
 echo 'mac_install_test: symlinked command passed'
+
+# Radio ships inside the app; a copy without a usable one is damaged.
+for broken in missing symlinked not-executable wrong-chip; do
+  kit "radio-$broken" "$arch"
+  radio="$kit_dir/Voice.app/Contents/MacOS/radio"
+  case "$broken" in
+    missing) rm "$radio" ;;
+    symlinked) rm "$radio"; ln -s voice "$radio" ;;
+    not-executable) chmod 644 "$radio" ;;
+    wrong-chip) fake_app "$kit_dir/Voice.app" "$arch" "$other_arch" ;;
+  esac
+  codesign -s - --force --deep "$kit_dir/Voice.app" >/dev/null 2>&1
+  run --no-open
+  [ "$status" = 1 ] || fail "a $broken radio was not refused"
+  check "$scratch/err" 'This copy of Voice looks damaged. Ask for a new copy.' "$broken-radio explanation missing"
+  not_installed
+done
+echo 'mac_install_test: radio passed'
 
 # The two signature checks and the quarantine re-check are belt and braces, so breaking only one of them does not fail this test.
 kit damaged "$arch"

@@ -48,17 +48,22 @@ for arch in "${arch_list[@]}"; do
 done
 "$compatible" || fail "This copy is made for $made_for Macs, and this Mac has $this_mac. Ask for a copy made for this Mac."
 
-cli="$source_app/Contents/MacOS/voice"
-[ -f "$cli" ] && [ ! -L "$cli" ] && [ -x "$cli" ] || fail "$damaged"
-cli_architectures=$(lipo -archs "$cli" 2>/dev/null) || fail "$damaged"
-read -r -a cli_arch_list <<< "$cli_architectures"
-compatible=false
-for arch in "${cli_arch_list[@]}"; do
-  if [ "$arch" = "$mac_arch" ] || { [ "$mac_arch" = arm64 ] && [ "$arch" = arm64e ]; }; then
-    compatible=true
-  fi
-done
-"$compatible" || fail "$damaged"
+# Each command the app ships (voice, and the Radio it carries) is a regular executable file for this Mac.
+bundled() {
+  local binary="$source_app/Contents/MacOS/$1" architectures arch
+  local -a binary_arch_list
+  [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || return 1
+  architectures=$(lipo -archs "$binary" 2>/dev/null) || return 1
+  read -r -a binary_arch_list <<< "$architectures"
+  for arch in "${binary_arch_list[@]}"; do
+    if [ "$arch" = "$mac_arch" ] || { [ "$mac_arch" = arm64 ] && [ "$arch" = arm64e ]; }; then
+      return 0
+    fi
+  done
+  return 1
+}
+bundled voice || fail "$damaged"
+bundled radio || fail "$damaged"
 
 mkdir -p "$HOME/Applications"
 staging=$(mktemp -d "$HOME/Applications/.voice-install.XXXXXX")

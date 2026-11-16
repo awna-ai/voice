@@ -85,6 +85,12 @@ else
   staging_cli="$target_dir/release/voice"
 fi
 [ -f "$staging_cli" ] || fail 'the voice command was not built'
+if "$universal"; then
+  radio_archs=(arm64 x86_64)
+else
+  radio_archs=("$label")
+fi
+bash scripts/fetch-radio.sh builder/install/radio-release.txt "$staging/radio" "${radio_archs[@]}"
 
 ditto "$app" "$package/Voice.app"
 staged_app="$package/Voice.app"
@@ -92,23 +98,35 @@ staged_cli="$staged_app/Contents/MacOS/voice"
 cp "$staging_cli" "$staged_cli"
 chmod 755 "$staged_cli"
 codesign --force --sign - "$staged_cli"
+staged_radio="$staged_app/Contents/MacOS/radio"
+cp "$staging/radio/radio" "$staged_radio"
+chmod 755 "$staged_radio"
+codesign --force --sign - "$staged_radio"
+mkdir -p "$staged_app/Contents/Resources/radio"
+cp "$staging/radio/LICENSE" "$staged_app/Contents/Resources/radio/LICENSE"
 codesign --force --sign - --preserve-metadata=identifier,entitlements,requirements,flags,runtime "$staged_app"
 codesign --verify --deep --strict "$staged_app" >/dev/null 2>&1 || fail "signature check failed: $staged_app"
 
 executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$staged_app/Contents/Info.plist")
 architectures=$(lipo -archs "$staged_app/Contents/MacOS/$executable")
-cli_architectures=$(lipo -archs "$staged_cli") || fail 'the voice command was built for other Macs than the app'
 read -r -a arch_list <<< "$architectures"
-read -r -a cli_arch_list <<< "$cli_architectures"
-for arch in "${arch_list[@]}"; do
-  compatible=false
-  for cli_arch in "${cli_arch_list[@]}"; do
-    if [ "$arch" = "$cli_arch" ]; then
-      compatible=true
-    fi
+covers_app() {  # binary, what it is: it must run on every Mac the app runs on
+  local binary_architectures arch binary_arch compatible
+  local -a binary_arch_list
+  binary_architectures=$(lipo -archs "$1") || fail "$2 was built for other Macs than the app"
+  read -r -a binary_arch_list <<< "$binary_architectures"
+  for arch in "${arch_list[@]}"; do
+    compatible=false
+    for binary_arch in "${binary_arch_list[@]}"; do
+      if [ "$arch" = "$binary_arch" ]; then
+        compatible=true
+      fi
+    done
+    "$compatible" || fail "$2 was built for other Macs than the app"
   done
-  "$compatible" || fail 'the voice command was built for other Macs than the app'
-done
+}
+covers_app "$staged_cli" 'the voice command'
+covers_app "$staged_radio" 'Radio'
 
 cp builder/install/install.sh "$package/install.sh"
 chmod 755 "$package/install.sh"
