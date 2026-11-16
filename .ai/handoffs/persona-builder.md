@@ -35,9 +35,16 @@ One record per slice, newest first. Paraphrase only; no real person.
   every cell full) is checked against `apply`'s line rule before any call, with its own message. New tests:
   declined, approved-not-applied, `Unchanged`, `NoneRight`, over 40 tests in batches, a renamed area, the three
   breaking characters, a line too long, and `replace_calibration`'s edges (end of file, next heading, CRLF, none).
-  Nit N1 taken (a CRLF heading is found). Left: N4's wording ("Learned from 10 of your answers", "since the last kept
-  change" when none was kept), a `low`-tier test, an undone measurement not moving the window, and a CLI drafted-path
-  test.
+  Nit N1 taken (a CRLF heading is found). **Repeat Verifier (Opus) PASS at `edba495`**, no must-fix; taken from it:
+  the privacy filters run on the longest section and summary before any call, an area ending in `\` is refused too
+  (it escapes the cell's closing `|`), and tests for many short areas whose live list is too long and for a hidden
+  character. Mutation-checked: dropping the declined check, the line check or the `\` refusal turns its tests red.
+  Security review of the fix-up (sub-agent): no high or medium; one low accepted: an area outside the codebook can
+  put a few free words into the Calibration paragraph (only once it is live, shown in the diff the person approves,
+  and anyone who can edit `cases.jsonl` can already edit `decisions.md`). Left: N4's wording ("Learned from 10 of your
+  answers", "since the last kept change" when none was kept), tests for a `low` tier, an undone measurement leading
+  to `Declined`, an undone measurement not moving the window, the privacy pre-check and the CLI drafted path; a CRLF
+  file comes out with mixed line endings.
 - **Not verified:** a live run against a real Claude Code (it would spend usage on private answers; the CLI and grow tests drive a tool-free stub); the full `ci-local.sh` (runs at the land).
 
 ## VF7d: the permission text says how a subscription stops, so it is version 3 (2026-11-15, lane: V1)
