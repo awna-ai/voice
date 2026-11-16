@@ -3004,9 +3004,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
+name = "radio-client"
+version = "0.2.0"
+source = "git+https://github.com/awna-ai/radio?tag=v0.2.0#a686dc51d175472562d511911a8b7e642b8d4511"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "radio-panels"
-version = "0.1.0"
-source = "git+https://github.com/awna-ai/radio?tag=v0.1.0#03ee9562136875a0b1cfbbcc364a1f931612e469"
+version = "0.2.0"
+source = "git+https://github.com/awna-ai/radio?tag=v0.2.0#a686dc51d175472562d511911a8b7e642b8d4511"
 dependencies = [
  "regex",
  "serde",
@@ -4545,6 +4554,7 @@ name = "voice-api"
 version = "0.1.2"
 dependencies = [
  "libc",
+ "radio-client",
  "radio-panels",
  "serde",
  "serde_json",

@@ -27,6 +27,7 @@ mod ask;
 mod assistants;
 mod calendar;
 mod panel;
+mod radio;
 mod record;
 mod skills;
 mod stdin_json;
@@ -176,6 +177,11 @@ enum Command {
     Panel {
         #[command(subcommand)]
         command: panel::PanelCommand,
+    },
+    /// Check the Radio that links your computers
+    Radio {
+        #[command(subcommand)]
+        command: radio::RadioCommand,
     },
     /// Make a new assistant in your Claude folder
     New {
@@ -2933,6 +2939,7 @@ fn run(cli: Cli) -> Result<std::process::ExitCode> {
         Some(Command::Anonymize { member_dir, out }) => return skills::anonymize(member_dir, out),
         Some(Command::Ceilings { command }) => ceilings(command),
         Some(Command::Panel { command }) => return panel::run(command),
+        Some(Command::Radio { command }) => return radio::run(command),
         Some(Command::New {
             name,
             principal,

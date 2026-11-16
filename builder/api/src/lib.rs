@@ -43,5 +43,7 @@ pub use skills::*;
 
 pub mod reader_client;
 
+pub mod radio;
+
 pub mod permissions;
 pub use permissions::*;
