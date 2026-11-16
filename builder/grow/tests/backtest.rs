@@ -23,7 +23,7 @@ use voice_grow::{
     refresh,
     store::Store,
 };
-use voice_ingest::filters::Filters;
+use voice_ingest::{filters::Filters, private::write_private_at};
 
 static SUBPROCESS_TEST: Mutex<()> = Mutex::new(());
 const HEADING: &str = "## Calibration (the blind backtest)";
@@ -332,4 +332,36 @@ fn a_bad_confidence_is_asked_again_then_refused_plainly() {
     let err = s.backtest().unwrap_err().to_string();
     assert!(err.contains("voice refresh backtest"), "{err}");
     assert!(s.store().proposals().unwrap().is_empty());
+}
+
+#[test]
+fn an_area_outside_the_codebook_refuses_before_any_call() {
+    let s = Setup::new();
+    s.keep_tests("2026-03-04", 32);
+    let mut cases = s.cases();
+    cases[0].area = "scope\n## Injected".into();
+    let text: String = cases.iter().map(to_line).collect();
+    write_private_at(
+        &s.f.home,
+        &s.f.member.slug,
+        Some("growth"),
+        "cases.jsonl",
+        text.as_bytes(),
+    )
+    .unwrap();
+    let err = s.backtest().unwrap_err().to_string();
+    assert!(err.contains("doesn't know"), "{err}");
+    assert!(s.prompts().is_empty());
+}
+
+#[test]
+fn an_unknown_id_is_never_repeated_back() {
+    let s = Setup::new();
+    s.keep_tests("2026-03-04", 1);
+    let case = s.cases().remove(0);
+    let reply = json!({"answers": [
+        {"id": "INJECTED words", "answer": "Offer a smaller first step.", "confidence": "sure"}
+    ]});
+    let misfit = backtest::check_backtest_answers(&[&case], &reply).unwrap_err();
+    assert!(!misfit.told.contains("INJECTED"), "{}", misfit.told);
 }

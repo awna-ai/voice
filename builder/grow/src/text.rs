@@ -375,3 +375,4 @@ pub fn backtest_summary(n: usize, hits: usize, live: &[String]) -> String {
 }
 pub const BACKTEST_WORDS: &str =
     "The new Calibration section didn't pass the checks a change must pass, so nothing was saved.";
+pub const BACKTEST_AREA: &str = "A test from your answers has a kind of question your assistant doesn't know, so nothing was backtested.";

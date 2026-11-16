@@ -79,9 +79,11 @@ pub fn check_backtest_answers(
             .filter(|object| object.len() == 3)
             .cloned()
             .ok_or_else(shape)?;
+        // Only an id that was asked is ever repeated back to the model, as in `check_answers`.
         let id = row
             .get("id")
             .and_then(Value::as_str)
+            .filter(|id| batch.iter().any(|case| case.id == *id))
             .unwrap_or(first)
             .to_owned();
         let tier = row
@@ -195,6 +197,15 @@ pub fn backtest(
     if tests.len() < MIN_HELD {
         return Ok(Backtested::TooFew(tests.len()));
     }
+    // `keep` only takes the codebook's areas; anything else was written by hand, and an area
+    // becomes a table row in decisions.md.
+    let book = book(member)?;
+    if tests
+        .iter()
+        .any(|case| !book.categories.contains(&case.area))
+    {
+        return Err(Error::Invalid(text::BACKTEST_AREA.into()));
+    }
     let tests: Vec<&Case> = tests.iter().collect();
     let mut asker = Asker::new(
         guard,
@@ -241,7 +252,6 @@ pub fn backtest(
             hit,
         );
     }
-    let book = book(member)?;
     let live = draft::live_categories(&book, &score);
     let day = |case: &Case| case.created.get(..10).unwrap_or_default().to_owned();
     let mut section = vec![
