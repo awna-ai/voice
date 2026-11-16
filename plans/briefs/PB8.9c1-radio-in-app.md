@@ -21,7 +21,8 @@ universal app.
    architecture) and `LICENSE` into a folder that must not exist yet. Each refusal is one
    `fetch-radio:` line, exit 1; bad arguments exit 2.
 3. **`scripts/build-mac-app.sh`** fetches for the host's architecture, or both with `--universal`,
-   stages `Voice.app/Contents/MacOS/radio` (755, signed ad hoc like the `voice` command) and Radio's
+   stages `Voice.app/Contents/MacOS/radio` (755, shipped unchanged with Radio's own ad-hoc signature: the Verifier's should-fix, `56710cb`, supersedes
+   signing it like the `voice` command) and Radio's
    licence at `Contents/Resources/radio/LICENSE`, re-signs the app, and checks that both commands run
    on every architecture the app does (one helper).
 4. **`builder/install/install.sh`** treats a missing, linked, non-executable or wrong-architecture

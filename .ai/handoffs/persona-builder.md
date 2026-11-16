@@ -33,7 +33,7 @@ One record per slice, newest first. Paraphrase only; no real person.
   outside the clean-tree check, no test for a tarball that won't unpack. Lows filed: Radio's release has no build
   provenance and isn't immutable, so a pin bump trusts its own `SHA256SUMS` (R.9 `YeLOkHeP`, Radio board); the
   app ships no third-party notices for the crates in its binaries, Radio's or Voice's own (VF21 `dZyGPqok`).
-  Dependency intake: Radio, awna-ai (members ziazon and data4equity), MIT, pinned by tag and SHA-256, updated by a
+  Dependency intake: Radio, awna-ai (a two-member org), MIT, pinned by tag and SHA-256, updated by a
   reviewed pin edit; once PB8.9c2 runs it, a per-user launch agent with a same-user socket, a rooms store, iroh
   links to paired computers, and a registered handler (PB8.9c2 owes the handler's threat model, and whether a
   newer Radio another app installed may serve Voice).
@@ -44,7 +44,11 @@ One record per slice, newest first. Paraphrase only; no real person.
   build stopped (no test runs `build-mac-app.sh`); fixed in `503088e` with `mkdir "$staging"`, and the build's own
   lines from `name=` to the fetch were run in a scratch `dist/` and fetched. Her should-fixes (no test bites if the
   tar line's `|| true` or a whole-tarball extract came back) are noted; her SECURITY.md wording nit is taken.
-  **A delta Verifier pass on the new head is owed before the land.**
+  Delta Verifier (Opus) at `a4bb9b1`: **FAIL** on one must-fix, records only: the dependency-intake line named the
+  Radio org's members by handle (a public-repo breach); dropped. The code checked out: the build's order, the shipped
+  zip holding only `$staging/Voice`, both test files and shellcheck green. Her should-fix: on a case-insensitive disk
+  `--universal` writes `$staging/voice` beside the `$staging/Voice` folder (the same path), so every universal build
+  stops; that is on `main` already, filed as VF22 `lMRUNtZ8`. Her nit taken: the brief notes Radio ships unsigned by Voice.
 - **Not verified:** a full `build-mac-app.sh` run (one from `a3f70e3` was still compiling near the run's end and was stopped);
   the full `ci-local.sh` (runs at the land).
 
