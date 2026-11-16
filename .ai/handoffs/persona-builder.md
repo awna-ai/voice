@@ -5,8 +5,8 @@ One record per slice, newest first. Paraphrase only; no real person.
 ## PB8.9c2: Voice talks to its Radio (2026-11-16, lane: V1)
 
 - **Status: built, not landed.** Branch `lane-v1/PB8.9c2` (pushed): `40fede9` brief, `147d1dd` code, `25b03a1`
-  Verifier and security-review fixes. **Owed before the land:** a repeat Verifier (Opus) on `25b03a1`, then the full
-  `ci-local.sh`.
+  Verifier and security-review fixes, `4fac04d` repeat-Verifier fixes. **Owed before the land:** a passing delta
+  Verifier (Opus) on `4fac04d` (see the Verifier bullet), then the full `ci-local.sh`.
 - **Why:** PB8.9's computers link over Radio (plan `2026-11-12-pb8-9-one-assistant-many-computers.md`, D-1). PB8.9c1
   put the binary in Voice.app; this slice makes Voice able to install it and speak to it. PB8.9d calls it.
 - **What:** `voice-api` pins `radio-client` at Radio `v0.2.0` and moves `radio-panels` to the same tag (unchanged
@@ -31,6 +31,19 @@ One record per slice, newest first. Paraphrase only; no real person.
   scrubbed; an absolute `radio` only; the group kill, with a test that the fake's own child is gone), plus her
   should-fixes (three test gaps, ASCII-only phrases, the exit 1 and 2 sentences, the SECURITY row) and nits (another
   major named, non-text paths refused, a `try_wait` error, a 180 s deadline, the older SECURITY row).
+  Repeat pass (Opus, run `145546-r1`) **FAIL** at `25b03a1`: her three earlier must-fixes held, but `status_lines`
+  returned before the scrub when `hello` failed, so the copy's path line went out unscrubbed. Fixed in `4fac04d`
+  (every line scrubbed on that path), with her should-fixes: `radio` itself is refused before it runs when another
+  user owns it or its group or others can write it (`copy_to_run`, a `COPY_UNSAFE` sentence; the build ships it 755),
+  and the deadline test waits 2 s and gives launchd a second to reap the killed orphan. The SECURITY row now says what
+  the scrub covers (not variation selectors or fillers) and that only `JoinCode`'s own copy is zeroed. Nits kept: a
+  major-2 `hello` gets `TOO_OLD`, no length cap on status lines, `try_wait`'s error path could signal a reused group
+  in theory, `process_group(0)` keeps Ctrl-C from the child, exit 2's sentence for a non-UTF-8 handler.
+  At `4fac04d`: 24 radio tests and the CLI test green, red first for the two new ones; mutations caught (the
+  `0o022` mask to `0o002`, the early-return scrub removed); fmt and clippy `-D warnings` on voice-api clean; at
+  `25b03a1` clippy on voice-api, voice-cli and voice-core clean, and the voice-core `cli_command` tests 17/17. The
+  owner check isn't tested (it needs a second user). A delta Verifier (Opus) on `4fac04d` ran in run `145546-r1`;
+  its verdict is in the lane's resume line.
 
 ## PB8.9c1: Voice.app carries a pinned Radio (2026-11-16, lane: V1)
 
