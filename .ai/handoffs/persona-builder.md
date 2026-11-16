@@ -2,6 +2,34 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## G4.1a: `voice refresh backtest` drafts a Calibration-only change (2026-11-16, lane: V1)
+
+- **Why:** a member's Calibration section in `decisions.md` is written once, by the build, and the growth loop never
+  refreshed it. V-Q22 (a) gave Voice a backtest that drafts a growth-loop change; V-Q25 settled how: name only the 10
+  newest tests the backtest got right (`apply` unchanged), and score free-text tests with a blind answer step plus
+  `apply`'s grader.
+- **What:** `builder/grow/src/backtest.rs` and `voice refresh backtest <MEMBER_DIR>` (`--model`, `--daily-cap-usd`,
+  `--call-cap-usd`). It takes the `new` tests kept at or after the newest kept change, drafts nothing under 30, answers
+  them blind with a confidence per test, grades them with `apply`'s grader, scores per area and tier with the build's
+  live rule, and saves one proposal replacing only the Calibration section, naming the 10 newest right tests. It
+  refuses while a change waits, with no Calibration heading, or with a test whose area is not in the codebook.
+  Reused by splitting out, never copied: `draft::calibration_rows`, `apply::check_change`, `apply::grade_answers`,
+  `apply_reply::tests_prompt`, `refresh::save_draft`, `refresh::pending`, and the CLI's `refresh_draft` set-up
+  shared with `propose`.
+- **Brief:** `plans/briefs/G4.1a-refresh-backtest.md`. **Who built it:** V1, Claude-direct under the fallback rule
+  (Codex at its usage limit until 2026-11-18).
+- **Verified:** `builder/grow/tests/backtest.rs` (10, invented member and a tool-free stub) and two new
+  `builder/cli/tests/refresh.rs` tests. They went green at first run, so each claim was mutation-checked instead, each
+  restored with `cp` and checked with `cmp`: ignoring the last kept change, naming the oldest right tests, accepting
+  any confidence, sending `expected` in the answer prompt, repeating an unasked id, and skipping the codebook-area
+  check each turned their test red. Green: `cargo test --locked -p voice-grow` (all suites), `-p voice-build` (all),
+  `-p voice-cli --test refresh` (25); `cargo fmt --check` and `cargo clippy --all-targets --locked -- -D warnings`
+  clean.
+- **Security review** (sub-agent, read-only): no high or medium. Two lows, both fixed with tests: an unasked id from
+  the model was repeated into the retry prompt; a hand-edited area could add a line or heading to `decisions.md`.
+- **Verifier** (edge ⑧, spec says yes): started on Fable at `529db4f` but did not finish before run `213931-r1` ended, so no pass is on record. The next run owes a first pass on the branch head before the land.
+- **Not verified:** a live run against a real Claude Code (it would spend usage on private answers; the CLI and grow tests drive a tool-free stub); the full `ci-local.sh` (runs at the land).
+
 ## VF7d: the permission text says how a subscription stops, so it is version 3 (2026-11-15, lane: V1)
 
 - **Why:** the permission text said Voice "stops for the day when it reaches a daily limit". Since VF7b a build
