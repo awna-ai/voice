@@ -60,6 +60,7 @@ mkdir -p "$repo/dist"
 staging="$repo/dist/$name"
 trap 'rm -rf "$staging"' EXIT
 rm -rf "$staging"
+mkdir "$staging"
 # Radio first, so a bad pin or no network stops the build before the long compile.
 if "$universal"; then
   radio_archs=(arm64 x86_64)
