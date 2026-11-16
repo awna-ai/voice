@@ -375,4 +375,10 @@ pub fn backtest_summary(n: usize, hits: usize, live: &[String]) -> String {
 }
 pub const BACKTEST_WORDS: &str =
     "The new Calibration section didn't pass the checks a change must pass, so nothing was saved.";
-pub const BACKTEST_AREA: &str = "A test from your answers has a kind of question your assistant doesn't know, so nothing was backtested.";
+pub fn backtest_area(id: &str) -> String {
+    format!(
+        "Test {id} from your answers has a kind of question with a line break or a | in it, which can't go in the Calibration table, so nothing was backtested."
+    )
+}
+pub const BACKTEST_LONG: &str = "A line of the new Calibration section would be too long for a change (over 512 characters) or hold a hidden character, most likely from the list of kinds of question, so nothing was backtested and nothing was sent to Claude.";
+pub const BACKTEST_DECLINED: &str = "The backtest drafted the same Calibration change you said no to, or that was tested and undone, so nothing was saved. Keep more answers and run it again.";

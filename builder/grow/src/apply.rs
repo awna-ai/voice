@@ -58,7 +58,7 @@ fn candidate(before: &str, proposal: &Proposal) -> Result<String> {
     Ok(current)
 }
 
-fn unfit(line: &str) -> bool {
+pub(crate) fn unfit(line: &str) -> bool {
     line.chars().count() > 512 || line.chars().any(hidden)
 }
 

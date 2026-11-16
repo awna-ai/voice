@@ -260,6 +260,24 @@ pub(crate) fn decisions(member_dir: &Path) -> Result<String> {
         .ok_or_else(|| Error::Invalid(text::NOT_BUILT.into()))
 }
 
+/// Every change the person said no to, or that was tested and undone.
+pub(crate) fn declined(store: &Store) -> Result<Vec<Proposal>> {
+    let approvals = store.approvals()?;
+    let measurements = store.measurements()?;
+    Ok(store
+        .proposals()?
+        .into_iter()
+        .filter(|p| {
+            approvals
+                .iter()
+                .any(|a| a.proposal == p.id && a.decision == Decision::Rejected)
+                || measurements
+                    .iter()
+                    .any(|m| m.proposal == p.id && m.outcome == KeepOrRevert::Revert)
+        })
+        .collect())
+}
+
 pub(crate) fn pending(store: &Store, base: &str) -> Result<Option<(Proposal, bool)>> {
     let approvals = store.approvals()?;
     let measurements = store.measurements()?;
@@ -316,20 +334,7 @@ pub fn propose(
         return Ok(Proposed::Nothing);
     }
     let signals = store.signals()?;
-    let approvals = store.approvals()?;
-    let measurements = store.measurements()?;
-    let rejected: Vec<_> = store
-        .proposals()?
-        .into_iter()
-        .filter(|p| {
-            approvals
-                .iter()
-                .any(|a| a.proposal == p.id && a.decision == Decision::Rejected)
-                || measurements
-                    .iter()
-                    .any(|m| m.proposal == p.id && m.outcome == KeepOrRevert::Revert)
-        })
-        .collect();
+    let rejected = declined(store)?;
     let categories = book(member)?.categories;
     let prompt = refresh_prompt(&categories, &before, &cases, &signals, &rejected);
     let mut asker = Asker::new(

@@ -2367,6 +2367,7 @@ fn refresh_backtest(
                 Backtested::TooFew(n) => println!("{}", text::too_few_to_backtest(n)),
                 Backtested::NoneRight => println!("{}", text::BACKTEST_NONE_RIGHT),
                 Backtested::Unchanged => println!("{}", text::BACKTEST_UNCHANGED),
+                Backtested::Declined => println!("{}", text::BACKTEST_DECLINED),
                 Backtested::Drafted(proposal) => {
                     for line in refresh::render(&proposal, &member_dir) {
                         println!("{line}");

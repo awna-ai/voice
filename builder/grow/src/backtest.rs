@@ -41,6 +41,8 @@ pub enum Backtested {
     TooFew(usize),
     NoneRight,
     Unchanged,
+    /// The same change was said no to, or tested and undone, before.
+    Declined,
     Drafted(Proposal),
 }
 
@@ -148,7 +150,7 @@ pub fn replace_calibration(decisions: &str, section: &str) -> Option<String> {
     let start = decisions.split_inclusive('\n').find_map(|line| {
         let here = at;
         at += line.len();
-        (line.trim_end_matches('\n') == HEADING).then_some(here)
+        (line.trim_end_matches(['\n', '\r']) == HEADING).then_some(here)
     })?;
     let rest = &decisions[start + HEADING.len()..];
     let end = rest
@@ -160,6 +162,36 @@ pub fn replace_calibration(decisions: &str, section: &str) -> Option<String> {
         &decisions[..start],
         &decisions[end..]
     ))
+}
+
+/// The new Calibration section and the change's summary, from a score.
+fn drafted_words(
+    member: &Member,
+    book: &voice_steps::book::Book,
+    score: &Score,
+    first: &str,
+    last: &str,
+) -> (String, String) {
+    let live = draft::live_categories(book, score);
+    let mut section = vec![
+        HEADING.to_owned(),
+        String::new(),
+        text::calibration(
+            &member.name,
+            score.overall.n,
+            first,
+            last,
+            score.overall.hits,
+            &percent(score.overall.accuracy()),
+            &live,
+        ),
+        String::new(),
+        "| Category | High | Medium | Low | Live |".to_owned(),
+        "|---|---|---|---|---|".to_owned(),
+    ];
+    section.extend(draft::calibration_rows(book, score));
+    let summary = text::backtest_summary(score.overall.n, score.overall.hits, &live);
+    (section.join("\n") + "\n", summary)
 }
 
 fn tally(cell: &mut Cell, hit: bool) {
@@ -197,16 +229,44 @@ pub fn backtest(
     if tests.len() < MIN_HELD {
         return Ok(Backtested::TooFew(tests.len()));
     }
-    // `keep` only takes the codebook's areas; anything else was written by hand, and an area
-    // becomes a table row in decisions.md.
-    let book = book(member)?;
-    if tests
+    // An area becomes a table row in decisions.md: one that would end the line or the cell was
+    // written by hand.
+    if let Some(case) = tests
         .iter()
-        .any(|case| !book.categories.contains(&case.area))
+        .find(|case| case.area.contains(['\n', '\r', '|']))
     {
-        return Err(Error::Invalid(text::BACKTEST_AREA.into()));
+        return Err(Error::Invalid(text::backtest_area(&case.id)));
     }
+    let book = book(member)?;
     let tests: Vec<&Case> = tests.iter().collect();
+    let day = |case: &Case| case.created.get(..10).unwrap_or_default().to_owned();
+    let (first, last) = (day(tests[0]), day(tests[tests.len() - 1]));
+    // Every area live and every cell full is the longest the words can be: check them before
+    // anything is spent, so a long list never fails after the calls.
+    let mut longest = Score {
+        overall: Cell {
+            n: tests.len(),
+            hits: tests.len(),
+        },
+        baseline: 0,
+        led: Cell::default(),
+        took_member: 0,
+        tiers: [None; 3],
+        categories: BTreeMap::new(),
+    };
+    for area in book
+        .categories
+        .iter()
+        .chain(tests.iter().map(|case| &case.area))
+    {
+        longest
+            .categories
+            .insert(area.clone(), [Some(longest.overall); 3]);
+    }
+    let (section, summary) = drafted_words(member, &book, &longest, &first, &last);
+    if section.lines().chain([summary.as_str()]).any(apply::unfit) {
+        return Err(Error::Invalid(text::BACKTEST_LONG.into()));
+    }
     let mut asker = Asker::new(
         guard,
         voice_build::build::SOURCES,
@@ -252,29 +312,22 @@ pub fn backtest(
             hit,
         );
     }
-    let live = draft::live_categories(&book, &score);
-    let day = |case: &Case| case.created.get(..10).unwrap_or_default().to_owned();
-    let mut section = vec![
-        HEADING.to_owned(),
-        String::new(),
-        text::calibration(
-            &member.name,
-            score.overall.n,
-            &day(tests[0]),
-            &day(tests[tests.len() - 1]),
-            score.overall.hits,
-            &percent(score.overall.accuracy()),
-            &live,
-        ),
-        String::new(),
-        "| Category | High | Medium | Low | Live |".to_owned(),
-        "|---|---|---|---|---|".to_owned(),
-    ];
-    section.extend(draft::calibration_rows(&book, &score));
-    let section = section.join("\n") + "\n";
+    let (section, summary) = drafted_words(member, &book, &score, &first, &last);
     let after = replace_calibration(&before, &section).expect("checked heading");
     if after == before {
         return Ok(Backtested::Unchanged);
+    }
+    let changes = vec![Change {
+        file: "decisions.md".into(),
+        diff: diff::unified("decisions.md", &before, &after)?,
+        why: text::BACKTEST_WHY.into(),
+    }];
+    // The answers come back the same, so a declined change would be drafted again forever.
+    if refresh::declined(store)?
+        .iter()
+        .any(|p| p.base == base && p.changes == changes)
+    {
+        return Ok(Backtested::Declined);
     }
     let mut right: Vec<&Case> = tests
         .iter()
@@ -286,12 +339,6 @@ pub fn backtest(
     if right.is_empty() {
         return Ok(Backtested::NoneRight);
     }
-    let summary = text::backtest_summary(score.overall.n, score.overall.hits, &live);
-    let changes = vec![Change {
-        file: "decisions.md".into(),
-        diff: diff::unified("decisions.md", &before, &after)?,
-        why: text::BACKTEST_WHY.into(),
-    }];
     let named: Vec<Case> = right.iter().map(|case| (*case).clone()).collect();
     draft::check_private(filters, &after, "")?;
     apply::check_change(&summary, &changes, &named, &store.signals()?, filters)
