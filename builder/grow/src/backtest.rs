@@ -233,7 +233,7 @@ pub fn backtest(
     // written by hand.
     if let Some(case) = tests
         .iter()
-        .find(|case| case.area.contains(['\n', '\r', '|']))
+        .find(|case| case.area.contains(['\n', '\r', '|', '\\']))
     {
         return Err(Error::Invalid(text::backtest_area(&case.id)));
     }
@@ -267,6 +267,12 @@ pub fn backtest(
     if section.lines().chain([summary.as_str()]).any(apply::unfit) {
         return Err(Error::Invalid(text::BACKTEST_LONG.into()));
     }
+    draft::check_private(
+        filters,
+        &replace_calibration(&before, &section).expect("checked heading"),
+        "",
+    )?;
+    draft::check_private(filters, &summary, "")?;
     let mut asker = Asker::new(
         guard,
         voice_build::build::SOURCES,

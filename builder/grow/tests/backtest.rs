@@ -440,7 +440,7 @@ fn a_renamed_area_is_backtested_as_its_own_row() {
 
 #[test]
 fn an_area_that_breaks_a_line_or_cell_refuses_naming_the_test() {
-    for bad in ["scope\n## Injected", "scope\r", "scope | yes"] {
+    for bad in ["scope\n## Injected", "scope\r", "scope | yes", "scope\\"] {
         let s = Setup::new();
         s.keep_tests("2026-03-04", 32);
         rewrite_cases(&s, |cases| cases[3].area = bad.into());
@@ -458,6 +458,30 @@ fn a_line_too_long_for_a_change_refuses_before_any_call() {
     rewrite_cases(&s, |cases| cases[1].area = "x".repeat(600));
     let err = s.backtest().unwrap_err().to_string();
     assert!(err.contains("too long"), "{err}");
+    assert!(s.prompts().is_empty());
+}
+
+#[test]
+fn many_short_areas_too_long_to_list_refuse_before_any_call() {
+    let s = Setup::new();
+    s.keep_tests("2026-03-04", 32);
+    rewrite_cases(&s, |cases| {
+        for (i, case) in cases.iter_mut().enumerate() {
+            case.area = format!("short area {i:02}");
+        }
+    });
+    let err = s.backtest().unwrap_err().to_string();
+    assert!(err.contains("too long"), "{err}");
+    assert!(s.prompts().is_empty());
+}
+
+#[test]
+fn a_hidden_character_in_an_area_refuses_before_any_call() {
+    let s = Setup::new();
+    s.keep_tests("2026-03-04", 32);
+    rewrite_cases(&s, |cases| cases[1].area = "sc\u{200b}ope".into());
+    let err = s.backtest().unwrap_err().to_string();
+    assert!(err.contains("hidden character"), "{err}");
     assert!(s.prompts().is_empty());
 }
 

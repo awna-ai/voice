@@ -27,7 +27,17 @@ One record per slice, newest first. Paraphrase only; no real person.
   clean.
 - **Security review** (sub-agent, read-only): no high or medium. Two lows, both fixed with tests: an unasked id from
   the model was repeated into the retry prompt; a hand-edited area could add a line or heading to `decisions.md`.
-- **Verifier** (edge ⑧, spec says yes): started on Fable at `529db4f` but did not finish before run `213931-r1` ended, so no pass is on record. The next run owes a first pass on the branch head before the land.
+- **Verifier** (edge ⑧, spec says yes): Fable PASS at `a6d4529`, no must-fix. Her should-fixes, taken in run
+  `233201-r1` (V1): a change the person said no to, or that was tested and undone, is no longer drafted again (the
+  cached answers made it byte-identical forever): the backtest answers `Declined`, sharing `refresh::declined` with
+  `propose`. The area check refuses only a line break, carriage return or `|`, and names the test; any other area not
+  in the codebook is scored as its own row. Every line of the longest possible section and summary (every area live,
+  every cell full) is checked against `apply`'s line rule before any call, with its own message. New tests:
+  declined, approved-not-applied, `Unchanged`, `NoneRight`, over 40 tests in batches, a renamed area, the three
+  breaking characters, a line too long, and `replace_calibration`'s edges (end of file, next heading, CRLF, none).
+  Nit N1 taken (a CRLF heading is found). Left: N4's wording ("Learned from 10 of your answers", "since the last kept
+  change" when none was kept), a `low`-tier test, an undone measurement not moving the window, and a CLI drafted-path
+  test.
 - **Not verified:** a live run against a real Claude Code (it would spend usage on private answers; the CLI and grow tests drive a tool-free stub); the full `ci-local.sh` (runs at the land).
 
 ## VF7d: the permission text says how a subscription stops, so it is version 3 (2026-11-15, lane: V1)
