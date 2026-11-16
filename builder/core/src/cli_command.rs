@@ -57,14 +57,28 @@ pub fn shipped_cli_word(home: &Path) -> Result<String> {
     word_from(&shipped_cli()?, home, !cfg!(debug_assertions))
 }
 
+/// `shipped_cli()`, refused with `CLI_PLACE` in a release build unless it is in a place that
+/// lasts (see `lasting`): for a path another program keeps, such as the handler Radio records.
+pub fn shipped_lasting_cli(home: &Path) -> Result<PathBuf> {
+    let path = shipped_cli()?;
+    if !cfg!(debug_assertions) {
+        lasting_at_home(&path, home)?;
+    }
+    Ok(path)
+}
+
 fn word_from(path: &Path, home: &Path, lasting_only: bool) -> Result<String> {
     if lasting_only {
-        lasting(
-            path,
-            &[&home.join("Applications"), Path::new("/Applications")],
-        )?;
+        lasting_at_home(path, home)?;
     }
     cli_word(path, home)
+}
+
+fn lasting_at_home(path: &Path, home: &Path) -> Result<()> {
+    lasting(
+        path,
+        &[&home.join("Applications"), Path::new("/Applications")],
+    )
 }
 
 fn lasting(path: &Path, roots: &[&Path]) -> Result<()> {
@@ -255,6 +269,15 @@ mod tests {
         ] {
             assert!(!on_a_passing_disk(Path::new(path)), "refused {path}");
         }
+    }
+
+    #[test]
+    fn a_development_build_ships_the_cli_from_anywhere() {
+        let home = Scratch::new();
+        assert_eq!(
+            shipped_lasting_cli(home.path()).unwrap(),
+            shipped_cli().unwrap()
+        );
     }
 
     #[test]

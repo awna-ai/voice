@@ -12,7 +12,8 @@ pub enum RadioCommand {
 pub fn run(command: RadioCommand) -> Result<std::process::ExitCode> {
     match command {
         RadioCommand::Status => {
-            let (lines, answers) = status_lines(shipped_radio(), &Radio::for_home(&crate::home()?));
+            let home = crate::home()?;
+            let (lines, answers) = status_lines(shipped_radio(&home), &Radio::for_home(&home));
             for line in lines {
                 println!("{line}");
             }

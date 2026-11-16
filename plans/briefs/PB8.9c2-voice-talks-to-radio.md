@@ -55,3 +55,13 @@ line (`"v":1`, the op and its fields, nothing else) and its answer; a refusal's 
 replaced; a missing field; not running; `hello`'s three refusals; `JoinCode`'s `Debug` hiding the code;
 the status lines with and without Radio. The CLI's `voice radio status` is checked end to end with no
 Radio in a scratch home.
+
+## After the reviews (V1, 2026-11-16)
+
+The security review (one medium) and the Verifier (Fable, FAIL: three must-fixes) changed decisions 3 to 5:
+`install(home)` takes Voice's `voice` from a place that lasts (`voice_core::cli_command::shipped_lasting_cli`,
+the rule turning an assistant on uses) and the `radio` beside it, by absolute path only, with Voice's own version;
+the child runs in its own process group, killed as a group after 180 s (Radio's install lock waits 120 s); exit 1
+and 2 have sentences that match what Radio means by them; a refusal phrase shows only as printable ASCII; every
+status line shows hidden characters as `?`; another major is named as such; a path that isn't plain text is
+refused; dropping a `JoinCode` zeroes it.

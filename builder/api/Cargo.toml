@@ -17,12 +17,12 @@ voice-agent = { path = "../agent" }
 voice-save = { path = "../save" }
 serde = { version = "1", features = ["derive"] }
 zeroize = "=1.9.1"
+libc = "=0.2.191"
 serde_json = { version = "1", features = ["preserve_order"] }
 ts-rs = { version = "=12.0.1", features = ["no-serde-warnings"] }
 voice-panel-runner = { path = "../panel-runner" }
 
 [dev-dependencies]
-libc = "=0.2.191"
 voice-agent = { path = "../agent", features = ["test-stubs"] }
 
 [features]

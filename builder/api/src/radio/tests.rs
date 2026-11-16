@@ -245,6 +245,9 @@ fn an_unsafe_phrase_is_replaced() {
         json!("two\nlines"),
         json!("x".repeat(201)),
         json!(""),
+        json!("bad\u{202E}gnin"),
+        json!("line\u{2028}break"),
+        json!("caf\u{e9}"),
         Value::Null,
     ] {
         let fake = one(json!({"ok": false, "error": phrase}));
@@ -341,12 +344,13 @@ fn install_says_each_exit_code_plainly() {
         let scratch = Scratch::new();
         let (radio, args) = fake_copy(&scratch, exit);
         let handler = scratch.0.join("voice");
-        let got = install(&radio, &handler, "9.8.7").map_err(message);
+        let got = install_within(&radio, &handler, Duration::from_secs(60)).map_err(message);
         assert_eq!(got, expected.map_err(str::to_owned), "{exit}");
         assert_eq!(
             fs::read_to_string(args).unwrap(),
             format!(
-                "install\n--app\nvoice\n--app-version\n9.8.7\n--handler\n{}\n",
+                "install\n--app\nvoice\n--app-version\n{}\n--handler\n{}\n",
+                env!("CARGO_PKG_VERSION"),
                 handler.display()
             )
         );
@@ -363,7 +367,10 @@ fn install_refuses_a_missing_linked_or_odd_copy_before_running() {
     fs::create_dir(&folder).unwrap();
     for copy in [scratch.0.join("missing"), link, folder] {
         assert_eq!(
-            message(install(&copy, Path::new("/tmp/voice"), "1.0.0").unwrap_err()),
+            message(
+                install_within(&copy, Path::new("/tmp/voice"), Duration::from_secs(60))
+                    .unwrap_err()
+            ),
             text::NO_COPY
         );
     }
@@ -373,15 +380,20 @@ fn install_refuses_a_missing_linked_or_odd_copy_before_running() {
 #[test]
 fn install_gives_up_after_its_deadline() {
     let scratch = Scratch::new();
-    let (radio, _) = fake_copy(&scratch, "sleep 30");
-    let started = std::time::Instant::now();
-    let got = install_within(
-        &radio,
-        Path::new("/tmp/voice"),
-        "1.0.0",
-        Duration::from_millis(300),
+    // The fake starts a child of its own and waits on it: once Voice gives up, both must be gone.
+    let pids = scratch.0.join("pids");
+    let (radio, _) = fake_copy(
+        &scratch,
+        &format!("sleep 30 & echo \"$$ $!\" > '{}'; wait", pids.display()),
     );
+    let started = std::time::Instant::now();
+    let got = install_within(&radio, Path::new("/tmp/voice"), Duration::from_millis(300));
     assert_eq!(message(got.unwrap_err()), text::INSTALL_TOO_LONG);
+    for pid in fs::read_to_string(pids).unwrap().split_whitespace() {
+        let pid: i32 = pid.parse().unwrap();
+        // SAFETY: kill with signal 0 only checks whether the process exists.
+        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "{pid} is still running");
+    }
     assert!(started.elapsed() < Duration::from_secs(10));
 }
 
@@ -418,6 +430,85 @@ fn status_without_radio_says_so() {
             format!("Voice's copy of Radio: {}", text::NO_COPY),
             text::NOT_RUNNING.to_owned(),
         ]
+    );
+}
+
+#[test]
+fn status_never_prints_a_hidden_character() {
+    let mut hello = link_hello();
+    hello["radio"] = json!("0.2.0\u{1b}[2J");
+    let fake = FakeRadio::answering(&[
+        hello,
+        json!({"ok": true, "computers": [
+            {"id": "k\u{1b}2", "state": "accepted\u{7}", "trusted": false},
+            {"id": "k3", "name": "peb\u{202E}ble", "state": "pending", "trusted": false}]}),
+    ]);
+    let (lines, _) = status_lines(Ok(PathBuf::from("/r")), &fake.radio());
+    assert_eq!(
+        lines[1],
+        "Radio is running: version 0.2.0?[2J, protocol 1.7."
+    );
+    assert_eq!(
+        lines[2],
+        "Linked computers: k?2 (accepted?), peb?ble (pending)."
+    );
+    fake.requests();
+}
+
+#[test]
+fn hello_refuses_a_radio_missing_any_link_op() {
+    for op in LINK_OPS {
+        let mut answer = link_hello();
+        answer["ops"] = json!(
+            radio_client::OPS
+                .iter()
+                .filter(|have| *have != op)
+                .collect::<Vec<_>>()
+        );
+        let fake = one(answer);
+        assert_eq!(
+            message(fake.radio().hello().unwrap_err()),
+            text::TOO_OLD,
+            "{op}"
+        );
+        fake.requests();
+    }
+}
+
+#[test]
+fn another_major_is_named_as_such() {
+    let fake = one(json!({"ok": false, "error": "unsupported_version", "supported": [2]}));
+    assert_eq!(
+        message(fake.radio().hello().unwrap_err()),
+        text::OTHER_MAJOR
+    );
+}
+
+#[test]
+fn install_runs_only_an_absolute_copy() {
+    let scratch = Scratch::new();
+    let (radio, args) = fake_copy(&scratch, "exit 0");
+    // A relative path to a real copy: enough `..` to reach `/` from any working folder.
+    let relative = PathBuf::from("../".repeat(64)).join(radio.strip_prefix("/").unwrap());
+    assert!(relative.is_file());
+    let got = install_within(&relative, Path::new("/tmp/voice"), Duration::from_secs(5));
+    assert_eq!(message(got.unwrap_err()), text::NO_COPY);
+    assert!(!args.exists());
+}
+
+#[test]
+fn a_path_that_is_not_text_is_refused_before_sending() {
+    use std::os::unix::ffi::OsStrExt;
+    let scratch = Scratch::new();
+    let radio = Radio::at(scratch.0.join("none.sock"));
+    let odd = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/\xff"));
+    assert_eq!(
+        message(radio.send("p", "h", odd).unwrap_err()),
+        text::NOT_TEXT
+    );
+    assert_eq!(
+        message(radio.delivery_folder_set(odd).unwrap_err()),
+        text::NOT_TEXT
     );
 }
 

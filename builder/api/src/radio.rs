@@ -3,6 +3,7 @@
 pub use radio_client::{Computer, Delivery, Fleet, Member};
 use radio_client::{PROTOCOL_MAJOR, PROTOCOL_MINOR, Request, Response};
 use std::{
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -11,7 +12,8 @@ use voice_core::error::{Error, Result};
 
 /// Voice's app name in Radio.
 pub const APP: &str = "voice";
-const INSTALL_WAIT: Duration = Duration::from_secs(60);
+// Radio's install waits up to 120 s for another install's lock; leave it room to finish.
+const INSTALL_WAIT: Duration = Duration::from_secs(180);
 const PHRASE_MAX: usize = 200;
 /// The ops Voice uses to link computers; `hello` refuses a Radio that lacks one.
 const LINK_OPS: &[&str] = &[
@@ -33,10 +35,8 @@ pub mod text {
     pub const NO_COPY: &str =
         "Voice can't find its copy of Radio. Install Voice again with install.sh, then try again.";
     pub const INSTALLED: &str = "Radio is installed and running.";
-    pub const INSTALL_FAILED: &str =
-        "Radio couldn't be installed on this computer. Restart the computer, then try again.";
-    pub const INSTALL_REFUSED: &str =
-        "Radio refused how Voice asked it to install. That's a fault in Voice; please report it.";
+    pub const INSTALL_FAILED: &str = "Radio couldn't be installed on this computer. Try again; if it fails again, please report it.";
+    pub const INSTALL_REFUSED: &str = "Radio refused to install for Voice. Another user may be able to change Voice where it is: move Voice to the Applications folder in your home folder, then try again.";
     pub const NO_SCREEN: &str = "Radio can only be installed while you're signed in at this computer's own screen. Sign in there, then try again.";
     pub const INSTALL_STOPPED: &str = "Radio stopped before it finished installing. Try again.";
     pub const INSTALL_TOO_LONG: &str =
@@ -47,11 +47,19 @@ pub mod text {
     pub const TOO_OLD: &str =
         "The Radio on this computer can't link computers. Install Voice again to update it.";
     pub const NO_COMPUTERS: &str = "Linked computers: none yet.";
+    pub const OTHER_MAJOR: &str =
+        "The Radio on this computer speaks a version this Voice doesn't. Install the newest Voice.";
+    pub const NOT_TEXT: &str = "Voice can't hand Radio a file whose path isn't plain text.";
 }
 
-/// The copy of Radio beside Voice.app's `voice` command (PB8.9c1 puts it there).
-pub fn shipped_radio() -> Result<PathBuf> {
-    let radio = voice_core::cli_command::shipped_cli()?.with_file_name("radio");
+/// The copy of Radio beside Voice.app's `voice` command (PB8.9c1 puts it there). A release build
+/// refuses a Voice that isn't in a place that lasts, as turning an assistant on does.
+pub fn shipped_radio(home: &Path) -> Result<PathBuf> {
+    radio_beside(&voice_core::cli_command::shipped_lasting_cli(home)?)
+}
+
+fn radio_beside(voice: &Path) -> Result<PathBuf> {
+    let radio = voice.with_file_name("radio");
     if regular_file(&radio) {
         Ok(radio)
     } else {
@@ -65,19 +73,17 @@ fn regular_file(path: &Path) -> bool {
 }
 
 /// Installs or upgrades Radio for Voice, or adds Voice as a client of a newer Radio already there.
-/// `handler` is Voice's own `voice` command; Radio records it as the only program it runs for Voice.
-pub fn install(radio: &Path, handler: &Path, app_version: &str) -> Result<&'static str> {
-    install_within(radio, handler, app_version, INSTALL_WAIT)
+/// The handler is Voice's own `voice` command, which Radio records as the only program it runs for
+/// Voice, so both come from a place that lasts.
+pub fn install(home: &Path) -> Result<&'static str> {
+    let voice = voice_core::cli_command::shipped_lasting_cli(home)?;
+    install_within(&radio_beside(&voice)?, &voice, INSTALL_WAIT)
 }
 
-fn install_within(
-    radio: &Path,
-    handler: &Path,
-    app_version: &str,
-    wait: Duration,
-) -> Result<&'static str> {
+fn install_within(radio: &Path, handler: &Path, wait: Duration) -> Result<&'static str> {
     let invalid = |sentence: &str| Error::Invalid(sentence.into());
-    if !regular_file(radio) {
+    // Only an absolute path: a bare name would be looked up on PATH.
+    if !radio.is_absolute() || !regular_file(radio) {
         return Err(invalid(text::NO_COPY));
     }
     let mut child = Command::new(radio)
@@ -86,13 +92,15 @@ fn install_within(
             "--app",
             APP,
             "--app-version",
-            app_version,
+            env!("CARGO_PKG_VERSION"),
             "--handler",
         ])
         .arg(handler)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        // Its own process group, so giving up stops whatever it started too.
+        .process_group(0)
         .spawn()
         .map_err(|_| invalid(text::NO_COPY))?;
     let deadline = Instant::now() + wait;
@@ -100,10 +108,15 @@ fn install_within(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
-            Ok(None) | Err(_) => {
-                let _ = child.kill();
+            waited => {
+                // SAFETY: kill takes no pointers; a negative pid names the child's own group.
+                unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
                 let _ = child.wait();
-                return Err(invalid(text::INSTALL_TOO_LONG));
+                return Err(invalid(if waited.is_err() {
+                    text::INSTALL_STOPPED
+                } else {
+                    text::INSTALL_TOO_LONG
+                }));
             }
         }
     };
@@ -125,7 +138,9 @@ pub struct Hello {
     pub minor: u32,
 }
 
-/// A one-time join code. Its secret goes only to the person and to Radio's socket, so `Debug` hides it.
+/// A one-time join code. Its secret goes only to the person and to Radio's socket, so `Debug` hides
+/// it and dropping it zeroes it. `radio_client`'s `Request::Join` and `Response` print it in `Debug`:
+/// never log or `{:?}` either.
 #[derive(Clone, PartialEq)]
 pub struct JoinCode {
     code: String,
@@ -136,6 +151,12 @@ pub struct JoinCode {
 impl JoinCode {
     pub fn code(&self) -> &str {
         &self.code
+    }
+}
+
+impl Drop for JoinCode {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.code);
     }
 }
 
@@ -185,6 +206,8 @@ impl Radio {
         })?;
         if response.ok {
             Ok(response)
+        } else if response.error.as_deref() == Some("unsupported_version") {
+            Err(Error::Invalid(text::OTHER_MAJOR.into()))
         } else {
             Err(Error::Invalid(refusal(response.error.as_deref())))
         }
@@ -274,7 +297,7 @@ impl Radio {
             app: APP.into(),
             computer: computer.into(),
             name: name.into(),
-            file: file.to_string_lossy().into_owned(),
+            file: plain_path(file)?,
         })?
         .size
         .ok_or_else(no_answer)
@@ -284,7 +307,7 @@ impl Radio {
     pub fn delivery_folder_set(&self, folder: &Path) -> Result<()> {
         self.ask(Request::DeliveryFolderSet {
             app: APP.into(),
-            folder: folder.to_string_lossy().into_owned(),
+            folder: plain_path(folder)?,
         })
         .map(drop)
     }
@@ -300,6 +323,13 @@ impl Radio {
     }
 }
 
+// Never a lossy path: that would name a different file.
+fn plain_path(path: &Path) -> Result<String> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Error::Invalid(text::NOT_TEXT.into()))
+}
+
 fn no_answer() -> Error {
     Error::Invalid(text::NO_ANSWER.into())
 }
@@ -311,13 +341,41 @@ fn addresses(response: Response) -> Result<LinkAddresses> {
     })
 }
 
-/// Radio's refusals are fixed phrases; show one only when it is one short printable line.
+/// Control characters and the invisible ones that reorder or hide text (zero-width, bidirectional,
+/// the byte-order mark, the soft hyphen, tag characters).
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{E0000}'..='\u{E007F}'
+        )
+}
+
+/// A line for the terminal, with each hidden character from the daemon shown as `?`.
+fn shown(line: String) -> String {
+    if line.chars().any(hidden) {
+        line.chars()
+            .map(|c| if hidden(c) { '?' } else { c })
+            .collect()
+    } else {
+        line
+    }
+}
+
+/// Radio's refusals are fixed ASCII phrases; show one only when it is one short line of them.
 fn refusal(phrase: Option<&str>) -> String {
     match phrase {
         Some(phrase)
             if !phrase.is_empty()
                 && phrase.chars().count() <= PHRASE_MAX
-                && !phrase.chars().any(char::is_control) =>
+                && phrase.chars().all(|c| c == ' ' || c.is_ascii_graphic()) =>
         {
             format!("Radio said: {phrase}.")
         }
@@ -351,12 +409,7 @@ pub fn status_lines(copy: Result<PathBuf>, radio: &Radio) -> (Vec<String>, bool)
                 .iter()
                 .map(|computer| format!(
                     "{} ({})",
-                    // Radio checks names, but this is a terminal: never print a control character.
-                    computer
-                        .name
-                        .as_deref()
-                        .filter(|name| !name.chars().any(char::is_control))
-                        .unwrap_or(&computer.id),
+                    computer.name.as_deref().unwrap_or(&computer.id),
                     computer.state
                 ))
                 .collect::<Vec<_>>()
@@ -364,7 +417,8 @@ pub fn status_lines(copy: Result<PathBuf>, radio: &Radio) -> (Vec<String>, bool)
         ),
         Err(error) => error.to_string(),
     });
-    (lines, true)
+    // Radio checks names, but every line is printed: never pass on a hidden character.
+    (lines.into_iter().map(shown).collect(), true)
 }
 
 #[cfg(test)]
