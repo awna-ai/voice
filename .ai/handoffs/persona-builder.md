@@ -5,8 +5,8 @@ One record per slice, newest first. Paraphrase only; no real person.
 ## PB8.9c2: Voice talks to its Radio (2026-11-16, lane: V1)
 
 - **Status: built, not landed.** Branch `lane-v1/PB8.9c2` (pushed): `40fede9` brief, `147d1dd` code, `25b03a1`
-  Verifier and security-review fixes, `4fac04d` repeat-Verifier fixes. **Owed before the land:** a passing delta
-  Verifier (Opus) on `4fac04d` (see the Verifier bullet), then the full `ci-local.sh`.
+  Verifier and security-review fixes, `4fac04d` repeat-Verifier fixes. **Owed before the land:** only the full `ci-local.sh`
+  land (the delta Verifier passed at `4fac04d`).
 - **Why:** PB8.9's computers link over Radio (plan `2026-11-12-pb8-9-one-assistant-many-computers.md`, D-1). PB8.9c1
   put the binary in Voice.app; this slice makes Voice able to install it and speak to it. PB8.9d calls it.
 - **What:** `voice-api` pins `radio-client` at Radio `v0.2.0` and moves `radio-panels` to the same tag (unchanged
@@ -43,7 +43,8 @@ One record per slice, newest first. Paraphrase only; no real person.
   `0o022` mask to `0o002`, the early-return scrub removed); fmt and clippy `-D warnings` on voice-api clean; at
   `25b03a1` clippy on voice-api, voice-cli and voice-core clean, and the voice-core `cli_command` tests 17/17. The
   owner check isn't tested (it needs a second user). A delta Verifier (Opus) on `4fac04d` ran in run `145546-r1`;
-  its verdict is in the lane's resume line.
+  **Delta Verifier (Opus) PASS at `4fac04d`** by reading (her test run never started under the load hold; mine above
+  covers it). Her nit fixed in the record commit: the SECURITY row names root and the check-then-run gap.
 
 ## PB8.9c1: Voice.app carries a pinned Radio (2026-11-16, lane: V1)
 
