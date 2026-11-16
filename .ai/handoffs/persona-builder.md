@@ -2,6 +2,36 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## PB8.9c2: Voice talks to its Radio (2026-11-16, lane: V1)
+
+- **Status: built, not landed.** Branch `lane-v1/PB8.9c2` (pushed): `40fede9` brief, `147d1dd` code, `25b03a1`
+  Verifier and security-review fixes. **Owed before the land:** a repeat Verifier (Opus) on `25b03a1`, then the full
+  `ci-local.sh`.
+- **Why:** PB8.9's computers link over Radio (plan `2026-11-12-pb8-9-one-assistant-many-computers.md`, D-1). PB8.9c1
+  put the binary in Voice.app; this slice makes Voice able to install it and speak to it. PB8.9d calls it.
+- **What:** `voice-api` pins `radio-client` at Radio `v0.2.0` and moves `radio-panels` to the same tag (unchanged
+  between them). `builder/api/src/radio.rs`: `install(home)` runs the `radio` beside Voice's own `voice` from a
+  lasting place (`voice_core::cli_command::shipped_lasting_cli`, new) with a fixed argument list, in its own process
+  group, killed as a group after 180 s, one sentence per failing exit code; `Radio` speaks only the link ops through
+  `radio_client::request`; `hello` refuses a Radio that can't link; refusal phrases show only as printable ASCII;
+  `JoinCode` hides and zeroes its code. `voice radio status` prints the copy, whether Radio answers, and the linked
+  computers, every line scrubbed of hidden characters. `.ai/SECURITY.md` gains a row (the handler, a newer Radio
+  another app installed, the join code). Brief: `plans/briefs/PB8.9c2-voice-talks-to-radio.md`.
+- **Who built it:** V1, Claude-direct under the fallback rule (Codex at its usage limit until 2026-11-18).
+- **Verified:** 22 tests in `builder/api/src/radio/tests.rs` against a fake Radio on a scratch socket and a fake
+  `radio` script, plus `builder/cli/tests/radio.rs`; written before the code, green at `25b03a1`. Mutations, each
+  turning a test red: the exit-3 sentence, the copy check, the minor, the ops list, the phrase check (both forms),
+  the hidden code, the deadline, the line scrub, the absolute-path check and the group kill. `cargo fmt --check` and
+  clippy `-D warnings` on voice-api, voice-cli and voice-panel-runner clean at `147d1dd`. **Not verified:** the full
+  `ci-local.sh`, clippy after `25b03a1`, and a live `radio install` (nothing calls it until PB8.9d).
+- **Security review** (sub-agent): no high. One medium, fixed: the copy and the handler skipped the lasting-place
+  rule. Lows fixed: a free-form `--app-version`, invisible characters in status lines, the code's lifetime. Low
+  kept: the deadline's group kill can land mid-upgrade (Radio keeps the old copy for rollback).
+- **Verifier** (edge ⑧): Fable **FAIL** at `147d1dd`, three must-fixes, all fixed in `25b03a1` (every status line
+  scrubbed; an absolute `radio` only; the group kill, with a test that the fake's own child is gone), plus her
+  should-fixes (three test gaps, ASCII-only phrases, the exit 1 and 2 sentences, the SECURITY row) and nits (another
+  major named, non-text paths refused, a `try_wait` error, a 180 s deadline, the older SECURITY row).
+
 ## PB8.9c1: Voice.app carries a pinned Radio (2026-11-16, lane: V1)
 
 - **Why:** PB8.9's member computers send their history to the build computer over Radio's link (plan
