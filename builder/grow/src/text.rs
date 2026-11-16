@@ -320,3 +320,58 @@ pub fn testing_change(n: usize) -> String {
     )
 }
 pub const CHECKING_ANSWERS: &str = "Checking the written answers against what you wanted.";
+pub const BACKTEST_PROMPT: &str = "Answer each test the way the person would, and say how sure you are of each answer.\n\nHow the person decides (their decisions.md):\n\n";
+pub const BACKTESTING: &str = "Backtesting your assistant on your answers";
+pub const APPLY_CONFIDENCE: &str = "must give a confidence of high, medium or low";
+pub const NO_CALIBRATION: &str = "Your assistant's decisions.md has no \"## Calibration (the blind backtest)\" section, so the backtest has nothing to update.";
+pub const BACKTEST_UNCHANGED: &str =
+    "The backtest matches the Calibration section already, so there's nothing to change.";
+pub const BACKTEST_NONE_RIGHT: &str = "Your assistant got none of the tests right, so there's no test to check a new Calibration section with. Try `voice refresh propose` first.";
+pub const BACKTEST_WHY: &str =
+    "A fresh blind backtest of these decisions on the answers kept since the last kept change.";
+pub fn backtest_misfit(what: &str, problem: &str, _times: usize) -> String {
+    format!(
+        "{what}: Claude's answers didn't fit twice, so nothing was saved ({problem}). Run `voice refresh backtest` again."
+    )
+}
+pub fn backtesting(n: usize) -> String {
+    format!("Backtesting your assistant blind on {n} tests from your answers.")
+}
+pub fn too_few_to_backtest(n: usize) -> String {
+    format!(
+        "There {} only {n} {} from your answers since the last kept change, fewer than 30, so there's nothing to backtest yet.",
+        if n == 1 { "is" } else { "are" },
+        if n == 1 { "test" } else { "tests" }
+    )
+}
+fn live_list(live: &[String]) -> String {
+    if live.is_empty() {
+        "none yet".to_owned()
+    } else {
+        live.join(", ")
+    }
+}
+/// The Calibration section's paragraph after a growth backtest, one sentence group a line so no
+/// line is too long for `apply`'s check; the table follows it.
+pub fn calibration(
+    name: &str,
+    n: usize,
+    first: &str,
+    last: &str,
+    hits: usize,
+    percent: &str,
+    live: &[String],
+) -> String {
+    format!(
+        "Measured on {n} growth tests ({first} → {last}), the answers kept since the last kept change, each answered blind from this decisions.md. Overall {hits} of {n} ({percent}).\nA category is **live** at 5 or more High picks with at least 90% right: {}.\n{name} decides alone only in live categories that autonomy.md opens; elsewhere High is treated as Medium.",
+        live_list(live)
+    )
+}
+pub fn backtest_summary(n: usize, hits: usize, live: &[String]) -> String {
+    format!(
+        "Update the Calibration section from a blind backtest on {n} newer tests: {hits} right; live: {}.",
+        live_list(live)
+    )
+}
+pub const BACKTEST_WORDS: &str =
+    "The new Calibration section didn't pass the checks a change must pass, so nothing was saved.";

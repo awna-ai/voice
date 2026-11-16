@@ -132,10 +132,16 @@ fn calibration(member: &Member, book: &Book, built: &Built) -> (String, Vec<Stri
         },
         member.name
     );
-    let rows = ordered(book, s)
+    (text, calibration_rows(book, s))
+}
+
+/// The Calibration table's rows, one per category, in the codebook's order and then any others.
+pub fn calibration_rows(book: &Book, score: &Score) -> Vec<String> {
+    let live = live_categories(book, score);
+    ordered(book, score)
         .iter()
         .map(|name| {
-            let tiers = &s.categories[name];
+            let tiers = &score.categories[name];
             format!(
                 "| {name} | {} | {} | {} | {} |",
                 cell(tiers[0].as_ref()),
@@ -144,8 +150,7 @@ fn calibration(member: &Member, book: &Book, built: &Built) -> (String, Vec<Stri
                 if live.contains(name) { "yes" } else { "no" }
             )
         })
-        .collect();
-    (text, rows)
+        .collect()
 }
 
 /// `decisions.md`: the template's lines, its placeholders filled from the build.

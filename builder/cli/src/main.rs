@@ -733,6 +733,19 @@ enum RefreshCommand {
         #[arg(long)]
         call_cap_usd: Option<f64>,
     },
+    /// Re-measure your assistant blind on the answers kept since the last kept change, and draft a change to its Calibration section only.
+    Backtest {
+        member_dir: PathBuf,
+        /// The Claude model to backtest with.
+        #[arg(long, default_value = voice_agent::claude::DEFAULT_MODEL)]
+        model: String,
+        /// The daily limit, in US dollars as Claude Code estimates them; 0 for no limit (default: the limit set for this assistant, else $50). Anthropic Console sign-in only.
+        #[arg(long)]
+        daily_cap_usd: Option<f64>,
+        /// The most one call may spend, in US dollars as Claude Code estimates them; 0 for no limit (default: the limit set for this assistant, else $5). Under a Claude subscription, 0 means $5.
+        #[arg(long)]
+        call_cap_usd: Option<f64>,
+    },
     /// Test an approved change on all your answers, then keep it or undo it.
     Apply {
         member_dir: PathBuf,
@@ -2234,20 +2247,30 @@ fn interview_answer(
     println!("{}", text::merge_next(&member_dir.display().to_string()));
     Ok(())
 }
-fn refresh_propose(
-    member_dir: PathBuf,
-    model: String,
+type Drafter<'a> = Box<
+    dyn FnOnce(
+            &Guard,
+            &voice_agent::ledger::Session,
+            &Path,
+            &voice_grow::store::Store,
+            &voice_core::member::Member,
+            &voice_ingest::filters::Filters,
+        ) -> Result<()>
+        + 'a,
+>;
+
+/// What `refresh propose` and `refresh backtest` share: the member, Claude Code, the caps, the
+/// guard and the session, then the closing spend line.
+fn refresh_draft(
+    member_dir: &Path,
     daily_cap_usd: Option<f64>,
     call_cap_usd: Option<f64>,
+    draft: Drafter<'_>,
 ) -> Result<()> {
     use voice_agent::{claude, ledger::Session};
-    use voice_grow::{
-        refresh::{self, Proposed},
-        store::{Store, utc_now},
-        text,
-    };
+    use voice_grow::store::Store;
     use voice_ingest::filters::Filters;
-    let (member, home) = member_and_home(&member_dir)?;
+    let (member, home) = member_and_home(member_dir)?;
     let filters = Filters::compile(&member.filters)?;
     // Preserve the early Console-limit error, even when Claude Code is missing.
     if !signed_in_with_subscription(&home) {
@@ -2270,26 +2293,89 @@ fn refresh_propose(
     );
     let store = Store::open(&home, &member)?;
     let session = Session::open(&home, &member.slug, cap)?;
-    match refresh::propose(
-        &guard,
-        &session,
-        &home,
-        &store,
-        &member,
-        &member_dir,
-        &filters,
-        &model,
-        &utc_now(),
-    )? {
-        Proposed::Nothing => println!("{}", text::NOTHING_TO_REFRESH),
-        Proposed::Drafted(proposal) => {
-            for line in refresh::render(&proposal, &member_dir) {
-                println!("{line}");
-            }
-        }
-    }
+    draft(&guard, &session, &home, &store, &member, &filters)?;
     println!("{}", closing_spend(&session, ready.subscription)?);
     Ok(())
+}
+fn refresh_propose(
+    member_dir: PathBuf,
+    model: String,
+    daily_cap_usd: Option<f64>,
+    call_cap_usd: Option<f64>,
+) -> Result<()> {
+    use voice_grow::{
+        refresh::{self, Proposed},
+        store::utc_now,
+        text,
+    };
+    refresh_draft(
+        &member_dir,
+        daily_cap_usd,
+        call_cap_usd,
+        Box::new(|guard, session, home, store, member, filters| {
+            match refresh::propose(
+                guard,
+                session,
+                home,
+                store,
+                member,
+                &member_dir,
+                filters,
+                &model,
+                &utc_now(),
+            )? {
+                Proposed::Nothing => println!("{}", text::NOTHING_TO_REFRESH),
+                Proposed::Drafted(proposal) => {
+                    for line in refresh::render(&proposal, &member_dir) {
+                        println!("{line}");
+                    }
+                }
+            }
+            Ok(())
+        }),
+    )
+}
+fn refresh_backtest(
+    member_dir: PathBuf,
+    model: String,
+    daily_cap_usd: Option<f64>,
+    call_cap_usd: Option<f64>,
+) -> Result<()> {
+    use voice_grow::{
+        backtest::{self, Backtested},
+        refresh,
+        store::utc_now,
+        text,
+    };
+    refresh_draft(
+        &member_dir,
+        daily_cap_usd,
+        call_cap_usd,
+        Box::new(|guard, session, home, store, member, filters| {
+            match backtest::backtest(
+                guard,
+                session,
+                home,
+                store,
+                member,
+                &member_dir,
+                filters,
+                &model,
+                &utc_now(),
+                &mut |line| println!("{line}"),
+            )? {
+                Backtested::TooFew(n) => println!("{}", text::too_few_to_backtest(n)),
+                Backtested::NoneRight => println!("{}", text::BACKTEST_NONE_RIGHT),
+                Backtested::Unchanged => println!("{}", text::BACKTEST_UNCHANGED),
+                Backtested::Drafted(proposal) => {
+                    for line in refresh::render(&proposal, &member_dir) {
+                        println!("{line}");
+                    }
+                }
+            }
+            Ok(())
+        }),
+    )
 }
 fn refresh_apply(
     member_dir: PathBuf,
@@ -3129,6 +3215,12 @@ fn run(cli: Cli) -> Result<std::process::ExitCode> {
                 daily_cap_usd,
                 call_cap_usd,
             } => refresh_propose(member_dir, model, daily_cap_usd, call_cap_usd),
+            RefreshCommand::Backtest {
+                member_dir,
+                model,
+                daily_cap_usd,
+                call_cap_usd,
+            } => refresh_backtest(member_dir, model, daily_cap_usd, call_cap_usd),
             RefreshCommand::Apply {
                 member_dir,
                 proposal,

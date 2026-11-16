@@ -17,7 +17,11 @@ pub fn grade_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["grades"],"properties":{"grades":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","grade"],"properties":{"id":{"type":"string"},"grade":{"type":"string","enum":["pass","fail"]}}}}}})
 }
 pub fn answer_prompt(decisions: &str, batch: &[&Case]) -> String {
-    let mut prompt = text::ANSWER_PROMPT.to_owned();
+    tests_prompt(text::ANSWER_PROMPT, decisions, batch)
+}
+/// The tests' prompt after `opening`: each test's id, area, situation and options, never what was wanted.
+pub(crate) fn tests_prompt(opening: &str, decisions: &str, batch: &[&Case]) -> String {
+    let mut prompt = opening.to_owned();
     prompt.push_str(decisions);
     prompt.push_str(text::ANSWER_TESTS);
     for case in batch {

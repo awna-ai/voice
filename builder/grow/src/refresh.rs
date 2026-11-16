@@ -260,7 +260,7 @@ pub(crate) fn decisions(member_dir: &Path) -> Result<String> {
         .ok_or_else(|| Error::Invalid(text::NOT_BUILT.into()))
 }
 
-fn pending(store: &Store, base: &str) -> Result<Option<(Proposal, bool)>> {
+pub(crate) fn pending(store: &Store, base: &str) -> Result<Option<(Proposal, bool)>> {
     let approvals = store.approvals()?;
     let measurements = store.measurements()?;
     let mut proposals = store.proposals()?;
@@ -381,6 +381,25 @@ pub fn propose(
         }
         current = next;
     }
+    save_draft(
+        store, member, member_dir, base, now, summary, changes, named,
+    )
+    .map(Proposed::Drafted)
+}
+
+/// Save a drafted change once the assistant's decisions are still those it was drafted from.
+/// The caller's Session holds the state lock.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn save_draft(
+    store: &Store,
+    member: &Member,
+    member_dir: &Path,
+    base: String,
+    now: &str,
+    summary: String,
+    changes: Vec<Change>,
+    cases: Vec<String>,
+) -> Result<Proposal> {
     if version(decisions(member_dir)?.as_bytes()) != base {
         return Err(Error::Invalid(text::DECISIONS_CHANGED.into()));
     }
@@ -396,11 +415,11 @@ pub fn propose(
         base,
         summary,
         changes,
-        cases: named,
+        cases,
     };
     check_stored(&proposal).map_err(|_| Error::Invalid(text::DECISIONS_HIDDEN.into()))?;
     store.save_proposal_unlocked(&proposal)?;
-    Ok(Proposed::Drafted(proposal))
+    Ok(proposal)
 }
 
 pub(crate) fn check_stored(proposal: &Proposal) -> Result<()> {

@@ -68,8 +68,25 @@ fn check_candidate(
     signals: &[Signal],
     filters: &Filters,
 ) -> Result<()> {
-    let mut words = vec![proposal.summary.clone()];
-    for change in &proposal.changes {
+    check_change(
+        &proposal.summary,
+        &proposal.changes,
+        cases,
+        signals,
+        filters,
+    )
+}
+
+/// A change's words as `apply` checks them: no long or hidden line, nothing private, no quote.
+pub(crate) fn check_change(
+    summary: &str,
+    changes: &[Change],
+    cases: &[Case],
+    signals: &[Signal],
+    filters: &Filters,
+) -> Result<()> {
+    let mut words = vec![summary.to_owned()];
+    for change in changes {
         words.push(change.why.clone());
         for line in diff::added_lines(&change.diff) {
             if unfit(line) {
@@ -217,7 +234,7 @@ pub fn measure(
     })
 }
 
-fn grade_answers(
+pub(crate) fn grade_answers(
     asker: &mut Asker<'_>,
     tests: &[&Case],
     answers: &[BTreeMap<String, String>],

@@ -471,6 +471,40 @@ fn refresh_help_calls_the_id_a_change_and_explains_the_model() {
 }
 
 #[test]
+fn backtest_help_names_the_member_folder_and_the_model() {
+    let f = Fixture::new();
+    let out = f.run(&["refresh", "backtest", "--help"]);
+    assert!(out.status.success());
+    let shown = text(&out.stdout);
+    assert!(shown.contains("<MEMBER_DIR>"), "{shown}");
+    assert!(
+        shown.contains("The Claude model to backtest with"),
+        "{shown}"
+    );
+    assert!(shown.contains("Calibration section only"), "{shown}");
+}
+
+#[test]
+fn backtest_with_too_few_tests_says_so_without_a_model_call() {
+    let Some(python) = python() else { return };
+    let f = Fixture::new();
+    f.built(&python);
+    f.keep_answers();
+    let before = f.snapshot();
+    let calls = f.calls();
+    let out = f.run(&["refresh", "backtest", &f.member()]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let shown = text(&out.stdout);
+    assert!(
+        shown.contains("There are only 2 tests from your answers since the last kept change, fewer than 30, so there's nothing to backtest yet."),
+        "{shown}"
+    );
+    assert!(shown.contains("Today, about $"), "{shown}");
+    assert_eq!(f.calls(), calls);
+    assert_eq!(f.snapshot(), before);
+}
+
+#[test]
 fn approved_change_is_applied_reported_and_resumes_without_calls() {
     let Some(python) = python() else { return };
     let f = Fixture::new();
