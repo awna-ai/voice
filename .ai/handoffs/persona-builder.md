@@ -2,6 +2,52 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## PB8.9c1: Voice.app carries a pinned Radio (2026-11-16, lane: V1)
+
+- **Why:** PB8.9's member computers send their history to the build computer over Radio's link (plan
+  `2026-11-12-pb8-9-one-assistant-many-computers.md`, D-1), so Voice ships Radio. PB8.9c was split in two
+  (V1, 2026-11-16): this slice puts the binary in the app; PB8.9c2 runs `radio install` and talks to it.
+- **What:** `builder/install/radio-release.txt` pins Radio `v0.2.0` (the release R.7 made; socket protocol 1.7)
+  and the SHA-256 of each Mac tarball. `scripts/fetch-radio.sh` downloads them over HTTPS only, with size and time
+  caps, refuses a differing checksum, lists then unpacks only the binary and its licence, refuses a link, a
+  binary for another chip, a corrupt tarball, a duplicated pin line or a repeated architecture, and joins both
+  chips with `lipo` for `--universal`. `scripts/build-mac-app.sh` fetches first (before the long compile), ships
+  `Contents/MacOS/radio` unchanged (Radio's own ad-hoc signature, identifier `ai.awna.radio`, bytes matching the
+  pin) and Radio's MIT licence at `Contents/Resources/radio/LICENSE`, checks both commands' architectures with one
+  helper, and now also refuses uncommitted changes under `scripts/`. `builder/install/install.sh` treats a
+  missing, linked, non-executable or other-chip `radio` as a damaged copy (one helper for both commands, run
+  before anything is copied). `.ai/SECURITY.md` gains a row for the pinned binary; the app README says the build
+  downloads it. Nothing runs Radio yet. Brief: `plans/briefs/PB8.9c1-radio-in-app.md`.
+- **Who built it:** V1, Claude-direct under the fallback rule (Codex at its usage limit until 2026-11-18).
+- **Verified:** `tests/fetch_radio_test.sh` (new; a stand-in `curl` serves invented releases, no network) and
+  four new radio cases in `tests/mac_install_test.sh`, both red first on their assertions, then green; both scripts
+  added to `ci-local.sh` and its shellcheck list. Mutations in a scratch copy, each turning a test red: the
+  checksum, architecture, binary-link, licence-link, HTTPS-only, size and time caps, existing-folder,
+  missing-parent, repeated-architecture, duplicated-pin-line, list-before-unpack and `lipo -create` guards, and
+  `bundled radio` and the link and executable checks in the installer. Extracting every member stays green: only
+  `radio` and `LICENSE` are ever copied out (the test pins that), so naming the two is defence in depth inside the
+  0700 temp folder. **Live:** `fetch-radio.sh` with the repo pin against GitHub fetched one universal `radio`
+  (`x86_64 arm64`) that runs and verifies (`codesign --verify --strict`, identifier `ai.awna.radio`), plus the
+  licence; a bundle signed around it verifies `--deep --strict` and leaves its bytes unchanged.
+- **Security review** (sub-agent): no high or medium. Lows taken: a hidden tar error, no download caps, `scripts/`
+  outside the clean-tree check, no test for a tarball that won't unpack. Lows filed: Radio's release has no build
+  provenance and isn't immutable, so a pin bump trusts its own `SHA256SUMS` (R.9 `YeLOkHeP`, Radio board); the
+  app ships no third-party notices for the crates in its binaries, Radio's or Voice's own (VF21 `dZyGPqok`).
+  Dependency intake: Radio, awna-ai (members ziazon and data4equity), MIT, pinned by tag and SHA-256, updated by a
+  reviewed pin edit; once PB8.9c2 runs it, a per-user launch agent with a same-user socket, a rooms store, iroh
+  links to paired computers, and a registered handler (PB8.9c2 owes the handler's threat model, and whether a
+  newer Radio another app installed may serve Voice).
+- **Verifier** (edge ⑧, spec says yes): Fable **PASS** at `a3f70e3`, no must-fix, all seven claims verified. Her
+  four should-fixes taken in `56710cb` (ship Radio unsigned by Voice so it keeps its identifier and bytes; tests
+  for a linked licence and for extra members; the SECURITY.md row and README note), with nits 1, 2 and 5.
+  Repeat Verifier (Opus) at `56710cb`: **FAIL**, one must-fix: the moved fetch ran before `$staging` existed, so every
+  build stopped (no test runs `build-mac-app.sh`); fixed in `503088e` with `mkdir "$staging"`, and the build's own
+  lines from `name=` to the fetch were run in a scratch `dist/` and fetched. Her should-fixes (no test bites if the
+  tar line's `|| true` or a whole-tarball extract came back) are noted; her SECURITY.md wording nit is taken.
+  **A delta Verifier pass on the new head is owed before the land.**
+- **Not verified:** a full `build-mac-app.sh` run (one from `a3f70e3` was still compiling near the run's end and was stopped);
+  the full `ci-local.sh` (runs at the land).
+
 ## G4.1a: `voice refresh backtest` drafts a Calibration-only change (2026-11-16, lane: V1)
 
 - **Why:** a member's Calibration section in `decisions.md` is written once, by the build, and the growth loop never
