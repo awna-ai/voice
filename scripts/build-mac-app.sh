@@ -46,19 +46,12 @@ else
 fi
 
 version=$(python3 -I -c 'import json; print(json.load(open("builder/app/tauri.conf.json"))["version"])')
-if ! source_status=$(git status --porcelain -- builder crew Cargo.toml Cargo.lock); then
+if ! source_status=$(git status --porcelain -- builder crew scripts Cargo.toml Cargo.lock); then
   fail 'build from a git checkout of the repo, so uncommitted changes can be checked'
 fi
 if [ -n "$source_status" ]; then
-  fail 'commit or set aside your changes under builder/, crew/ and the Cargo files first'
+  fail 'commit or set aside your changes under builder/, crew/, scripts/ and the Cargo files first'
 fi
-pnpm -C builder/ui install --frozen-lockfile
-pnpm -C builder/ui tauri "${build_args[@]}"
-target_dir=$(CARGO_NET_OFFLINE=true cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
-app="$target_dir/$bundle_dir/Voice.app"
-[ -d "$app" ] || fail "app not found: $app"
-codesign --verify --deep --strict "$app" >/dev/null 2>&1 || fail "signature check failed: $app"
-
 name="voice-$version-mac-$label"
 if "$testers"; then
   name+=-testers
@@ -67,6 +60,20 @@ mkdir -p "$repo/dist"
 staging="$repo/dist/$name"
 trap 'rm -rf "$staging"' EXIT
 rm -rf "$staging"
+# Radio first, so a bad pin or no network stops the build before the long compile.
+if "$universal"; then
+  radio_archs=(arm64 x86_64)
+else
+  radio_archs=("$label")
+fi
+bash scripts/fetch-radio.sh builder/install/radio-release.txt "$staging/radio" "${radio_archs[@]}"
+pnpm -C builder/ui install --frozen-lockfile
+pnpm -C builder/ui tauri "${build_args[@]}"
+target_dir=$(CARGO_NET_OFFLINE=true cargo metadata --format-version 1 --no-deps | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+app="$target_dir/$bundle_dir/Voice.app"
+[ -d "$app" ] || fail "app not found: $app"
+codesign --verify --deep --strict "$app" >/dev/null 2>&1 || fail "signature check failed: $app"
+
 package="$staging/Voice"
 mkdir -p "$package"
 
@@ -85,12 +92,6 @@ else
   staging_cli="$target_dir/release/voice"
 fi
 [ -f "$staging_cli" ] || fail 'the voice command was not built'
-if "$universal"; then
-  radio_archs=(arm64 x86_64)
-else
-  radio_archs=("$label")
-fi
-bash scripts/fetch-radio.sh builder/install/radio-release.txt "$staging/radio" "${radio_archs[@]}"
 
 ditto "$app" "$package/Voice.app"
 staged_app="$package/Voice.app"
@@ -101,7 +102,8 @@ codesign --force --sign - "$staged_cli"
 staged_radio="$staged_app/Contents/MacOS/radio"
 cp "$staging/radio/radio" "$staged_radio"
 chmod 755 "$staged_radio"
-codesign --force --sign - "$staged_radio"
+# Radio's release is already signed (ad hoc, identifier ai.awna.radio); shipping it unchanged keeps
+# its bytes matching the pin.
 mkdir -p "$staged_app/Contents/Resources/radio"
 cp "$staging/radio/LICENSE" "$staged_app/Contents/Resources/radio/LICENSE"
 codesign --force --sign - --preserve-metadata=identifier,entitlements,requirements,flags,runtime "$staged_app"

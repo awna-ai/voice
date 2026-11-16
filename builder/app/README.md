@@ -11,8 +11,12 @@ From the repo root, run `bash scripts/build-mac-app.sh`. Add `--universal` for a
 on both chips; this needs both Mac Rust targets (`rustup target add aarch64-apple-darwin
 x86_64-apple-darwin`). It writes `dist/voice-<version>-mac-<label>.zip` and its `.sha256`.
 
+The build also downloads the Radio release Voice carries (`builder/install/radio-release.txt` pins
+its tag and checksums) with `curl`, so it needs the network, and ships it as `Voice.app/Contents/MacOS/radio`
+with Radio's licence. A download that doesn't match the pin stops the build.
+
 The copy is ad-hoc signed, not by Apple, until the public release (PB-D3), so share it only with
 people you know. The build runs only from a git checkout and refuses uncommitted changes under
-`builder/`, `crew/` and the Cargo files. They follow `How to install.txt` inside the zip. Send the `.sha256` line in a separate message that says to check it before running anything
+`builder/`, `crew/`, `scripts/` and the Cargo files. They follow `How to install.txt` inside the zip. Send the `.sha256` line in a separate message that says to check it before running anything
 from the zip (the how-to travels in the zip, so it can't vouch for itself); the recipient compares
 the zip's SHA-256 as step 3 of `How to install.txt` says.

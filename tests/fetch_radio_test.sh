@@ -39,7 +39,7 @@ cp "$FAKE_RELEASES/${url#"$prefix"}" "$out"
 CURL
 chmod 755 "$scratch/bin/curl"
 
-release() {  # architecture binary-architecture [no-radio|symlink|no-license]
+release() {  # architecture binary-architecture [no-radio|symlink|no-license|linked-license|extra]
   folder="$scratch/make/radio-$tag-macos-$1"
   rm -rf "$scratch/make"
   mkdir -p "$folder"
@@ -48,7 +48,12 @@ release() {  # architecture binary-architecture [no-radio|symlink|no-license]
     symlink) ln -s LICENSE "$folder/radio" ;;
     *) printf 'int main(void){return 0;}\n' | cc -arch "$2" -x c - -o "$folder/radio" ;;
   esac
-  [ "${3-}" = no-license ] || printf 'MIT License\n\nCopyright (c) Radio test\n' > "$folder/LICENSE"
+  case "${3-}" in
+    no-license) ;;
+    linked-license) printf 'outside\n' > "$scratch/outside-license"; ln -s "$scratch/outside-license" "$folder/LICENSE" ;;
+    *) printf 'MIT License\n\nCopyright (c) Radio test\n' > "$folder/LICENSE" ;;
+  esac
+  [ "${3-}" != extra ] || { printf 'extra\n' > "$folder/extra"; mkdir "$folder/more"; printf 'more\n' > "$folder/more/file"; }
   tar -czf "$releases/radio-$tag-macos-$1.tar.gz" -C "$scratch/make" "radio-$tag-macos-$1"
 }
 
@@ -86,6 +91,7 @@ run "$scratch/pin" "$scratch/fetched" "$arch"
 [ "$(lipo -archs "$scratch/fetched/radio")" = "$arch" ] || fail 'radio has the wrong architecture'
 check "$scratch/fetched/LICENSE" 'MIT License' "Radio's licence was not fetched"
 check "$scratch/curl.log" "--proto =https" 'the download was not limited to HTTPS'
+check "$scratch/curl.log" "--max-filesize 67108864 --max-time 600" 'the download has no size or time limit'
 check "$scratch/curl.log" "https://github.com/awna-ai/radio/releases/download/$tag/radio-$tag-macos-$arch.tar.gz" 'the pinned tag was not downloaded'
 echo 'fetch_radio_test: one architecture passed'
 
@@ -119,13 +125,28 @@ for broken in no-radio symlink; do
   run "$scratch/pin" "$scratch/$broken" "$arch"
   refused "radio-$tag-macos-$arch.tar.gz holds no radio binary" "a tarball with $broken"
 done
-release "$arch" "$arch" no-license
+for broken in no-license linked-license; do
+  release "$arch" "$arch" "$broken"
+  pin
+  run "$scratch/pin" "$scratch/$broken" "$arch"
+  refused "radio-$tag-macos-$arch.tar.gz holds no LICENSE" "a tarball with $broken"
+done
+release "$arch" "$arch" extra
 pin
-run "$scratch/pin" "$scratch/no-license" "$arch"
-refused "radio-$tag-macos-$arch.tar.gz holds no LICENSE" 'a tarball without a licence'
+run "$scratch/pin" "$scratch/extra" "$arch"
+[ "$status" = 0 ] || { cat "$scratch/err" >&2; fail 'a tarball with extra members failed'; }
+[ "$(cd "$scratch/extra" && find . -mindepth 1 | sort | tr '\n' ' ')" = './LICENSE ./radio ' ] || fail 'more than radio and LICENSE came out'
 release "$arch" "$arch"
 pin
 echo 'fetch_radio_test: broken tarballs passed'
+
+printf 'not a tarball' > "$releases/radio-$tag-macos-$arch.tar.gz"
+pin
+run "$scratch/pin" "$scratch/corrupt" "$arch"
+refused "couldn't unpack radio-$tag-macos-$arch.tar.gz" 'a pinned file that is not a tarball'
+release "$arch" "$arch"
+pin
+echo 'fetch_radio_test: corrupt tarball passed'
 
 mv "$releases/radio-$tag-macos-$arch.tar.gz" "$scratch/away.tar.gz"
 run "$scratch/pin" "$scratch/missing" "$arch"
@@ -142,12 +163,17 @@ refused "the pin file has no valid SHA-256 for $arch" 'a short checksum'
 { cat "$scratch/pin"; echo "tag v0.0.1"; } > "$scratch/two-tags"
 run "$scratch/two-tags" "$scratch/pin-two" "$arch"
 refused 'the pin file has no valid tag line' 'a pin with two tags'
+{ cat "$scratch/pin"; echo "$arch"; } > "$scratch/bare-arch"
+run "$scratch/bare-arch" "$scratch/pin-bare" "$arch"
+refused "the pin file has no valid SHA-256 for $arch" 'a second, bare checksum line'
 echo 'fetch_radio_test: pin file passed'
 
 mkdir "$scratch/exists"
 run "$scratch/pin" "$scratch/exists" "$arch"
 refused "$scratch/exists already exists" 'an existing folder'
-for args in '' 'only-a-pin' "$scratch/pin $scratch/bad-arch arm64e"; do
+run "$scratch/pin" "$scratch/no-such-folder/out" "$arch"
+refused "no folder to put $scratch/no-such-folder/out in" 'a missing parent folder'
+for args in '' 'only-a-pin' "$scratch/pin $scratch/bad-arch arm64e" "$scratch/pin $scratch/twice $arch $arch"; do
   # shellcheck disable=SC2086
   run $args
   [ "$status" = 2 ] || fail "bad arguments ($args) did not exit 2"
