@@ -2,6 +2,78 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## PB8.9e1: send this computer's history, the engine, the CLI and the app commands (2026-11-17, lane: V1)
+
+- **Status:** built and verified on `lane-v1/PB8.9e1`: `c9f6809` brief, `d0691f8` brief amended (a unique file
+  name needs no random source), `5acbab5` the build (committed as work in progress with two red socket tests; the
+  branch was already pushed, so its subject stays), `71a686b` fix-up 1 brief, `3e71261` fix-up 1, `4c2cefc` fix-up 2
+  brief, `8f48331` fix-up 3 brief, `350161b` fix-ups 2 and 3, `9f2b6b5` fix-up 4 brief, `1806cc4` fix-up 4,
+  `cb922bf` fix-up 5 brief, `297dedf` fix-up 5, `ad174c9` fix-up 6 brief, `2ffd8ef` fix-up 6, `81f95f3` fix-up 6's
+  doc comment, then this record.
+- **What it does:** a member computer sends its read Claude Code history (`decisions-claude-code.jsonl`) to the
+  computer that builds the assistant, over Radio's `send`, by the fleet founder's id; a pending copy (0600) stays
+  until Radio answers with the size, and `last-sent.json` keeps when, to whom and how many bytes. The build computer
+  takes each delivery (`deliveries`, paged 500 at a time from a saved cursor) into `decisions-from-<first 16 hex of
+  the sender's key>.jsonl`: new ids only, never shrunk, the build computer's filters re-run, every record held to
+  exactly the shape Voice's own history reader writes (`mine::check_record`: its keys, types, id form and context
+  length, a project of at most 255 bytes and a message text of at most 4000 characters, with a drift test against
+  the writer), a record whose line is over 16 KiB skipped on its own, at most 256 MiB per computer. A bad delivery
+  (name, key, link, non-regular, over 64 MiB, bad shape) is deleted and passed; an I/O fault leaves it for the next
+  take. `voice radio send|take|history <slug>` and the app commands `radio_send_history`, `radio_take_deliveries`,
+  `radio_history_status`; no screen yet (PB8.9e2).
+- **Decided at pickup** (in `.ai/DECISIONS.md`): the build computer is the one accepted founder (no `invited_by`);
+  a peer file is keyed by the delivery's authenticated key, never its name; another computer's name is shown only
+  through `radio::shown`.
+- **Who built it:** Codex, from the brief and six fix-up briefs. Its sandbox can't open sockets, so the fake-Radio
+  tests ran here.
+- **Reviews:** my review of the first build: the two red tests were test-side (a canonical `/private/tmp` path; a
+  68-character invented key), plus four findings (a delivered record with no `kind` would break the build's merge;
+  a panicking sort; unscreened names; the last send's size lost) → fix-up 1. Security review (Opus) on `3e71261`:
+  PASS WITH FIXES, one medium (the peer file had no ceiling) and four lows (an I/O fault discarded a delivery;
+  unbounded recursion deleting a folder; Radio's ids restarting is not covered; the "0700" wording) → fix-up 2.
+  Verifier (Fable) on `3e71261`: PASS WITH FIXES, must-fix: a delivered question missing a held-out key passed
+  `merge` and broke `split` in every build; two rules no test pinned (timestamp, the 64-hex key) → fix-up 2 with
+  four more tests, lowercase keys, and the CLI's date form. A delivered question's options read as distil reads
+  them → fix-up 3. Repeat Verifier (Opus) on `350161b`: FAIL, four more records the take kept that a later build
+  step refused → fix-up 4: one schema check beside the writer, and a failed read judged by what the file is (a
+  no-follow `fstatat`). Repeat Verifier (Opus) on `1806cc4`: FAIL, the shape holds but one huge delivered record
+  (a 9 MiB `context`, say) went past the provider's prompt limit in every later build, for good → fix-up 5: the
+  writer's id form and 300-character context in `check_record`, and a record over one build part (`PART_BYTES`)
+  skipped on its own. Repeat Verifier
+  (Opus) on `297dedf`: FAIL, the label prompt was closed but distil (a 390 KB `project`) and the backtest (30 big
+  held-out questions) could still end every build with records under one part → fix-up 6: the writer's two missing
+  limits (`project` ≤ 255 bytes, message `text` ≤ 4000 characters, one const with `own_message`) and a 16 KiB limit
+  per delivered record, sized so a full backtest batch (40 × 7 records) stays under the provider's 8 MiB, pinned by a
+  test on the real consts. Security review (Sonnet) on `2ffd8ef`: no findings. Repeat Verifier (Opus) on `2ffd8ef`:
+  PASS, every batching step worked with the real consts (backtest about 4.6 MB of 8 MiB; labels, distil rows, system
+  prompts bounded), one should-fix (`fold`'s doc comment still named one build part) → `81f95f3`.
+- **Not changed, recorded:** a delivery name outside Radio's character set is counted refused but left in place
+  (unreachable with a conforming Radio, no path built from it); the state lock is held across Radio's send (up to
+  its 150-second wait); if Radio's delivery ids ever restarted lower, those deliveries would wait in `deliveries/`
+  until Forget (in the threat model as not covered); a peer can copy a real record id from the build computer's
+  interview or live files, and the merge keeps the first copy it reads (peer files sort first), which predates this
+  slice; folding a 256 MiB peer file parses it whole in memory.
+- **Verified:** red first on every rule; 6 mutations on fix-up 6 caught (each check dropped, each `>` to `>=`, the
+  skip put back to `PART_BYTES`), with `cp` and `cmp`; `cargo fmt --check`; `cargo clippy --workspace --all-targets
+  --locked -- -D warnings`; `cargo test --locked -p voice-ingest --lib` (64 passed); `cargo test --locked -p voice-api
+  --lib sending` outside Codex's sandbox (51 passed, the 7 fake-Radio socket tests included); the full
+  `scripts/ci-local.sh` at the land.
+- **Not verified:** a live Radio between two computers (PB8.9's phase 4 is attended); a full build after a real
+  delivery (the merge-then-split test stands in for it).
+- **History edited before the land (V1, run `132144-r1`):** the first land's full gate passed, then its secret scan
+  refused the push: the wip commit's fake Radio key in `builder/cli/tests/radio.rs` (a repeated
+  `abcdef0123456789`, invented) matched gitleaks' `generic-api-key`. Fix-up 1 had already replaced it with
+  `"ab".repeat(32)`; the wip commit now carries that line too, so the fake key never reaches `main`. The final tree
+  is byte-identical to the verified one (`git diff` empty), `git range-diff` shows only the wip commit and fix-up 1
+  changed, and gitleaks finds nothing in the range. The hashes above are the rewritten ones.
+- **Skills Review:** ✅ tdd-skill (red first; the Verifier's surviving mutations became tests) · ✅
+  security-and-hardening (untrusted deliveries: shape, size, links, ceiling; names screened) · ✅
+  source-driven-development (Radio's `send`, `deliveries`, `computer_list` read in `CONTRACT.md` at the pinned tag)
+  · ✅ plain-language (fixed sentences say what to do next) · ⚠️ code-quality: fix-ups 1 to 3 checked a delivered
+  record consumer by consumer and missed some; fix-up 4 held it to the writer's schema, and fix-up 5 added the
+  writer's sizes, and fix-up 6 sized the record from every step that batches records. An untrusted record copy of a file we write is checked against the writer: its keys, types and
+  its limits, from the start.
+
 ## PB8.9d2: add another computer, the screens (2026-11-17, lane: V1)
 
 - **Status:** built and verified on `lane-v1/PB8.9d2`: `d8103cb` brief, `d02cc1e` the change, `def2098` threat
