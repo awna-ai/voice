@@ -39,9 +39,9 @@ done
 } > "$work/builder/install/radio-release.txt"
 (
   cd "$work"
-  git init -q
+  git -c init.templateDir= init -q
   git add -A
-  git -c user.name=test -c user.email=test@example.invalid commit -q -m 'build test copy'
+  git -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=test -c user.email=test@example.invalid commit -q -m 'build test copy'
 )
 
 # Each stand-in makes a real Mach-O for the architectures it is asked for, so lipo, codesign and

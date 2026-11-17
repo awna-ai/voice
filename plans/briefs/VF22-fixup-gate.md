@@ -72,3 +72,16 @@ finder did, and the build test yields `scripts/build-mac-app.sh`, `scripts/fetch
 `builder/install/install.sh` and `builder/install/How to install.txt`.
 
 Run the same four commands as above and report each exit code. Don't commit.
+
+## Fix-up 3 (the Verifier's should-fix)
+
+`tests/build_mac_app_test.sh` makes its scratch repository with `git init -q` and commits with only `user.name` and
+`user.email` set, so a contributor's global `commit.gpgsign=true`, `core.hooksPath` or `init.templateDir` runs or
+fails there. Change only those lines (about 42 to 44), in the style `tests/ci_local_test.sh` line 15 already uses:
+
+- `git init -q` becomes `git -c init.templateDir= init -q`;
+- the commit becomes `git -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=test -c
+  user.email=test@example.invalid commit -q -m 'build test copy'` (one line).
+
+Run `bash tests/build_mac_app_test.sh` and `shellcheck tests/build_mac_app_test.sh`; report each exit code. Don't
+commit.
