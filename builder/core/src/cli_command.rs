@@ -82,6 +82,13 @@ fn lasting_at_home(path: &Path, home: &Path) -> Result<()> {
 }
 
 fn lasting(path: &Path, roots: &[&Path]) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(Error::Invalid(CLI_PLACE.into()));
+    }
     let canonical = path.canonicalize().map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
@@ -207,6 +214,29 @@ mod tests {
         assert!(!folder_safe(0, 0, 0o1777, euid), "(0, 0, 0o1777)");
         assert!(!folder_safe(502, 20, 0o755, euid), "(502, 20, 0o755)");
         assert!(folder_safe(0, 20, 0o755, euid), "(0, 20, 0o755)");
+    }
+
+    // macOS has a per-user temp folder; Linux's /tmp is writable by others and refused.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_command_is_a_plain_file_not_a_link_or_a_folder() {
+        let root = Scratch::new();
+        let real = command_at(root.path(), "real/voice");
+        assert!(lasting(&real, &[root.path()]).is_ok());
+        let app = root.path().join("app");
+        fs::create_dir(&app).unwrap();
+        let linked = app.join("voice");
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+        assert!(matches!(
+            lasting(&linked, &[root.path()]),
+            Err(Error::Invalid(message)) if message == CLI_PLACE
+        ));
+        let folder = root.path().join("folder/voice");
+        fs::create_dir_all(&folder).unwrap();
+        assert!(matches!(
+            lasting(&folder, &[root.path()]),
+            Err(Error::Invalid(message)) if message == CLI_PLACE
+        ));
     }
 
     #[test]
