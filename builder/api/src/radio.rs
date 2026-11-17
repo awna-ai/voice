@@ -249,13 +249,16 @@ impl Radio {
         }
     }
 
-    /// Radio's version, refusing one older than this Voice or missing a link op.
+    /// Radio's version, refusing another major, one older than this Voice, or one
+    /// missing a link op.
     pub fn hello(&self) -> Result<Hello> {
         let response = self.ask(Request::Hello {})?;
         let protocol = response.protocol.ok_or_else(no_answer)?;
         let ops = response.ops.unwrap_or_default();
-        if protocol.major != PROTOCOL_MAJOR
-            || protocol.minor < PROTOCOL_MINOR
+        if protocol.major != PROTOCOL_MAJOR {
+            return Err(Error::Invalid(text::OTHER_MAJOR.into()));
+        }
+        if protocol.minor < PROTOCOL_MINOR
             || !LINK_OPS.iter().all(|op| ops.iter().any(|have| have == op))
         {
             return Err(Error::Invalid(text::TOO_OLD.into()));

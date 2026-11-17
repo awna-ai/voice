@@ -52,7 +52,7 @@ fn radio_message_is_refused_printing_and_writing_nothing() {
         .write_all(br#"{"kind":"seat_turn","room":"r1"}"#)
         .unwrap();
     let output = child.wait_with_output().unwrap();
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     assert!(fs::read_dir(&home).unwrap().next().is_none());
 }

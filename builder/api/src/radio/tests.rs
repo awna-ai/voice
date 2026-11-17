@@ -112,8 +112,6 @@ fn hello_names_the_version_and_protocol() {
 fn hello_refuses_a_radio_that_cannot_link() {
     let mut old = link_hello();
     old["protocol"]["minor"] = 10.into();
-    let mut other_major = link_hello();
-    other_major["protocol"]["major"] = 2.into();
     let mut missing_op = link_hello();
     missing_op["ops"] = json!(
         radio_client::OPS
@@ -121,7 +119,7 @@ fn hello_refuses_a_radio_that_cannot_link() {
             .filter(|have| **have != LINK_OPS[0])
             .collect::<Vec<_>>()
     );
-    for answer in [old, other_major, missing_op] {
+    for answer in [old, missing_op] {
         let fake = one(answer);
         assert_eq!(
             message(fake.radio().hello().unwrap_err()),
@@ -130,6 +128,18 @@ fn hello_refuses_a_radio_that_cannot_link() {
             fake.requests()
         );
     }
+}
+
+#[test]
+fn hello_refuses_another_major_with_its_own_sentence() {
+    let mut other_major = link_hello();
+    other_major["protocol"]["major"] = 2.into();
+    let fake = one(other_major);
+    assert_eq!(
+        message(fake.radio().hello().unwrap_err()),
+        text::OTHER_MAJOR
+    );
+    assert_eq!(fake.requests(), vec![json!({"op": "hello", "v": 1})]);
 }
 
 #[test]
