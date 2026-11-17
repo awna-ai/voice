@@ -269,3 +269,52 @@ Not changed, recorded instead: a delivery name outside Radio's character set is 
    `"project":"demo"` to it.
 
 Gate as before; don't commit.
+
+## Fix-up 4 (the repeat Verifier on `4fe67d4`: FAIL, 2026-11-17)
+
+Checking a delivered record field by field against each step of the build has now missed four ways to break a
+build (an `outcome` outside its values, a non-string `notes` on a message, a `kind` that is neither, a non-string
+pick field). Stop chasing steps. **A delivered record is taken only if it has exactly the shape Voice's own reader
+writes**, defined once, beside the writer.
+
+1. **One schema, beside the writer.** In `builder/ingest/src/mine.rs`, next to `message_record` and the question
+   writer, add `pub fn check_record(member: &Member, record: &Map<String, Value>) -> Result<()>`. First read
+   `history::read_claude_code_in` (and anything it calls after mining: filters, redaction) to learn every key a
+   record in `decisions-claude-code.jsonl` can carry, then require exactly that set, no other key (so a delivered
+   `split` is refused too), with these types, read from the writer, not guessed:
+   - `kind` is `"message"` or `"question"`; `id`, `timestamp`, `project` are strings.
+   - message: `text` and `context` strings.
+   - question: `header` and `question` strings; `multiSelect` a bool; `options` an array whose items have exactly
+     the keys the writer's `normalized` items have, each of the type it writes; `recommended` a string or null;
+     the member's pick field (`member.pick_field()`) a string or null; `picks` an array of strings; `own_words` and
+     `notes` strings; `outcome` one of the values `mine::outcome` can return (name them once, as a const the
+     writer and the check share, so they can't drift).
+   - If the reader adds a key only sometimes, allow it only with the type it writes.
+   A drift test in `mine.rs`'s tests: every record the existing mining tests produce (find the fixture(s) the
+   question and message tests mine; run them through `check_record`) passes, so the writer can never write a
+   record the check refuses.
+2. **`fold` calls `mine::check_record` for every new delivered record, and nothing else for shape.** Remove from
+   `fold` the piecemeal checks fix-ups 1 to 3 added (the `kind`/`timestamp` check, the `project`/`text` check,
+   the `corpus::question_shape` call, the `Record::options()` call) once `check_record` covers each, and remove
+   `corpus::question_shape` if nothing else calls it (keep `QUESTION_FIELDS`/`answer_fields` shared by `split`).
+   Keep `privacy::privacy` (filters) and the id rules. Tests: the repeat Verifier's four records are each refused
+   with the peer file unchanged: a complete question with `"outcome":"anything"`; a message with `"notes":5`; a
+   record with `kind:"note"`; a held-out-ready question whose pick field is `1`; plus a message with an extra key
+   and a question whose option lacks `description`. Keep the earlier refusal tests passing (rewrite their records
+   to the schema where they relied on a looser one). Mutation-check: dropping any one rule of `check_record` fails
+   a test.
+3. **Classify a failed delivery read by what the file is, not by the error's words.** Replace
+   `delivery_content_error`'s message matching: after a failed read, look at the delivery entry without following
+   a link (`fstatat(…, AT_SYMLINK_NOFOLLOW)` on the deliveries folder's descriptor; add a small helper in
+   `private.rs` beside `read_private_optional_at_max` if none exists, returning the entry's type, size and whether
+   it exists). A link, anything that is not a regular file (a socket, a FIFO, a folder), a regular file over 64 MiB,
+   or a regular file this user can't open (`EACCES`; Radio writes 0600 files the user owns, so this is someone
+   else's doing) is content: refused, deleted, passed. Anything else (the stat itself failing, `EMFILE`, `EIO`) is
+   I/O: `TAKE_FAILED`, delivery and cursor unchanged. Tests: a Unix socket named like a history file is refused,
+   removed and passed (it blocked every take before); a mode-000 regular file likewise; the existing link, FIFO,
+   size and folder tests still pass.
+
+Not changed, recorded: the cursor-restore path after a failed delete has no test (it needs a delete that fails
+after the cursor is written); folding a 256 MiB peer file parses it whole in memory.
+
+Gate as before, plus `cargo test -p voice-ingest`; don't commit.
