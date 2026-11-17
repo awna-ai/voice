@@ -71,6 +71,7 @@ import stat
 import sys
 import subprocess
 import uuid
+import unicodedata
 import zipfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -105,8 +106,17 @@ class CompartmentConfigError(Failed):
     pass
 
 
+def fold(s):
+    return unicodedata.normalize("NFC", s).casefold()
+
+
 def encode(path):
-    return re.sub(r"[^A-Za-z0-9]", "-", str(Path(path).expanduser()))
+    return re.sub(r"[^A-Za-z0-9]", "-", unicodedata.normalize("NFC", str(Path(path).expanduser())))
+
+
+class CompartmentMap(dict):
+    """Validated config with lazily resolved fence roots, private to one member."""
+    _fenced_roots = None
 
 
 def check_compartments(c):
@@ -120,7 +130,7 @@ def check_compartments(c):
             fail(key + "." + unknown)
 
     def path(value, key):
-        if not isinstance(value, str) or not value.startswith(("/", "~/")):
+        if not isinstance(value, str) or not value.startswith(("/", "~/")) or any(c in value for c in ("\x00", "\n")):
             fail(key)
 
     keys(c, {"version", "fenced", "compartments", "hub"}, "config")
@@ -152,9 +162,11 @@ def check_compartments(c):
         if not isinstance(hub.get("routes"), dict):
             fail("hub.routes")
         for name, target in hub["routes"].items():
-            if not name or "/" in name or name in (".", "..") or not isinstance(target, str) or target not in c["compartments"]:
+            if (not name or any(c in name for c in ("/", "\x00", "\n")) or name in (".", "..")
+                    or not isinstance(target, str)
+                    or (target not in c["compartments"] and not re.fullmatch(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*", target))):
                 fail("hub.routes." + name)
-    return c
+    return CompartmentMap(c)
 
 
 def read_compartments(value, base):
@@ -165,7 +177,7 @@ def read_compartments(value, base):
         path = base / path
     try:
         return check_compartments(json.loads(path.read_text()))
-    except (OSError, ValueError):
+    except (OSError, ValueError, UnicodeDecodeError, RecursionError):
         raise CompartmentConfigError("compartments: cannot read JSON file")
 
 
@@ -175,7 +187,7 @@ def declared_folders(c):
 
 
 def under(path, root):
-    return path.parts[:len(root.parts)] == root.parts
+    return tuple(map(fold, path.parts[:len(root.parts)])) == tuple(map(fold, root.parts))
 
 
 def path_forms(path, cwd):
@@ -185,33 +197,94 @@ def path_forms(path, cwd):
     return (Path(os.path.abspath(path)), Path(os.path.realpath(path)))
 
 
+def fenced_forms(c, cwd):
+    cached = getattr(c, "_fenced_roots", None)
+    if cached is None:
+        cached = tuple(root for path in c["fenced"] for root in path_forms(path, cwd))
+        if isinstance(c, CompartmentMap):
+            c._fenced_roots = cached
+    return cached
+
+
+def route_compartment(hub, project):
+    return next((target for name, target in hub["routes"].items() if fold(name) == fold(project)), "p:" + project)
+
+
+def hub_project_compartment(c, hub_path, project):
+    """Accept only literal, known hub projects, without probing fenced paths."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", project):
+        return None
+    target = Path(os.path.abspath(Path(hub_path).expanduser() / project))
+    roots = fenced_forms(c, os.getcwd())
+    if any(under(target, root) or fold(encode(root)) in fold(encode(target)) for root in roots):
+        return None
+    real = Path(os.path.realpath(target))
+    if any(under(real, root) or fold(encode(root)) in fold(encode(real)) for root in roots):
+        return None
+    hub = c["hub"]
+    if any(fold(name) == fold(project) for name in hub["routes"]) or os.path.isdir(target):
+        return route_compartment(hub, project)
+    return None
+
+
 def folder_compartment(c, folder_name):
-    if any(encode(f) in folder_name for f in c["fenced"]):
+    folded = fold(folder_name)
+    if any(fold(encode(f)) in folded for f in c["fenced"]):
         return "fenced"
-    name = re.sub(r"--claude-worktrees-.*", "", folder_name)
-    matches = [(len(encode(folder)), compartment) for compartment, folder in declared_folders(c)
-               if name == encode(folder) or name.startswith(encode(folder) + "-")]
+    name = re.sub(r"--claude-worktrees-.*", "", folder_name, flags=re.I)
+    hub = c.get("hub")
+    if hub:
+        for path in hub["paths"]:
+            prefix = encode(path)
+            if fold(name).startswith(fold(prefix) + "-"):
+                rest = name[len(prefix) + 1:]
+                if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", rest):
+                    matches = [(len(fold(encode(key))), route) for key in hub["routes"]
+                               if (fold(rest) == fold(encode(key)) or fold(rest).startswith(fold(encode(key)) + "-"))
+                               and (route := hub_project_compartment(c, path, key)) is not None]
+                    route = max(matches)[1] if matches else hub_project_compartment(c, path, rest)
+                    if route is not None:
+                        return route
+            if fold(name) == fold(prefix):
+                break
+    matches = [(len(fold(encode(folder))), compartment) for compartment, folder in declared_folders(c)
+               if fold(name) == fold(encode(folder)) or fold(name).startswith(fold(encode(folder)) + "-")]
     return max(matches)[1] if matches else "p:" + project_name(folder_name)
 
 
-def path_compartment(c, path, cwd):
-    forms = path_forms(path, cwd)
-    for fenced in c["fenced"]:
-        roots = path_forms(fenced, cwd)
-        if any(under(form, root) or encode(root) in encode(form) for form in forms for root in roots):
+def path_compartment(c, path, cwd, *, resolve=True):
+    # Check the lexical target before realpath can follow a link out of a fenced tree.
+    absolute = Path(path).expanduser()
+    if not absolute.is_absolute():
+        absolute = Path(cwd).expanduser() / absolute
+    forms = (Path(os.path.abspath(absolute)),)
+    roots = fenced_forms(c, cwd)
+    def fenced():
+        return any(under(form, root) or fold(encode(root)) in fold(encode(form))
+                   for form in forms for root in roots)
+    if fenced():
+        return "fenced"
+    if resolve:
+        forms = path_forms(path, cwd)
+        if fenced():
             return "fenced"
     hub = c.get("hub")
     if hub:
         for hub_path in hub["paths"]:
             for form in forms:
-                for root in path_forms(hub_path, cwd):
+                hub_roots = path_forms(hub_path, cwd) if resolve else (Path(hub_path).expanduser(),)
+                for root in hub_roots:
                     if under(form, root) and len(form.parts) > len(root.parts):
-                        project = form.parts[len(root.parts)]
-                        return hub["routes"].get(project, "p:" + project)
+                        route = hub_project_compartment(c, hub_path, form.parts[len(root.parts)])
+                        if route is not None:
+                            return route
     matches = [(len(root.parts), compartment) for compartment, folder in declared_folders(c)
-               for root in path_forms(folder, cwd) if any(under(form, root) for form in forms)]
+               for root in (path_forms(folder, cwd) if resolve else (folder,))
+               if any(under(form, root) for form in forms)]
     if matches:
         return max(matches)[1]
+    if not resolve:
+        return "p:" + project_name(encode(forms[0].parent))
     directory = forms[0] if forms[0].is_dir() else forms[0].parent
     for ancestor in (directory, *directory.parents):
         if os.path.lexists(ancestor / ".git"):
@@ -225,9 +298,9 @@ def record_compartment(c, record):
         return record["compartment"]
     project = record["project"]
     def matches(folder):
-        prefix = project_name(encode(folder))
-        return project == prefix or project.startswith(prefix + "-")
-    if any(matches(f) for f in c["fenced"]):
+        prefix = fold(project_name(encode(folder)))
+        return fold(project) == prefix or fold(project).startswith(prefix + "-")
+    if any(fold(project_name(encode(f))) in fold(project) for f in c["fenced"]):
         return "fenced"
     found = [(len(project_name(encode(folder))), name) for name, folder in declared_folders(c) if matches(folder)]
     return max(found)[1] if found else "p:" + project
@@ -237,14 +310,22 @@ def cwd_of(args):
     return getattr(args, "cwd", None) or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
 
 
-def resolve_compartment(m, compartment="auto", cwd=None):
+def cwd_compartment(m, cwd=None):
     if m.compartments is None:
-        return "all" if compartment == "auto" else compartment
-    name = path_compartment(m.compartments, cwd or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
-                            os.getcwd()) if compartment == "auto" else compartment
-    if name == "fenced":
+        return "all"
+    candidates = (cwd, os.environ.get("CLAUDE_PROJECT_DIR"), os.getcwd())
+    names = [path_compartment(m.compartments, path, os.getcwd()) for path in candidates if path]
+    return "fenced" if "fenced" in names else names[0]
+
+
+def resolve_compartment(m, compartment="auto", cwd=None):
+    current = cwd_compartment(m, cwd)
+    if current == "fenced":
         raise Fenced("refusing: this folder is fenced")
-    return name
+    if m.compartments is not None and compartment != "auto":
+        if compartment not in (*m.compartments["compartments"], "all") and not (compartment.startswith("p:") and len(compartment) > 2):
+            raise CompartmentConfigError("compartments: unknown compartment")
+    return current if compartment == "auto" else compartment
 
 
 @dataclass(frozen=True)
@@ -632,13 +713,16 @@ def hub_compartment(c, compartment, records):
     if compartment not in owners:
         return compartment
     home = str(Path.home())
-    forms = set()
+    forms = {}
     for path in hub["paths"]:
         absolute = str(Path(path).expanduser())
-        forms.add(absolute)
-        if absolute.startswith(home + "/"):
-            forms.add("~" + absolute[len(home):])
-    pattern = re.compile(r"(?:" + "|".join(re.escape(p) for p in sorted(forms)) + r")/([^/\s\"']+)(?=/|$)")
+        forms[absolute] = path
+        if fold(absolute).startswith(fold(home) + "/"):
+            suffix = absolute[len(home):]
+            forms.update((form, path) for form in ("~" + suffix, "$HOME" + suffix, "${HOME}" + suffix))
+    # Inspect every slash-delimited project, then compare its preceding hub text
+    # with fold on both sides. Keep the original capture for unknown project names.
+    pattern = re.compile(r"/([^/\s\"'`;&|)><]+)(?=/|$|[\s\"'`;&|)><])")
     routes = set()
     for record in records:
         if record.get("type") != "assistant":
@@ -650,8 +734,13 @@ def hub_compartment(c, compartment, records):
             for _, value, is_key in string_paths(block.get("input", {})):
                 if is_key:
                     continue
-                for project in pattern.findall(value):
-                    routes.add(hub["routes"].get(project, "p:" + project))
+                for match in pattern.finditer(value):
+                    prefix = fold(value[:match.start()])
+                    for form, hub_path in forms.items():
+                        if prefix.endswith(fold(form)):
+                            route = hub_project_compartment(c, hub_path, match.group(1))
+                            if route is not None:
+                                routes.add(route)
     routes.discard(compartment)
     return "hub-mixed" if len(routes) > 1 else next(iter(routes), compartment)
 
@@ -662,7 +751,7 @@ def overlaps_fenced(m, root):
     c = m.compartments
     forms = path_forms(root, os.getcwd())
     return path_compartment(c, root, os.getcwd()) == "fenced" or any(
-        under(fenced, form) for path in c["fenced"] for fenced in path_forms(path, os.getcwd()) for form in forms)
+        under(fenced, form) for fenced in fenced_forms(c, os.getcwd()) for form in forms)
 
 
 def refuse_fenced_root(m, root):
@@ -687,9 +776,9 @@ def queue_compartment(m, queues, path):
     if m.compartments is None:
         return {}
     hub = m.compartments.get("hub")
-    if hub and any(os.path.realpath(Path(queues).expanduser()) == os.path.realpath(Path(root).expanduser())
+    if hub and any(fold(os.path.realpath(Path(queues).expanduser())) == fold(os.path.realpath(Path(root).expanduser()))
                    for root in hub["paths"]):
-        name = hub["routes"].get(path.parent.name, "p:" + path.parent.name)
+        name = route_compartment(hub, path.parent.name)
     else:
         name = path_compartment(m.compartments, path, os.getcwd())
     return {"compartment": name}
@@ -954,7 +1043,7 @@ def stdin_object(usage_error, required, optional=()):
 
 
 def cmd_where(m, args):
-    name = path_compartment(m.compartments, cwd_of(args), os.getcwd()) if m.compartments is not None else "all"
+    name = cwd_compartment(m, getattr(args, "cwd", None))
     print(json.dumps({"compartment": name, "fenced": name == "fenced"}) if args.json else name)
     return 4 if name == "fenced" else 0
 
@@ -982,7 +1071,7 @@ def cmd_similar(m, args):
 
 
 def cmd_record(m, args):
-    if m.compartments is not None and path_compartment(m.compartments, cwd_of(args), os.getcwd()) == "fenced":
+    if cwd_compartment(m, getattr(args, "cwd", None)) == "fenced":
         raise Fenced("refusing: fenced")
     if args.stdin:
         text_dests = [dest for dest, _ in args.record_required] + ["rule", "principal_answer"]
@@ -2078,30 +2167,38 @@ def claude_touched(m, projects):
     if not root.is_dir():
         print("no Claude Code transcripts there: no file starts as not mine for being Claude's")
         return touched
-    for folder in sorted(root.iterdir()):
-        if transcript_compartment(m, folder) == "fenced" or overlaps_fenced(m, folder):
-            continue
-        if folder.is_symlink() or not folder.is_dir() or m.excluded.search(folder.name):
-            continue
-        for path in sorted(folder.rglob("*.jsonl")):
-            try:
-                if path.is_symlink():
-                    continue
-                records = read_session(path)
-            except OSError:
+    if m.compartments is None:
+        paths = sorted(root.rglob("*.jsonl"))
+    else:
+        paths = []
+        for folder in sorted(root.iterdir()):
+            if transcript_compartment(m, folder) == "fenced" or overlaps_fenced(m, folder):
                 continue
-            for record in records:
-                message = record.get("message") if isinstance(record, dict) and record.get("type") == "assistant" else None
-                content = message.get("content") if isinstance(message, dict) else None
-                for block in content if isinstance(content, list) else []:
-                    how = WRITE_TOOLS.get(block.get("name")) if isinstance(block, dict) else None
-                    inputs = block.get("input") if how and block.get("type") == "tool_use" else None
-                    target = (inputs.get("file_path") or inputs.get("notebook_path")) if isinstance(inputs, dict) else None
-                    if not isinstance(target, str):
-                        continue
-                    for key in {os.path.normpath(target), os.path.realpath(target)}:
-                        if touched.get(key) != "wrote":
-                            touched[key] = how
+            if folder.is_symlink() or not folder.is_dir() or m.excluded.search(folder.name):
+                continue
+            paths.extend(sorted(folder.rglob("*.jsonl")))
+    for path in paths:
+        try:
+            if path.is_symlink():
+                continue
+            records = read_session(path)
+        except OSError:
+            continue
+        for record in records:
+            message = record.get("message") if isinstance(record, dict) and record.get("type") == "assistant" else None
+            content = message.get("content") if isinstance(message, dict) else None
+            for block in content if isinstance(content, list) else []:
+                how = WRITE_TOOLS.get(block.get("name")) if isinstance(block, dict) else None
+                inputs = block.get("input") if how and block.get("type") == "tool_use" else None
+                target = (inputs.get("file_path") or inputs.get("notebook_path")) if isinstance(inputs, dict) else None
+                if not isinstance(target, str):
+                    continue
+                if m.compartments is not None and path_compartment(
+                        m.compartments, os.path.normpath(target), os.getcwd(), resolve=False) == "fenced":
+                    continue
+                for key in {os.path.normpath(target), os.path.realpath(target)}:
+                    if touched.get(key) != "wrote":
+                        touched[key] = how
     return touched
 
 
@@ -2429,6 +2526,12 @@ COMMANDS = {"where": cmd_where, "sources": cmd_sources, "mine": cmd_mine, "tally
             "shingle": cmd_shingle, "privacy-check": cmd_privacy_check}
 
 
+# Every parser destination whose value is a file or folder (including path lists).
+PATH_ARGUMENTS = ("member", "cwd", "work", "projects", "queues", "corpus", "answers", "labels", "predictions",
+                  "log", "out", "seen", "dir", "out_dir", "questions", "export", "review", "inputs",
+                  "rounds", "train", "pdftotext", "chunk", "doc", "corpora")
+
+
 def parser_for(m, description):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--member", help="the member config (default: $CREW_MEMBER)")
@@ -2598,7 +2701,19 @@ def main(argv=None, member=None, prog="crew_decisions", description=None):
         if getattr(args, name, None):
             setattr(args, name, str(Path(getattr(args, name)).expanduser()))
     try:
+        if m.compartments is not None:
+            for name in PATH_ARGUMENTS:
+                # These commands render/raise their own cwd refusal (where also prints JSON).
+                if name == "cwd":
+                    continue
+                value = getattr(args, name, None)
+                for path in (value if isinstance(value, list) else [value]):
+                    if path and path_compartment(m.compartments, path, cwd_of(args) if name == "work" else os.getcwd()) == "fenced":
+                        raise Fenced("refusing: fenced")
         return COMMANDS[args.cmd](m, args)
+    except CompartmentConfigError as exc:
+        print(f"{prog}: " + " ".join(str(exc).splitlines()), file=sys.stderr)
+        return 2
     except Fenced as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
         return 4

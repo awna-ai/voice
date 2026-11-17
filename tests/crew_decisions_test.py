@@ -5,11 +5,13 @@ Every case runs the real CLI over fixture transcripts in a temp dir, so no test 
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -17,6 +19,18 @@ from crew_fixtures import assert_cli_error, ask, reply, said  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 CREW = SCRIPTS / "crew_decisions.py"
+
+
+TEST_HOME_DIR = tempfile.TemporaryDirectory()
+TEST_HOME = Path(TEST_HOME_DIR.name) / "home"
+ENCODED_HOME = re.sub(r"[^A-Za-z0-9]", "-", str(TEST_HOME))
+HOME_PATCH = patch.dict(os.environ, {"HOME": str(TEST_HOME), "CLAUDE_PROJECT_DIR": ""})
+HOME_PATCH.start()
+
+
+def tearDownModule():
+    HOME_PATCH.stop()
+    TEST_HOME_DIR.cleanup()
 
 
 def marked(when, question, labels, answer):
@@ -53,7 +67,7 @@ class Harness:
 
     def run(self, script, *args, env=None):
         return subprocess.run([sys.executable, str(script), *args], capture_output=True, text=True,
-                              cwd=self.root, timeout=60, env={**os.environ, "HOME": "/Users/p", **(env or {})})
+                              cwd=self.root, timeout=60, env={**os.environ, "HOME": str(TEST_HOME), **(env or {})})
 
     def crew(self, member, *args):
         return self.run(CREW, "--member", member, *args)
@@ -66,7 +80,7 @@ class Harness:
 
 
 def ada_fixture(h):
-    h.session("-Users-p-projects-app", "s1",
+    h.session(ENCODED_HOME + "-projects-app", "s1",
               reply("2026-09-01T09:59:00Z", "Shall I keep two copies of the review queue?"),
               said("2026-09-01T10:00:00Z", "no, keep one source of truth for the review queue"),
               ask("2026-09-01T10:01:00Z", "Where should the review queue live?", ["Repo", "State"],
@@ -77,14 +91,14 @@ def ada_fixture(h):
               said("2026-09-03T10:01:00Z", "You are a lane runner"),
               said("2026-09-03T10:02:00Z", "my therapist moved the review queue meeting"),
               said("2026-09-03T10:03:00Z", "the account number is 123456789"))
-    h.session("-Users-p-projects-garden-club", "s2", said("2026-09-01T10:00:00Z", "grant call"))
+    h.session(ENCODED_HOME + "-projects-garden-club", "s2", said("2026-09-01T10:00:00Z", "grant call"))
     h.session("-private-scratch", "s3", said("2026-09-01T10:00:00Z", "budget call"))
 
 
 class ExampleMember(unittest.TestCase):
     def test_mine_reads_a_list_answer(self):
         h = Harness()
-        h.session("-Users-p-projects-app", "s1",
+        h.session(ENCODED_HOME + "-projects-app", "s1",
                   ask("2026-09-01T10:00:00Z", "List 0?", ["A", "A longer", "B"],
                       ["A longer", "B"], recommended=None, multi=True),
                   ask("2026-09-01T10:02:00Z", "List 2?", ["A", "B"],
@@ -262,7 +276,7 @@ class AnotherMember(unittest.TestCase):
         return proc, [json.loads(line) for line in self.h.read("d.jsonl").splitlines()]
 
     def test_their_mark_word_records_their_pick_and_another_members_mark_is_not_theirs(self):
-        self.h.session("-Users-p-projects-grants", "s1",
+        self.h.session(ENCODED_HOME + "-projects-grants", "s1",
                        marked("2026-09-01T10:00:00Z", "Lead with aim 1?", ["Yes (Recommended · Ari)", "No"],
                               "Yes (Recommended · Ari)"),
                        marked("2026-09-02T10:00:00Z", "Cut the budget table?", ["Cut", "Keep (Ada)"], "Keep (Ada)"))
@@ -274,7 +288,7 @@ class AnotherMember(unittest.TestCase):
         self.assertIsNone(b["ari_pick"])
 
     def test_their_filters_replace_the_other_members(self):
-        self.h.session("-Users-p-projects-lab-dashboard", "s1",
+        self.h.session(ENCODED_HOME + "-projects-lab-dashboard", "s1",
                        said("2026-09-01T10:00:00Z", "the grant call is due friday"),
                        said("2026-09-01T10:01:00Z", "my doctor moved it"),
                        said("2026-09-01T10:02:00Z", "student 12345678 asked for an extension"),
@@ -282,7 +296,7 @@ class AnotherMember(unittest.TestCase):
                        said("2026-09-01T10:04:00Z", "Pasted: a syllabus"),
                        said("2026-09-01T10:05:00Z", "the IRB amendment goes first"),
                        said("2026-09-01T10:06:00Z", "You are kept for this member"))
-        self.h.session("-Users-p-projects-hoa-board", "s2", said("2026-09-01T10:00:00Z", "dues"))
+        self.h.session(ENCODED_HOME + "-projects-hoa-board", "s2", said("2026-09-01T10:00:00Z", "dues"))
         proc, records = self.mine()
         self.assertEqual([r["text"] for r in records],
                          ["the grant call is due friday", "the IRB amendment goes first",
@@ -290,7 +304,7 @@ class AnotherMember(unittest.TestCase):
         self.assertIn("dropped 1 excluded folders, 1 personal records, 2 secret records", proc.stdout)
 
     def test_score_and_record_use_their_names(self):
-        self.h.session("-Users-p-projects-grants", "s1",
+        self.h.session(ENCODED_HOME + "-projects-grants", "s1",
                        marked("2026-09-01T10:00:00Z", "Lead with aim 1?", ["Yes (Recommended · Ari)", "No"],
                               "Yes (Recommended · Ari)"))
         self.mine()
@@ -317,7 +331,7 @@ class AnotherMember(unittest.TestCase):
         self.assertNotIn("ada_pick", line)
 
     def test_similar_defaults_to_the_corpus_in_their_state_dir(self):
-        self.h.session("-Users-p-projects-grants", "s1",
+        self.h.session(ENCODED_HOME + "-projects-grants", "s1",
                        said("2026-09-01T10:00:00Z", "always lead the aims page with the community partner need"))
         state = self.h.root / "state"
         state.mkdir()
@@ -329,7 +343,7 @@ class AnotherMember(unittest.TestCase):
         self.assertEqual(len(json.loads(found.stdout)), 1)
 
     def test_the_env_var_names_the_member(self):
-        self.h.session("-Users-p-projects-grants", "s1", said("2026-09-01T10:00:00Z", "kept"))
+        self.h.session(ENCODED_HOME + "-projects-grants", "s1", said("2026-09-01T10:00:00Z", "kept"))
         proc = self.h.run(CREW, "mine", "--projects", str(self.h.projects), "--out", "d.jsonl",
                           env={"CREW_MEMBER": self.member})
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -349,15 +363,15 @@ class PrivateOverlay(unittest.TestCase):
     def test_its_filters_extend_the_members(self):
         self.overlay({"filters": {"excluded_folders": "garden-club", "personal": r"\bmy cat\b",
                                   "secret": r"\bpin \d{4}\b", "pasted_prefixes": ["Quoted: "]}})
-        self.h.session("-Users-p-projects-grants", "s1",
+        self.h.session(ENCODED_HOME + "-projects-grants", "s1",
                        said("2026-09-01T10:00:00Z", "the grant call is due friday"),
                        said("2026-09-01T10:01:00Z", "my doctor moved it"),
                        said("2026-09-01T10:02:00Z", "my cat is at the vet"),
                        said("2026-09-01T10:03:00Z", "the door pin 1234 changed"),
                        said("2026-09-01T10:04:00Z", "Pasted: a syllabus"),
                        said("2026-09-01T10:05:00Z", "Quoted: an email"))
-        self.h.session("-Users-p-projects-hoa-board", "s2", said("2026-09-01T10:00:00Z", "dues"))
-        self.h.session("-Users-p-garden-club", "s3", said("2026-09-01T10:00:00Z", "the plot rota"))
+        self.h.session(ENCODED_HOME + "-projects-hoa-board", "s2", said("2026-09-01T10:00:00Z", "dues"))
+        self.h.session(ENCODED_HOME + "-garden-club", "s3", said("2026-09-01T10:00:00Z", "the plot rota"))
         proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "d.jsonl")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         texts = [json.loads(line)["text"] for line in self.h.read("d.jsonl").splitlines()]
@@ -405,7 +419,7 @@ class Pending(unittest.TestCase):
         member = h.member(ADA)
         for name, entrypoint in [("desktop", "claude-desktop"), ("terminal", "cli"), ("job-run", "sdk-cli"),
                                  ("unknown", None)]:
-            h.session("-Users-p-projects-app", name, asking("2026-10-25T10:00:00Z", "t1", "Which?", entrypoint))
+            h.session(ENCODED_HOME + "-projects-app", name, asking("2026-10-25T10:00:00Z", "t1", "Which?", entrypoint))
         proc = h.crew(member, "pending", "--projects", str(h.projects), "--seen", str(h.root / "seen.json"))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual([json.loads(line)["session"] for line in proc.stdout.splitlines()], ["job-run"])
@@ -576,7 +590,7 @@ class Compartments(unittest.TestCase):
         self.assertEqual(self.c.folder_compartment(c, "-private-tmp-" + fenced + "-id-scratchpad"), "fenced")
         for path, cwd, expected in (("notes/x.md", home + "/projects/work", "work"),
                                     ("~/.hub/projects/client-stack/x.md", home, "client"),
-                                    ("~/.hub/projects/unknown/x.md", home, "p:unknown"),
+                                    ("~/.hub/projects/unknown/x.md", home, "work"),
                                     ("~/.other-hub/projects/client-stack/x.md", home, "client"),
                                     ("~/garden-club/sub/x.md", home, "fenced")):
             self.assertEqual(self.c.path_compartment(c, path, cwd), expected)
@@ -604,6 +618,57 @@ class Compartments(unittest.TestCase):
             with self.subTest(hub=hub):
                 with self.assertRaisesRegex(self.c.Failed, error):
                     self.c.check_compartments({**self.config, "hub": hub})
+
+    def test_hub_projects_require_a_route_or_real_directory(self):
+        hub = TEST_HOME / ".hub/projects"
+        garden = hub / "garden"
+        garden.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, hub.parent)
+        for name in ("*", "client-*", "{a,b}", "$p", ".git", ".flightdeck", "missing"):
+            # Even an on-disk directory or route cannot admit invalid syntax.
+            if name != "missing":
+                (hub / name).mkdir()
+                self.config["hub"]["routes"][name] = "client"
+            with self.subTest(name=name):
+                target = "~/.hub/projects/" + name + "/queue.md"
+                self.assertEqual(self.c.hub_compartment(self.config, "work", [self.write_tool(target)]), "work")
+                self.assertEqual(self.c.path_compartment(self.config, target, TEST_HOME), "work")
+                self.assertEqual(self.c.folder_compartment(self.config, self.c.encode("~/.hub/projects") + "-" + name), "work")
+        for route, expected in ((None, "p:garden"), ("p:garden-site", "p:garden-site")):
+            if route:
+                self.config["hub"]["routes"]["GARDEN"] = route
+            with self.subTest(route=route):
+                target = "~/.hub/projects/garden/queue.md"
+                self.assertEqual(self.c.hub_compartment(self.config, "work", [self.write_tool(target)]), expected)
+                self.assertEqual(self.c.path_compartment(self.config, target, TEST_HOME), expected)
+                self.assertEqual(self.c.folder_compartment(self.config, self.c.encode("~/.hub/projects/garden")), expected)
+        # Existence in a different hub does not make this hub's project real.
+        target = "~/.other-hub/projects/garden/queue.md"
+        self.config["hub"]["routes"].pop("GARDEN")
+        self.assertEqual(self.c.hub_compartment(self.config, "work", [self.write_tool(target)]), "work")
+        self.assertEqual(self.c.path_compartment(self.config, target, TEST_HOME), "work")
+
+    def test_hub_projects_never_probe_a_fenced_directory(self):
+        target = TEST_HOME / ".hub/projects/blocked"
+        self.config["fenced"].append(str(target))
+        self.config["hub"]["routes"]["blocked"] = "client"
+        isdir = os.path.isdir
+        def guarded(path):
+            self.assertFalse(self.c.under(Path(path), target), "probed fenced project")
+            return isdir(path)
+        with patch.object(self.c.os.path, "isdir", side_effect=guarded):
+            self.assertEqual(self.c.hub_compartment(self.config, "work", [self.write_tool(target / "queue.md")]), "work")
+            self.assertEqual(self.c.path_compartment(self.config, target / "queue.md", TEST_HOME), "fenced")
+            self.assertEqual(self.c.folder_compartment(self.config, self.c.encode(target)), "fenced")
+
+    def test_hub_route_targets(self):
+        for target in ("work", "p:garden-site", "p:.site", "p:Garden_2.0"):
+            with self.subTest(target=target):
+                self.c.check_compartments({**self.config, "hub": {**self.config["hub"], "routes": {"garden": target}}})
+        for target in ("p:", "p:a/b", "p:*", "p:-site", "absent", None):
+            with self.subTest(target=target):
+                with self.assertRaisesRegex(self.c.Failed, "hub.routes.garden"):
+                    self.c.check_compartments({**self.config, "hub": {**self.config["hub"], "routes": {"garden": target}}})
 
     def test_load_member_compartments_path(self):
         from unittest.mock import patch
@@ -636,29 +701,29 @@ class Compartments(unittest.TestCase):
                                      for i, (project, name) in enumerate((("work", "work"), ("client", "client"),
                                                                          ("private", "fenced"), ("hub", "hub-mixed")))]
         (self.h.root / "corpus.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-        for cwd, name, code in (("/Users/p/projects/work", "work", 0), ("/Users/p/garden-club", "fenced", 4)):
+        for cwd, name, code in ((str(TEST_HOME / "projects/work"), "work", 0), (str(TEST_HOME / "garden-club"), "fenced", 4)):
             proc = self.h.crew(self.member, "where", "--cwd", cwd, "--json")
             self.assertEqual(proc.returncode, code, proc.stderr)
             self.assertEqual(json.loads(proc.stdout), {"compartment": name, "fenced": code == 4})
         for flags, names in ((("--compartment", "work"), ["work"]),
-                             (("--cwd", "/Users/p/projects/client"), ["client"]),
+                             (("--cwd", str(TEST_HOME / "projects/client")), ["client"]),
                              (("--compartment", "all"), ["work", "client", "hub"])):
             proc = self.h.crew(self.member, "similar", "--corpus", "corpus.jsonl", "--query", "review queue",
                                "--json", *flags)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual({r["project"] for r in json.loads(proc.stdout)}, set(names))
         proc = self.h.crew(self.member, "similar", "--corpus", "missing", "--query", "q",
-                           "--cwd", "/Users/p/garden-club")
+                           "--cwd", str(TEST_HOME / "garden-club"))
         self.assertEqual(proc.returncode, 4, proc.stderr)
         self.assertIn("refusing: this folder is fenced", proc.stderr)
         common = ("--log", "live.jsonl", "--kind", "decided", "--category", "scope", "--tier", "high",
                   "--question", "Queue?", "--ada-pick", "Keep")
-        for cwd, work in (("/Users/p/garden-club", "x.md"), ("/Users/p/projects/work", "/Users/p/garden-club/x")):
+        for cwd, work in ((str(TEST_HOME / "garden-club"), "x.md"), (str(TEST_HOME / "projects/work"), str(TEST_HOME / "garden-club/x"))):
             proc = self.h.crew(self.member, "record", *common, "--cwd", cwd, "--work", work)
             self.assertEqual(proc.returncode, 4, proc.stderr)
             self.assertIn("refusing: fenced", proc.stderr)
             self.assertFalse((self.h.root / "live.jsonl").exists())
-        proc = self.h.crew(self.member, "record", *common, "--cwd", "/Users/p/projects/work", "--work", "notes/x")
+        proc = self.h.crew(self.member, "record", *common, "--cwd", str(TEST_HOME / "projects/work"), "--work", "notes/x")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads(self.h.read("live.jsonl"))["compartment"], "work")
 
@@ -677,7 +742,7 @@ class Compartments(unittest.TestCase):
         member = self.h.member(ADA)
         proc = self.h.crew(member, "where")
         self.assertEqual((proc.returncode, proc.stdout), (0, "all\n"), proc.stderr)
-        self.h.session("-Users-p-projects-work", "s", said("2026-09-01T00:00:00Z", "keep the review queue"))
+        self.h.session(ENCODED_HOME + "-projects-work", "s", said("2026-09-01T00:00:00Z", "keep the review queue"))
         proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("compartment", json.loads(self.h.read("out.jsonl")))
@@ -685,18 +750,21 @@ class Compartments(unittest.TestCase):
     def test_fenced_scans_and_hub_sessions(self):
         if os.geteuid() == 0:
             self.skipTest("mode 000 requires an unprivileged user")
-        fenced = self.h.projects / "-Users-p-garden-club"
+        fenced = self.h.projects / (ENCODED_HOME + "-garden-club")
         fenced.mkdir(parents=True)
         fenced.chmod(0)
         self.addCleanup(fenced.chmod, 0o700)
+        other = TEST_HOME / ".hub/projects/other"
+        other.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, other.parent.parent)
         for session, targets in (("one", ["~/.hub/projects/client-stack/x.md"]),
-                                 ("mixed", ["/Users/p/.hub/projects/client-stack", "~/.hub/projects/other/x.md"]),
+                                 ("mixed", [str(TEST_HOME / ".hub/projects/client-stack"), "~/.hub/projects/other/x.md"]),
                                  ("second", ["~/.other-hub/projects/client-stack/x.md"]),
-                                 ("second-absolute", ["/Users/p/.other-hub/projects/client-stack/x.md"]),
+                                 ("second-absolute", [str(TEST_HOME / ".other-hub/projects/client-stack/x.md")]),
                                  ("none", [])):
             tool = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read",
                     "input": {"nested": [{"file_path": target} for target in targets]}}]}}
-            self.h.session("-Users-p--hub", session, tool,
+            self.h.session(ENCODED_HOME + "--hub", session, tool,
                            said("2026-09-01T00:00:00Z", "keep every review queue verdict for later scoring " + session))
         proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -763,7 +831,7 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(json.loads(proc.stdout)[0]["state"], "fenced")
 
     def test_pending_compartments_and_fenced_queues(self):
-        self.h.session("-Users-p-projects-work", "s", {
+        self.h.session(ENCODED_HOME + "-projects-work", "s", {
             "type": "assistant", "timestamp": "2026-09-01T00:00:00Z", "entrypoint": "sdk-cli",
             "message": {"content": [{"type": "tool_use", "id": "t", "name": "AskUserQuestion",
                         "input": {"questions": [{"question": "Which queue?", "options": [{"label": "Keep"}]}]}}]}})
@@ -789,14 +857,14 @@ class Compartments(unittest.TestCase):
             self.assertEqual(self.c.cwd_of(Namespace(cwd=None)), "/env")
         with patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": ""}):
             self.assertEqual(self.c.cwd_of(Namespace()), os.getcwd())
-        for cwd, work, code in (("/Users/p/garden-club", "notes", 4),
-                                ("/Users/p/projects/work", "/Users/p/garden-club/x", 4),
-                                ("/Users/p/projects/work", "notes", 0)):
+        for cwd, work, code in ((str(TEST_HOME / "garden-club"), "notes", 4),
+                                (str(TEST_HOME / "projects/work"), str(TEST_HOME / "garden-club/x"), 4),
+                                (str(TEST_HOME / "projects/work"), "notes", 0)):
             data = {"work": work, "kind": "decided", "category": "scope", "tier": "high",
                     "question": "Which queue?", "pick": "Keep"}
             proc = subprocess.run([sys.executable, str(CREW), "--member", self.member, "record", "--stdin",
                                    "--cwd", cwd, "--log", "stdin.jsonl"], input=json.dumps(data), text=True,
-                                  capture_output=True, cwd=self.h.root, env={**os.environ, "HOME": "/Users/p"})
+                                  capture_output=True, cwd=self.h.root, env={**os.environ, "HOME": str(TEST_HOME)})
             self.assertEqual(proc.returncode, code, proc.stderr)
             if code == 4:
                 self.assertFalse((self.h.root / "stdin.jsonl").exists())
@@ -809,7 +877,7 @@ class Compartments(unittest.TestCase):
         target.write_text(json.dumps(said("2026-09-01T00:00:00Z", "keep the queue")) + "\n")
         self.config["fenced"] = [str(secret)]
         self.h.write("compartments.json", self.config)
-        folder = self.h.projects / "-Users-p-projects-work"
+        folder = self.h.projects / (ENCODED_HOME + "-projects-work")
         folder.mkdir(parents=True)
         (folder / "alias.jsonl").symlink_to(target)
         proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
@@ -859,7 +927,7 @@ class Compartments(unittest.TestCase):
 
     def test_review_never_walks_a_nested_fence(self):
         from unittest.mock import patch
-        folder = self.h.projects / "-Users-p-projects-work"
+        folder = self.h.projects / (ENCODED_HOME + "-projects-work")
         fenced = folder / "private"
         fenced.mkdir(parents=True)
         self.config["fenced"] = [str(fenced)]
@@ -902,6 +970,194 @@ class Compartments(unittest.TestCase):
         record = {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "input": {"~/.hub/projects/client-stack/x.md": "nothing"}}]}}
         self.assertEqual(self.c.hub_compartment(m.compartments, "work", [record]), "work")
+
+    def save_config(self):
+        self.h.write("compartments.json", self.config)
+        return self.c.load_member(self.c.read_member(self.member))
+
+    def test_case_and_unicode_fence_cli_and_mine(self):
+        self.config["fenced"] = ["~/Garden Club", "~/Café"]
+        m = self.save_config()
+        commands = (("where", "--cwd", "~/garden club"),
+                    ("record", "--work", "~/GARDEN CLUB/x.md", "--log", "live.jsonl"),
+                    ("documents", "--dir", "~/garden club", "--out-dir", "out"),
+                    ("where", "--cwd", "~/Cafe\u0301"))
+        for command in commands:
+            with self.subTest(command=command):
+                proc = self.h.crew(self.member, *command)
+                self.assertEqual(proc.returncode, 4, proc.stderr)
+        self.assertFalse((self.h.root / "live.jsonl").exists())
+        folder = self.c.encode("~/Garden Club").lower()
+        self.h.session(folder, "s", said("2026-09-01T00:00:00Z", "never read this"))
+        with patch.object(self.c, "read_session", side_effect=AssertionError("read fenced transcript")):
+            args = self.c.parser_for(m, "test").parse_args([
+                "mine", "--projects", str(self.h.projects), "--out", str(self.h.root / "mine.jsonl")])
+            self.c.cmd_mine(m, args)
+        proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+        self.assertIn("1 fenced folders", proc.stdout)
+        self.assertEqual(self.h.read("out.jsonl"), "")
+
+    def test_folded_comparisons_and_original_names(self):
+        self.config["fenced"] = ["~/Cafe\u0301"]
+        m = self.save_config()
+        c = m.compartments
+        self.assertEqual(self.c.path_compartment(c, "~/Café/x", TEST_HOME), "fenced")
+        self.assertTrue(self.c.under(Path("/A/Café/x"), Path("/a/Cafe\u0301")))
+        self.assertEqual(self.c.folder_compartment(c, self.c.encode("~/PROJECTS/WORK")), "work")
+        self.assertEqual(self.c.path_compartment(c, "~/PROJECTS/WORK/x", TEST_HOME), "work")
+        self.assertEqual(self.c.record_compartment(c, {"project": "WORK"}), "work")
+        self.assertEqual(self.c.path_compartment(c, "~/.HUB/PROJECTS/CLIENT-STACK/x", TEST_HOME), "client")
+        self.assertEqual(self.c.path_compartment(c, "~/.HUB/PROJECTS/New-App/x", TEST_HOME), "work")
+        self.assertTrue(self.c.overlaps_fenced(m, str(TEST_HOME).upper()))
+        self.assertEqual(self.c.queue_compartment(m, "~/.HUB/PROJECTS",
+                         Path("~/.HUB/PROJECTS/CLIENT-STACK/queue.md")), {"compartment": "client"})
+        self.assertEqual(self.c.path_compartment(c, self.c.encode("~/Cafe\u0301").upper(), TEST_HOME), "fenced")
+
+    def test_similar_override_cannot_bypass_fence(self):
+        for compartment in ("all", "work", "p:other", "auto"):
+            proc = self.h.crew(self.member, "similar", "--compartment", compartment,
+                               "--cwd", "~/garden-club", "--corpus", "missing", "--query", "q")
+            self.assertEqual(proc.returncode, 4, proc.stderr)
+
+    def test_similar_rejects_unknown_compartment_one_line(self):
+        for compartment in ("typo", "fenced", "hub-mixed", "p:"):
+            proc = self.h.crew(self.member, "similar", "--compartment", compartment,
+                               "--corpus", "missing", "--query", "q")
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertEqual(len(proc.stderr.splitlines()), 1)
+
+    def test_legacy_scratchpad_project_fence_substring(self):
+        project = "private-tmp-" + self.c.project_name(self.c.encode("~/garden-club")).upper() + "-id-scratchpad"
+        self.assertEqual(self.c.record_compartment(self.config, {"project": project}), "fenced")
+
+    def test_hub_shell_boundaries_and_home_forms(self):
+        absolute = str(TEST_HOME / ".hub/projects")
+        for hub in (absolute, "~/.hub/projects", "$HOME/.hub/projects", "${HOME}/.hub/projects"):
+            for suffix in ("", "/file", " && x", '"', "'", "`", ";x", "&x", "|x", ")", ">x", "<x"):
+                with self.subTest(hub=hub, suffix=suffix):
+                    text = 'cd "' + hub.upper().replace("$HOME", "$HOME") + "/CLIENT-STACK" + suffix
+                    record = {"type": "assistant", "message": {"content": [
+                        {"type": "tool_use", "input": {"command": text}}]}}
+                    self.assertEqual(self.c.hub_compartment(self.config, "work", [record]), "client")
+
+    def test_hub_unicode_prefix_and_route_casefold(self):
+        self.config["hub"]["paths"] = ["~/Café/hub"]
+        self.config["compartments"]["work"]["folders"].append("~/Café")
+        self.config["hub"]["routes"]["Straße"] = "client"
+        record = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "input": {"command": "ls ~/Cafe\u0301/HUB/STRASSE && x"}}]}}
+        self.assertEqual(self.c.hub_compartment(self.config, "work", [record]), "client")
+
+    def test_hub_session_folder_longest_route(self):
+        self.config["hub"]["routes"]["client"] = "work"
+        for suffix, expected in (("client-stack", "client"), ("client-stack--claude-worktrees-one", "client"),
+                                 ("Other-App", "work"), ("clientele", "work")):
+            folder = self.c.encode("~/.HUB/PROJECTS") + "-" + suffix
+            self.assertEqual(self.c.folder_compartment(self.config, folder), expected)
+
+    @staticmethod
+    def write_tool(target):
+        return {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Write", "input": {"file_path": str(target)}}]}}
+
+    def test_touched_skips_fenced_target_before_realpath(self):
+        fenced = self.h.root / "fenced"
+        fenced.mkdir()
+        outside = self.h.root / "outside.md"
+        outside.write_text("outside")
+        target = fenced / "link"
+        target.symlink_to(outside)
+        self.config["fenced"] = [str(fenced)]
+        m = self.save_config()
+        self.h.session("allowed", "s", self.write_tool(target))
+        realpath = os.path.realpath
+        def guarded(path, *args, **kwargs):
+            self.assertFalse(Path(path) != fenced and self.c.under(Path(path), fenced), "realpath saw fenced argument")
+            return realpath(path, *args, **kwargs)
+        # Prime root forms separately: only the tool target must never be resolved.
+        self.c.path_compartment(m.compartments, self.h.projects, self.h.root)
+        with patch.object(os.path, "realpath", guarded):
+            self.assertEqual(self.c.claude_touched(m, self.h.projects), {})
+
+    def test_explicit_fenced_paths_refused_before_io(self):
+        fenced = self.h.root / "fenced"
+        self.config["fenced"] = [str(fenced)]
+        self.save_config()
+        for command in (("record", "--log", str(fenced / "live.jsonl")),
+                        ("similar", "--corpus", str(fenced / "c.jsonl"), "--query", "q")):
+            proc = self.h.crew(self.member, *command)
+            self.assertEqual(proc.returncode, 4, proc.stderr)
+        self.assertFalse(fenced.exists())
+        with patch.object(self.c, "read_jsonl", side_effect=AssertionError("read fenced corpus")):
+            self.assertEqual(self.c.main(["--member", self.member, "similar", "--query", "q",
+                                         "--corpus", str(fenced / "c.jsonl")]), 4)
+
+    def test_parser_path_dest_inventory(self):
+        import argparse
+        expected = {"member", "cwd", "work", "projects", "queues", "corpus", "answers", "labels", "predictions",
+                    "log", "out", "seen", "dir", "out_dir", "questions", "export", "review", "inputs",
+                    "rounds", "train", "pdftotext", "chunk", "doc", "corpora"}
+        found = set()
+        def visit(parser):
+            for action in parser._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    for sub in action.choices.values():
+                        visit(sub)
+                elif action.dest in expected:
+                    found.add(action.dest)
+        visit(self.c.parser_for(None, "test"))
+        self.assertEqual(found, expected)
+        self.assertEqual(set(self.c.PATH_ARGUMENTS), found)
+
+    def test_bad_compartments_recursion_unicode_and_controls(self):
+        for data in (b"[" * 2000, b"\xff"):
+            (self.h.root / "compartments.json").write_bytes(data)
+            proc = self.h.crew(self.member, "where")
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertEqual(len(proc.stderr.splitlines()), 1)
+        for bad in ("\x00", "\n"):
+            for location in ("fenced", "folder", "hub", "route"):
+                c = json.loads(json.dumps(self.config))
+                if location == "fenced": c["fenced"] = ["~/bad" + bad]
+                if location == "folder": c["compartments"]["work"]["folders"] = ["~/bad" + bad]
+                if location == "hub": c["hub"]["paths"] = ["~/bad" + bad]
+                if location == "route": c["hub"]["routes"] = {"bad" + bad: "work"}
+                self.h.write("compartments.json", c)
+                with self.subTest(location=location, bad=bad):
+                    proc = self.h.crew(self.member, "where")
+                    self.assertEqual(proc.returncode, 2, proc.stderr)
+                    self.assertEqual(len(proc.stderr.splitlines()), 1)
+
+    def test_touched_no_config_base_parity(self):
+        m = self.c.load_member(ADA)
+        targets = [self.h.root / "excluded.md", self.h.root / "top.md"]
+        self.h.session("-private-excluded", "s", self.write_tool(targets[0]))
+        (self.h.projects / "top.jsonl").write_text(json.dumps(self.write_tool(targets[1])) + "\n")
+        expected = {key: "wrote" for target in targets
+                    for key in (os.path.normpath(target), os.path.realpath(target))}
+        self.assertEqual(self.c.claude_touched(m, self.h.projects), expected)
+
+    def test_all_cwd_sources_enforce_fence(self):
+        from contextlib import redirect_stdout, redirect_stderr
+        import io
+        m = self.save_config()
+        commands = (("where", "--cwd", "~/projects/work"),
+                    ("similar", "--cwd", "~/projects/work", "--compartment", "all", "--query", "q"),
+                    ("record", "--cwd", "~/projects/work", "--work", "x", "--kind", "decided",
+                     "--category", "scope", "--tier", "high", "--question", "q", "--ada-pick", "keep"))
+        for env, cwd in (("~/garden-club", str(self.h.root)), ("~/projects/work", str(TEST_HOME / "garden-club"))):
+            for command in commands:
+                with self.subTest(command=command, env=env, cwd=cwd), patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": env}), \
+                     patch.object(os, "getcwd", return_value=cwd), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    self.assertEqual(self.c.main(list(command), member={**ADA, "compartments": self.config}), 4)
+
+    def test_fenced_root_forms_cached_per_member(self):
+        m = self.save_config()
+        original = self.c.path_forms
+        with patch.object(self.c, "path_forms", wraps=original) as forms:
+            for _ in range(3):
+                self.c.path_compartment(m.compartments, "~/projects/work", TEST_HOME)
+            self.assertEqual(sum(call.args[0] == "~/garden-club" for call in forms.call_args_list), 1)
 
 
 if __name__ == "__main__":
