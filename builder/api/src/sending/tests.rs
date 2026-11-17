@@ -1283,11 +1283,21 @@ fn delivered_records_accept_optional_reader_split() {
     }
 }
 
-fn sized_message(line_bytes: usize) -> Value {
-    let mut value = record("sized", "");
+#[test]
+fn delivered_record_limit_fits_full_backtest_batch() {
+    let batch_bytes =
+        voice_build::build::BATCH * (1 + voice_build::build::PRECEDENTS) * DELIVERED_RECORD_BYTES;
+    assert!(batch_bytes < voice_agent::provider::MAX_PROMPT);
+}
+
+fn sized_question(line_bytes: usize) -> Value {
+    let (h, _) = prepare_delivery();
+    let mut value = complete_question();
+    value[member(&h.0).pick_field()] = json!("A");
+    value["question"] = json!("");
     let overhead =
         voice_ingest::mine::to_jsonl(std::slice::from_ref(value.as_object().unwrap())).len();
-    value["text"] = json!("x".repeat(line_bytes - overhead));
+    value["question"] = json!("x".repeat(line_bytes - overhead));
     assert_eq!(
         voice_ingest::mine::to_jsonl(std::slice::from_ref(value.as_object().unwrap(),)).len(),
         line_bytes
@@ -1296,10 +1306,10 @@ fn sized_message(line_bytes: usize) -> Value {
 }
 
 #[test]
-fn delivery_skips_only_records_above_one_build_part() {
+fn delivery_skips_only_records_above_delivered_record_limit() {
     let (h, s) = prepare_delivery();
     let ordinary = record("small", "Keep it small.");
-    let oversized = sized_message(voice_build::build::PART_BYTES + 1);
+    let oversized = sized_question(DELIVERED_RECORD_BYTES + 1);
     let incoming = s.join("deliveries/history-1-1.jsonl");
     fs::write(&incoming, lines(&[oversized, ordinary.clone()])).unwrap();
     let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
@@ -1315,9 +1325,9 @@ fn delivery_skips_only_records_above_one_build_part() {
 }
 
 #[test]
-fn delivery_keeps_record_at_exactly_one_build_part() {
+fn delivery_keeps_record_at_exactly_delivered_record_limit() {
     let (h, s) = prepare_delivery();
-    let value = sized_message(voice_build::build::PART_BYTES);
+    let value = sized_question(DELIVERED_RECORD_BYTES);
     let incoming = s.join("deliveries/history-1-1.jsonl");
     fs::write(&incoming, lines(std::slice::from_ref(&value))).unwrap();
     let (_, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));

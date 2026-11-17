@@ -16,6 +16,11 @@ use voice_save::record::{Role, SaveRecord};
 type Result<T> = std::result::Result<T, dto::Failure>;
 const PEER_LIMIT: u64 = 256 * 1024 * 1024;
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
+/// A full backtest batch (40 questions, each with 6 precedents) stays below the
+/// provider's 8 MiB prompt limit. A real message (4000 characters, 300-character
+/// context, 255-byte project) fits unless mostly emoji or control characters;
+/// skip only that record, never the whole send.
+const DELIVERED_RECORD_BYTES: usize = 16 * 1024;
 const HISTORY_FAILED: &str = "Voice couldn't open this computer's history. Try reading it again.";
 const TAKE_FAILED: &str = "Voice couldn't take the history your other computers sent. Try again.";
 const STATUS_FAILED: &str = "Voice couldn't read the history status. Try again.";
@@ -229,7 +234,7 @@ fn fold(
         };
         voice_ingest::mine::check_record(member, &record)?;
         if voice_ingest::mine::to_jsonl(std::slice::from_ref(&record)).len()
-            > voice_build::build::PART_BYTES
+            > DELIVERED_RECORD_BYTES
         {
             continue;
         }

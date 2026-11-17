@@ -201,6 +201,9 @@ pub fn project_name(folder: &str, home: &Path) -> String {
 }
 const RECORD_ID_HEX_CHARS: usize = 12;
 const MESSAGE_CONTEXT_CHARS: usize = 300;
+const MESSAGE_TEXT_CHARS: usize = 4000;
+/// A local project is a folder name, limited to 255 bytes.
+const PROJECT_FOLDER_NAME_BYTES: usize = 255;
 
 fn record_id(kind: &str, session: &str, when: &str, text: &str) -> String {
     // SHA-1 is only a stable record id, never a security control.
@@ -523,7 +526,7 @@ pub(crate) fn own_message(filters: &Filters, text: String) -> Option<String> {
             .iter()
             .any(|p| text.starts_with(p))
         || ["try again", "continue", "retry"].contains(&text.to_lowercase().as_str())
-        || text.chars().count() > 4000
+        || text.chars().count() > MESSAGE_TEXT_CHARS
     {
         None
     } else {
@@ -577,6 +580,9 @@ pub fn check_record(member: &Member, record: &Map<String, Value>) -> Result<()> 
     {
         return Err(invalid());
     }
+    if record["project"].as_str().ok_or_else(invalid)?.len() > PROJECT_FOLDER_NAME_BYTES {
+        return Err(invalid());
+    }
     let id = record["id"].as_str().ok_or_else(invalid)?;
     if !id.strip_prefix(&format!("{kind}:")).is_some_and(|suffix| {
         suffix.len() == RECORD_ID_HEX_CHARS
@@ -584,6 +590,11 @@ pub fn check_record(member: &Member, record: &Map<String, Value>) -> Result<()> 
                 .bytes()
                 .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
     }) {
+        return Err(invalid());
+    }
+    if kind == "message"
+        && record["text"].as_str().ok_or_else(invalid)?.chars().count() > MESSAGE_TEXT_CHARS
+    {
         return Err(invalid());
     }
     if kind == "message"
@@ -1062,6 +1073,37 @@ mod tests {
                 record.insert("id".into(), Value::from(id.clone()));
                 assert!(check_record(&member, &record).is_err(), "invalid {id}");
             }
+        }
+    }
+
+    #[test]
+    fn check_record_limits_project_by_bytes() {
+        let member =
+            voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();
+        let mut record = message_record("session", "now", "demo", "Keep it small.", "");
+        for project in ["a".repeat(255), "界".repeat(85)] {
+            record.insert("project".into(), Value::from(project));
+            check_record(&member, &record).unwrap();
+        }
+        for project in ["a".repeat(256), format!("{}a", "界".repeat(85))] {
+            record.insert("project".into(), Value::from(project));
+            assert!(check_record(&member, &record).is_err(), "256-byte project");
+        }
+    }
+
+    #[test]
+    fn check_record_limits_message_text_by_characters() {
+        let member =
+            voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();
+        for character in ["a", "界"] {
+            let mut record = message_record("session", "now", "demo", "", "");
+            record.insert("text".into(), Value::from(character.repeat(4000)));
+            check_record(&member, &record).unwrap();
+            record.insert("text".into(), Value::from(character.repeat(4001)));
+            assert!(
+                check_record(&member, &record).is_err(),
+                "4001 {character} characters"
+            );
         }
     }
 
