@@ -823,6 +823,21 @@ class Compartments(unittest.TestCase):
         self.assertEqual({r["project"]: r["compartment"] for r in rows}, {"work": "work", ".hub": "client"})
         self.assertEqual(len({r["id"] for r in rows}), len(rows))
 
+    def test_hub_project_folder_keeps_its_compartment(self):
+        self.config["hub"]["routes"].update({"garden": "p:garden", "orchard": "p:orchard"})
+        for hub in self.config["hub"]["paths"]:
+            for suffix in ("", "--claude-worktrees-x"):
+                for targets in (("garden",), ("garden", "orchard")):
+                    with self.subTest(hub=hub, suffix=suffix, targets=targets):
+                        records = [self.write_tool(hub + "/" + target + "/queue.md") for target in targets]
+                        folder = self.c.encode(hub + "/client-stack") + suffix
+                        self.assertEqual(self.c.hub_compartment(self.config, folder, "client", records), "client")
+                        self.assertEqual(self.c.hub_compartment(self.config, folder.upper(), "client", records), "client")
+        record = self.write_tool("~/.hub/projects/garden/queue.md")
+        for folder in ("~/.hub/projects", "~/.hub", "~/.hub-x", "~/.hub/notes"):
+            with self.subTest(folder=folder):
+                self.assertEqual(self.c.hub_compartment(self.config, self.c.encode(folder), "work", [record]), "p:garden")
+
     def test_harvest_skips_repeated_user_uuid(self):
         m = self.c.load_member(self.c.read_member(self.member))
         record = said("2026-09-01T00:00:00Z", "keep every review queue verdict for later scoring", uuid="u1")
@@ -854,9 +869,13 @@ class Compartments(unittest.TestCase):
                 self.assertIn(", 1 duplicate records", proc.stdout)
 
     def test_mine_prefers_record_cwd_folder_for_duplicate_ids(self):
+        self.config["compartments"]["work"]["folders"].append("~/projects/a")
+        self.config["compartments"]["client"]["folders"].append("~/projects/b")
+        self.h.write("compartments.json", self.config)
         for cwd, expected in (("~/projects/b--claude-worktrees-x", "b"),
                               ("~/projects/B--claude-worktrees-X", "b"),
-                              ("~/projects/b", "a"), (None, "a"), ("~/projects/a", "a")):
+                              ("~/projects/b", "b"), ("~/projects/b/sub", "b"),
+                              (None, "a"), ("~/projects/a", "a")):
             with self.subTest(cwd=cwd):
                 record = said("2026-09-01T00:00:00Z", "keep every review queue verdict for later scoring")
                 record.pop("cwd")
@@ -870,8 +889,48 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(len({r["id"] for r in rows}), len(rows))
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["project"], expected)
+                self.assertEqual(rows[0]["compartment"], "client" if expected == "b" else "work")
                 self.assertEqual(set(rows[0]), {"id", "kind", "timestamp", "project", "text", "context", "compartment", "split"})
                 self.assertIn(", 1 duplicate records", proc.stdout)
+
+    def test_mine_drops_records_with_fenced_cwd_without_probing(self):
+        fenced = self.h.root / "private"
+        fenced.mkdir()
+        fenced.chmod(0)
+        self.addCleanup(fenced.chmod, 0o700)
+        self.config["fenced"] = [str(fenced)]
+        self.h.write("compartments.json", self.config)
+        m = self.c.load_member(self.c.read_member(self.member))
+        for index, cwd in enumerate((str(fenced / "sub"), self.c.encode(fenced) + "-sub",
+                                     str(self.h.root / "outside/../private/sub"))):
+            self.h.session(self.c.encode("~/projects/work"), str(index),
+                           said("2026-09-01T00:00:00Z", "keep every review queue verdict " + str(index), cwd=cwd))
+        args = self.c.parser_for(m, "test").parse_args([
+            "mine", "--projects", str(self.h.projects), "--out", str(self.h.root / "mined.jsonl")])
+        output = io.StringIO()
+        with ExitStack() as stack:
+            for owner, method in ((Path, "stat"), (Path, "open"), (builtins, "open"),
+                                  (os, "open"), (os, "stat"), (os, "lstat")):
+                original = getattr(owner, method)
+                def guarded(path, *args, _original=original, **kwargs):
+                    if isinstance(path, (str, bytes, os.PathLike)):
+                        target = Path(os.path.abspath(os.fsdecode(path)))
+                        self.assertFalse(self.c.under(target, fenced), "probed fenced cwd: " + str(target))
+                    return _original(path, *args, **kwargs)
+                stack.enter_context(patch.object(owner, method, guarded))
+            with redirect_stdout(output):
+                self.assertEqual(self.c.cmd_mine(m, args), 0)
+        self.assertEqual(self.h.read("mined.jsonl"), "")
+        self.assertIn(", 3 fenced records", output.getvalue())
+
+    def test_mine_drops_records_with_excluded_cwd(self):
+        member = self.h.member({**ADA, "filters": {**ADA["filters"], "excluded_folders": "excluded-project"}})
+        self.h.session(self.c.encode("~/projects/work"), "resumed",
+                       said("2026-09-01T00:00:00Z", "keep every review queue verdict", cwd="~/excluded-project/sub"))
+        proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.h.read("mined.jsonl"), "")
+        self.assertIn(", 1 excluded records", proc.stdout)
 
     def test_fenced_scans_and_hub_sessions(self):
         if os.geteuid() == 0:

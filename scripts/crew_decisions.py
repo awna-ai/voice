@@ -845,6 +845,8 @@ def hub_compartment(c, folder_name, compartment, records):
     if not hub:
         return compartment
     name = fold(re.sub(r"--claude-worktrees-.*", "", folder_name, flags=re.I))
+    if any(name.startswith(fold(encode(path)) + "-") for path in hub["paths"]):
+        return compartment
     parents = [fold(encode(Path(path).expanduser().parent)) for path in hub["paths"]]
     if not any(name == parent or name.startswith(parent + "-") for parent in parents):
         return compartment
@@ -958,18 +960,38 @@ def cmd_mine(m, args):
             records = read_session(path)
             session_compartment = hub_compartment(m.compartments, folder.name, compartment, records) if m.compartments is not None else None
             for h, cwd in _harvest(m, path, project, records):
+                cwd_folder = encode(cwd) if isinstance(cwd, str) and cwd else None
+                if cwd_folder is not None:
+                    c = m.compartments
+                    if c is not None and (folder_compartment(c, cwd_folder) == "fenced" or
+                            matches_fence(Path(os.path.abspath(os.path.expanduser(cwd))), lexical_fences(c, os.getcwd()))):
+                        dropped["fenced"] += 1
+                        continue
+                    if m.excluded.search(cwd_folder):
+                        dropped["excluded"] += 1
+                        continue
                 if m.compartments is not None:
                     h["compartment"] = session_compartment
                 reason = privacy(m, h)
                 if reason:
                     dropped[reason] += 1
                 else:
-                    matches = isinstance(cwd, str) and bool(cwd) and fold(encode(cwd)) == fold(folder.name)
+                    score = 0
+                    if cwd_folder is not None:
+                        name = fold(folder.name)
+                        stripped = re.sub(r"--claude-worktrees-.*", "", name)
+                        cwd_name = fold(cwd_folder)
+                        if cwd_name == name:
+                            score = 3
+                        elif cwd_name == stripped:
+                            score = 2
+                        elif cwd_name.startswith(stripped + "-"):
+                            score = 1
                     if h["id"] in kept:
                         duplicates += 1
-                        if not matches or kept[h["id"]][1]:
+                        if score <= kept[h["id"]][1]:
                             continue
-                    kept[h["id"]] = (h, matches)
+                    kept[h["id"]] = (h, score)
     kept = sorted((record for record, _ in kept.values()), key=lambda r: (r["timestamp"], r["id"]))
     cutoff = mark_split(kept, args.holdout, args.cutoff)
     write_jsonl(args.out, kept)
@@ -980,6 +1002,8 @@ def cmd_mine(m, args):
           f"{span}; held out from {cutoff or 'nothing'}")
     print(f"dropped {excluded} excluded folders, {dropped['personal']} personal records, "
           f"{dropped['secret']} secret records" + (f", {fenced} fenced folders" if m.compartments is not None else "") +
+          (f", {dropped['fenced']} fenced records" if dropped['fenced'] else "") +
+          (f", {dropped['excluded']} excluded records" if dropped['excluded'] else "") +
           (f", {duplicates} duplicate records" if duplicates else ""))
     return 0
 
