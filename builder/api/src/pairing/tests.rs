@@ -305,6 +305,95 @@ fn join_resigns_only_the_name_and_reports_naming_failure() {
     }
 }
 #[test]
+fn setting_address_checks_radio_before_listing_addresses() {
+    let home = Scratch::new();
+    let fake = FakeRadio::answering(&[link_hello(), addresses(), addresses()]);
+    let answer = set_address_in(&home.0, &fake.radio(), "10.0.0.5").unwrap();
+    assert_eq!(answer.addresses, vec!["10.0.0.5"]);
+    assert_eq!(
+        fake.requests(),
+        vec![
+            json!({"op":"hello","v":1}),
+            json!({"op":"link_address_list","v":1}),
+            json!({"op":"link_address_add","v":1,"address":"10.0.0.5"}),
+        ]
+    );
+}
+#[test]
+fn radio_refused_addresses_send_nothing() {
+    let home = Scratch::new();
+    for address in [
+        "0.0.0.0",
+        "::",
+        "224.0.0.1",
+        "ff02::1",
+        "255.255.255.255",
+        "fe80::1",
+        "febf::1",
+        "::ffff:0.0.0.0",
+        "::ffff:224.0.0.1",
+        "::ffff:255.255.255.255",
+    ] {
+        let fake = FakeRadio::answering(&[]);
+        assert_eq!(
+            set_address_in(&home.0, &fake.radio(), address)
+                .unwrap_err()
+                .message,
+            "That isn't a VPN address. Type the numbers only, like 10.0.0.5, with no port."
+        );
+        assert_eq!(
+            set_address_with(&fake.radio(), address)
+                .unwrap_err()
+                .message,
+            "That isn't a VPN address. Type the numbers only, like 10.0.0.5, with no port."
+        );
+        assert!(fake.requests().is_empty());
+    }
+}
+#[test]
+fn radio_entry_points_explain_missing_home() {
+    // Remove HOME only in a child: other tests may read the process environment.
+    if std::env::var_os("HOME").is_some() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "pairing::tests::radio_entry_points_explain_missing_home",
+            ])
+            .env_remove("HOME")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let failures = [
+        radio_link_address().unwrap_err(),
+        radio_set_link_address(dto::RadioAddressRequest {
+            address: "10.0.0.5".into(),
+        })
+        .unwrap_err(),
+        radio_invite(dto::SlugRequest {
+            slug: "wren".into(),
+        })
+        .unwrap_err(),
+        radio_join(dto::RadioJoinRequest {
+            slug: "wren".into(),
+            code: "rj1.fixture".into(),
+            name: "Office Mac".into(),
+        })
+        .unwrap_err(),
+        radio_name(dto::RadioNameRequest {
+            name: "Office Mac".into(),
+        })
+        .unwrap_err(),
+    ];
+    for failure in failures {
+        assert_eq!(
+            failure.message,
+            "Voice can't find your home folder, so it can't reach Radio."
+        );
+    }
+}
+#[test]
 fn address_invalid_inputs_send_nothing() {
     for address in ["10.0.0.5:7341", "office.example", ""] {
         let fake = FakeRadio::answering(&[]);

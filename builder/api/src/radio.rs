@@ -44,6 +44,7 @@ pub mod text {
     pub const INSTALL_TOO_LONG: &str =
         "Radio took too long to install, so Voice stopped it. Try again.";
     pub const NOT_RUNNING: &str = "Radio isn't running on this computer.";
+    pub const NO_HOME: &str = "Voice can't find your home folder, so it can't reach Radio.";
     pub const NO_ANSWER: &str = "Radio didn't answer. Try again in a moment.";
     pub const REFUSED: &str = "Radio refused, without saying why.";
     pub const TOO_OLD: &str = "The Radio on this computer is older than this Voice. Run voice radio install to update it.";

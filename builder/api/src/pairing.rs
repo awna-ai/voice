@@ -35,9 +35,18 @@ pub fn link_address(home: &Path) -> Result<dto::LinkAddress> {
         .map_err(radio_error)
 }
 pub fn set_link_address(home: &Path, address: &str) -> Result<dto::LinkAddress> {
-    set_address_with(&Radio::for_home(home), address)
+    set_address_in(home, &Radio::for_home(home), address)
 }
+fn set_address_in(home: &Path, radio: &Radio, address: &str) -> Result<dto::LinkAddress> {
+    let address = parse_address(address)?;
+    ready(home, radio)?;
+    replace_address(radio, address)
+}
+#[cfg(test)]
 fn set_address_with(radio: &Radio, address: &str) -> Result<dto::LinkAddress> {
+    replace_address(radio, parse_address(address)?)
+}
+fn parse_address(address: &str) -> Result<IpAddr> {
     let address: IpAddr = address
         .trim()
         .parse()
@@ -47,6 +56,16 @@ fn set_address_with(radio: &Radio, address: &str) -> Result<dto::LinkAddress> {
         IpAddr::V6(ip) => ip.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(address),
         _ => address,
     };
+    let refused = match address {
+        IpAddr::V4(ip) => ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast(),
+        IpAddr::V6(ip) => ip.is_unspecified() || ip.is_multicast() || ip.is_unicast_link_local(),
+    };
+    if refused {
+        return Err(failure(text::NOT_AN_ADDRESS));
+    }
+    Ok(address)
+}
+fn replace_address(radio: &Radio, address: IpAddr) -> Result<dto::LinkAddress> {
     let old = radio.link_address_list().map_err(radio_error)?;
     for previous in old.addresses {
         if let Ok(ip) = previous.parse::<IpAddr>()
@@ -230,27 +249,24 @@ pub fn name(home: &Path, name: &str) -> Result<()> {
 }
 
 pub fn radio_link_address() -> Result<dto::LinkAddress> {
-    link_address(&crate::assistants::home(radio::text::NOT_RUNNING)?)
+    link_address(&crate::assistants::home(text::NO_HOME)?)
 }
 pub fn radio_set_link_address(r: dto::RadioAddressRequest) -> Result<dto::LinkAddress> {
-    set_link_address(
-        &crate::assistants::home(radio::text::NOT_RUNNING)?,
-        &r.address,
-    )
+    set_link_address(&crate::assistants::home(text::NO_HOME)?, &r.address)
 }
 pub fn radio_invite(r: dto::SlugRequest) -> Result<dto::Invite> {
-    invite(&crate::assistants::home(radio::text::NOT_RUNNING)?, &r.slug)
+    invite(&crate::assistants::home(text::NO_HOME)?, &r.slug)
 }
 pub fn radio_join(r: dto::RadioJoinRequest) -> Result<dto::Joined> {
     join(
-        &crate::assistants::home(radio::text::NOT_RUNNING)?,
+        &crate::assistants::home(text::NO_HOME)?,
         &r.slug,
         &r.code,
         &r.name,
     )
 }
 pub fn radio_name(r: dto::RadioNameRequest) -> Result<()> {
-    name(&crate::assistants::home(radio::text::NOT_RUNNING)?, &r.name)
+    name(&crate::assistants::home(text::NO_HOME)?, &r.name)
 }
 #[cfg(test)]
 mod tests;
