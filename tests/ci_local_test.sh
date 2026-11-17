@@ -162,6 +162,10 @@ for path in scripts/slack_select.py scripts/fetch-radio.sh tests/slack_mine_test
   case_name=$path
   change "$path"
   touched
+  if cmp -s "$tmp/full" "$tmp/out"; then
+    echo "ci_local_test: RED $case_name: unexpected full gate" >&2
+    regressions=$((regressions + 1))
+  fi
   case "$path" in
     scripts/slack_select.py)
       expect_step 'bash tests/crew_install_test.sh'
@@ -170,6 +174,7 @@ for path in scripts/slack_select.py scripts/fetch-radio.sh tests/slack_mine_test
       expect_step 'bash tests/fetch_radio_test.sh'
       expect_step 'bash tests/crew_install_test.sh' ;;
     tests/slack_mine_test.py)
+      expect_step 'python3 tests/slack_mine_test.py'
       if grep -Fx 'bash tests/crew_install_test.sh' "$tmp/out" >/dev/null; then
         echo "ci_local_test: RED $case_name: unexpected crew installer test" >&2
         regressions=$((regressions + 1))
