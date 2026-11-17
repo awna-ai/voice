@@ -5,8 +5,8 @@ One record per slice, newest first. Paraphrase only; no real person.
 ## VO16.6a: Voice installs its Radio from the installer and on start (2026-11-17, lane: V1)
 
 - **Status: built, not landed.** Branch `lane-v1/VO16.6a` (pushed): `4c1dc47` brief, `84583fa` code, then the
-  Verifier and security-review fix-up. **Owed before the land:** the repeat Verifier (Opus) on the fix-up, then the
-  full `ci-local.sh` land.
+  Verifier and security-review fix-up. **Owed before the land:** only the full `ci-local.sh` land (repeat Verifier
+  PASS at `6198c33`; the commit after it changes only text).
 - **Why:** VO16.6 (split): Voice becomes a Radio client. This half installs the daemon PB8.9c2 can talk to; the
   panels half (VO16.6b) waits on a Radio release (R.10).
 - **What:** `voice radio install` (prints PB8.9c2's sentence, exit 0, or `voice: <sentence>`, exit 1). `install.sh`
@@ -19,21 +19,21 @@ One record per slice, newest first. Paraphrase only; no real person.
 - **Who built it:** V1, Claude-direct under the fallback rule (Codex at its usage limit until 2026-11-18).
 - **Verified:** red first: the API, CLI and lockdown tests failed (missing function, wrong exit, missing hook) and
   `mac_install_test.sh` failed on "Radio was not installed once". Green: `radio::tests` 25 and `cli --test radio` 2
-  at `84583fa`; `mac_install_test.sh` and shellcheck after the fix-up. Installer mutations caught: a Radio failure
+  at `84583fa`, 26 and 3 at `6198c33` (the environment test is written to fail without `env_clear`, not run red); `mac_install_test.sh` and shellcheck after the fix-up. Installer mutations caught: a Radio failure
   failing the install, no Radio step. **Not verified:** the lockdown test run (its Tauri build didn't finish under
-  load), the fix-up's Rust tests (the environment test, red before the fix-up, and the CLI success test are written; the machine held at load 30 to 38, so they had not run when this was written), clippy, a live `radio install` (attended, owed).
+  load), the lockdown test, clippy, the order of the installer's two lines (the test checks both are there, not their order), a live `radio install` (attended, owed).
 - **A mistake to keep:** one installer mutation (running the download's `voice`) and five of the Verifier's runs
   executed the test's quarantined stand-in, which shows a Gatekeeper "Not Opened" dialog on the screen. Never mutate
   the installer toward the quarantined source copy unattended; the fix-up's test records the path of the `voice`
   that ran instead.
 - **Security review** (sub-agent): no high or medium. Lows fixed: Radio's inherited environment (`RADIO_LAUNCHCTL`),
-  a development build installing on start, the installer's silent wait. Low kept and filed: the lasting-place rule
+  a development build installing on start, the installer's silent wait. Low kept and filed as VF23 `4b5XoAh2`: the lasting-place rule
   passes a group-writable folder (`cli_command.rs` `lasting`, pre-existing; SECURITY.md now says so).
 - **Verifier** (edge ⑧): Fable **FAIL** at `84583fa`: must-fix, `How to install.txt` said the installer changes
   nothing else. Should-fixes, all taken: the how-to's removal steps, the installer test pinning the installed copy
   (argv[0]) and no run on a collision, the CLI tests' shared scratch folder, tests of the CLI's success path and of a
   single run, Radio's environment, the SECURITY.md overclaims. Nits taken: the group help, `.ai/PROJECT.md`, the
-  line before the step, Control-C and `launchctl` in *Not covered*. Nit kept: when the lasting rule refuses the
+  line before the step, Control-C and `launchctl` in *Not covered*. Repeat pass (Opus) **PASS** at `6198c33`; her three should-fixes taken in the records commit after it (SECURITY.md on Radio's own group rule, the how-to's removal order, this record's wording). Nit kept: when the lasting rule refuses the
   installed copy, the installer prints `CLI_PLACE` after "Voice is installed" (rare: a home under `/Volumes`).
 
 ## PB8.9c2: Voice talks to its Radio (2026-11-16, lane: V1)
