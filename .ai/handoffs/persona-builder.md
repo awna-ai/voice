@@ -2,6 +2,39 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## PB8.9d2: add another computer, the screens (2026-11-17, lane: V1)
+
+- **Status:** built and verified on `lane-v1/PB8.9d2`: `d8103cb` brief, `d02cc1e` the change, `def2098` threat
+  model and fix-up 1 brief, `72cdc0b` fix-up 1, `eca61c1` fix-up 2 (with its brief and a threat-model line), then
+  this record.
+- **What it does:** a *Your other computers* card on the Save step (`builder/ui/src/screens/OtherComputers.vue`).
+  On mount it asks only for the save options, to learn the role; Radio is asked nothing until a click. On the
+  computer that builds the assistant: *Add another computer* reads (and, if needed, starts) Radio and shows this
+  computer's VPN address, with a field to set or change it; *Make a join code* shows the code, *Copy*, when it stops
+  working, and the steps on the other computer; the recovery-key sentence stays for the card's life whenever Radio
+  made one, also after a failed invite. On a member computer: *Link this computer*, the address, a name prefilled
+  once with this computer's own name, the pasted code and *Join*; each refusal shows whole and both fields keep
+  their text; a join clears the code. The words say linking doesn't teach the assistant yet (that is PB8.9e).
+- **Engine change:** `LinkAddress` carries `computer_name`, filled only by the two app commands
+  (`voice_save::computer::name()`); the app's address read now starts Radio first (`started_address`), as setting an
+  address, inviting and joining already did. The CLI is unchanged.
+- **Who built it:** Codex, from the brief and two fix-up briefs. Its sandbox can't open sockets, so the Rust pairing
+  tests ran here.
+- **Reviews:** security review (Opus) PASS WITH FIXES, one low: the threat model didn't name the window and
+  clipboard copies of a join code (fixed in `.ai/SECURITY.md`). Verifier (Fable) on `d02cc1e`: PASS WITH FIXES, one
+  must-fix (with Radio stopped the card was a dead end) and seven should-fixes → fix-up 1, except the naming dead end
+  after a join whose name failed to save, filed as VF26 `2D0ue7bV` (Backlog, blocked by this card). Repeat Verifier
+  (Opus) on `72cdc0b`: PASS WITH FIXES, one should-fix (the recovery sentence read twice) and a threat-model nit (an
+  action can install Radio, a development build with its build folder's `voice`) → fix-up 2.
+- **Verified:** red first; UI vitest 694 passed, `vue-tsc` clean; `cargo test -p voice-api --lib -- pairing radio`
+  53 passed; `cargo clippy -p voice-api --all-targets -D warnings`, `cargo fmt --check` and
+  `cargo check --workspace --all-targets` clean; the regenerated `LinkAddress.ts` is stable under `cargo test`.
+  Mutations: Codex's 8 + 39 + 1, the Verifiers' 4 on copies, and mine (dropping Radio's start before the read), all
+  killed.
+- **Not verified:** the running app, a real Radio pairing two computers, `navigator.clipboard` in the app's
+  WebView, a screen reader, and Radio's install branch from the card's first click (the test covers a running
+  Radio only). Walk owed (lane-v.md `## Walks owed`).
+
 ## PB8.9d1: add another computer, the engine, the CLI and the app commands (2026-11-17, lane: V1)
 
 - **Status:** built and verified on `lane-v1/PB8.9d1`: `3d75d4c` brief, `d6ba93a` the change, `9e0b2bd` fix-up 1
