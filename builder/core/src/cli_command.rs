@@ -101,17 +101,37 @@ fn lasting(path: &Path, roots: &[&Path]) -> Result<()> {
         use std::os::unix::fs::MetadataExt;
         // SAFETY: geteuid takes no arguments and cannot fail.
         let euid = unsafe { libc::geteuid() };
-        for folder in canonical.ancestors() {
+        for (index, folder) in canonical.ancestors().enumerate() {
             let metadata = std::fs::symlink_metadata(folder).map_err(|source| Error::Io {
                 path: folder.to_path_buf(),
                 source,
             })?;
-            if (metadata.uid() != euid && metadata.uid() != 0) || metadata.mode() & 0o002 != 0 {
+            let safe = if index == 0 {
+                command_safe(metadata.uid(), metadata.mode(), euid)
+            } else {
+                folder_safe(metadata.uid(), metadata.gid(), metadata.mode(), euid)
+            };
+            if !safe {
                 return Err(Error::Invalid(CLI_PLACE.into()));
             }
         }
     }
     Ok(())
+}
+
+/// The command itself: owned by the person or root, and writable by no one else (Radio's handler rule).
+#[cfg(unix)]
+fn command_safe(owner: u32, mode: u32, euid: u32) -> bool {
+    (owner == euid || owner == 0) && mode & 0o022 == 0
+}
+
+/// A folder above the command: owned by the person or root, writable by its group only when the group is
+/// wheel (0) or admin (80), as Radio's handler check allows, and never by others.
+#[cfg(unix)]
+fn folder_safe(owner: u32, group: u32, mode: u32, euid: u32) -> bool {
+    (owner == euid || owner == 0)
+        && (mode & 0o020 == 0 || matches!(group, 0 | 80))
+        && mode & 0o002 == 0
 }
 
 fn on_a_passing_disk(canonical: &Path) -> bool {
@@ -126,6 +146,33 @@ mod tests {
     use super::*;
     use crate::test_support::Scratch;
     use std::fs;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_command_is_writable_by_no_one_else() {
+        let euid = 501;
+        assert!(command_safe(501, 0o755, euid), "(501, 0o755)");
+        assert!(command_safe(0, 0o755, euid), "(0, 0o755)");
+        assert!(!command_safe(502, 0o755, euid), "(502, 0o755)");
+        assert!(!command_safe(501, 0o775, euid), "(501, 0o775)");
+        assert!(!command_safe(501, 0o757, euid), "(501, 0o757)");
+        assert!(command_safe(501, 0o644, euid), "(501, 0o644)");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_is_group_writable_only_for_wheel_or_admin() {
+        let euid = 501;
+        assert!(folder_safe(501, 20, 0o755, euid), "(501, 20, 0o755)");
+        assert!(!folder_safe(501, 20, 0o775, euid), "(501, 20, 0o775)");
+        assert!(folder_safe(501, 80, 0o775, euid), "(501, 80, 0o775)");
+        assert!(folder_safe(0, 80, 0o775, euid), "(0, 80, 0o775)");
+        assert!(folder_safe(0, 0, 0o775, euid), "(0, 0, 0o775)");
+        assert!(!folder_safe(501, 80, 0o777, euid), "(501, 80, 0o777)");
+        assert!(!folder_safe(0, 0, 0o1777, euid), "(0, 0, 0o1777)");
+        assert!(!folder_safe(502, 20, 0o755, euid), "(502, 20, 0o755)");
+        assert!(folder_safe(0, 20, 0o755, euid), "(0, 20, 0o755)");
+    }
 
     #[test]
     fn a_missing_command_is_an_io_error() {
@@ -173,8 +220,12 @@ mod tests {
         fs::set_permissions(&command, fs::Permissions::from_mode(0o646)).unwrap();
         let file_result = lasting(&command, &[root.path()]);
         fs::set_permissions(&command, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o664)).unwrap();
+        let group_file_result = lasting(&command, &[root.path()]);
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(folder_result, Err(Error::Invalid(message)) if message == CLI_PLACE));
         assert!(matches!(file_result, Err(Error::Invalid(message)) if message == CLI_PLACE));
+        assert!(matches!(group_file_result, Err(Error::Invalid(message)) if message == CLI_PLACE));
     }
 
     #[test]
@@ -213,7 +264,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_root_folder_owned_by_the_person_is_lasting() {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let root = Scratch::new();
         let command = command_at(root.path(), "Applications/Voice.app/Contents/MacOS/voice");
         assert!(lasting(&command, &[root.path()]).is_ok());
@@ -222,8 +273,16 @@ mod tests {
             cli_word(&command, root.path()).unwrap()
         );
         let applications = root.path().join("Applications");
+        let gid = fs::symlink_metadata(&applications).unwrap().gid();
+        assert!(!matches!(gid, 0 | 80));
+        // Every member of this folder's group (staff, every account) could swap the command;
+        // only a wheel or admin group, as /Applications has, may write a folder above it.
         fs::set_permissions(&applications, fs::Permissions::from_mode(0o775)).unwrap();
-        assert!(lasting(&command, &[root.path()]).is_ok());
+        assert!(matches!(
+            lasting(&command, &[root.path()]),
+            Err(Error::Invalid(message)) if message == CLI_PLACE
+        ));
+        fs::set_permissions(&applications, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[cfg(target_os = "macos")]
