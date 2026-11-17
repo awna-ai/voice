@@ -560,3 +560,24 @@ fn status_with_no_computers_says_none_yet() {
     assert_eq!(lines[2], text::NO_COMPUTERS);
     fake.requests();
 }
+
+#[test]
+fn install_on_start_never_waits_and_runs_once() {
+    let scratch = Scratch::new();
+    let (radio, args) = fake_copy(&scratch, "sleep 2; exit 0");
+    let handler = scratch.0.join("voice");
+    let started = Instant::now();
+    let kept = handler.clone();
+    let install =
+        in_background(move || install_within(&radio, &kept, Duration::from_secs(60)));
+    assert!(started.elapsed() < Duration::from_secs(1), "the start waited on Radio");
+    assert_eq!(install.join().unwrap().map_err(message), Ok(text::INSTALLED));
+    assert_eq!(
+        fs::read_to_string(args).unwrap(),
+        format!(
+            "install\n--app\nvoice\n--app-version\n{}\n--handler\n{}\n",
+            env!("CARGO_PKG_VERSION"),
+            handler.display()
+        )
+    );
+}

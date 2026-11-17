@@ -10,6 +10,11 @@ fn main() {
                 .on_navigation(|_, url| navigation::is_allowed_navigation(url, tauri::is_dev()))
                 .build(),
         )
+        // Radio links this computer to your others; Voice works without it, so nothing waits on it.
+        .setup(|_| {
+            drop(voice_api::radio::install_on_start());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::list_assistants,

@@ -32,7 +32,25 @@ fake_app() {  # path architecture [radio's architecture]
 </dict></plist>
 PLIST
   printf 'int main(void){return 0;}\n' | cc -arch "$2" -x c - -o "$1/Contents/MacOS/voice-app"
-  printf 'int main(void){return 0;}\n' | cc -arch "$2" -x c - -o "$1/Contents/MacOS/voice"
+  # The stand-in voice records each run's arguments in $HOME/voice-ran and exits with $FAKE_VOICE_EXIT.
+  cc -arch "$2" -x c - -o "$1/Contents/MacOS/voice" <<'C'
+#include <stdio.h>
+#include <stdlib.h>
+int main(int argc, char **argv) {
+  char path[4096];
+  const char *home = getenv("HOME"), *exit_code = getenv("FAKE_VOICE_EXIT");
+  int code = exit_code ? atoi(exit_code) : 0;
+  snprintf(path, sizeof path, "%s/voice-ran", home ? home : "/nonexistent");
+  FILE *ran = fopen(path, "a");
+  if (ran) {
+    for (int i = 1; i < argc; i++) fprintf(ran, "%s\n", argv[i]);
+    fputs("--\n", ran);
+    fclose(ran);
+  }
+  if (code) fputs("voice: the stand-in Radio failed\n", stderr); else puts("the stand-in Radio is installed");
+  return code;
+}
+C
   printf 'int main(void){return 0;}\n' | cc -arch "${3:-$2}" -x c - -o "$1/Contents/MacOS/radio"
   codesign -s - --force "$1/Contents/MacOS/voice" >/dev/null 2>&1
   codesign -s - --force "$1/Contents/MacOS/radio" >/dev/null 2>&1
@@ -57,6 +75,7 @@ run() {
 
 not_installed() {
   [ ! -e "$installed" ] || fail 'a refused copy was installed'
+  [ ! -e "$home/voice-ran" ] || fail "a refused copy ran its voice"
 }
 
 # Installs, leaving the downloaded original alone and cleaning its staging folder.
@@ -74,7 +93,22 @@ xattr -p com.apple.quarantine "$source_app" >/dev/null || fail 'source quarantin
 xattr -p com.apple.quarantine "$source_app/Contents/MacOS/voice-app" >/dev/null || fail 'source executable quarantine was removed'
 check "$scratch/out" "Voice is installed in your Applications folder: $installed" 'installed path not printed'
 [ -z "$(find "$home/Applications" -name '.voice-install.*' -print)" ] || fail 'staging folder remains'
+# The installed copy's own voice installs Radio, once.
+ran=$(cat "$home/voice-ran" 2>/dev/null || true)
+[ "$ran" = "$(printf 'radio\ninstall\n--')" ] || fail "Radio was not installed once through the installed voice: ${ran:-it never ran}"
+check "$scratch/out" 'the stand-in Radio is installed' "voice's Radio sentence not printed"
 echo 'mac_install_test: installs passed'
+
+# Voice works without Radio, so a Radio that fails to install leaves Voice installed.
+kit radio-fails "$arch"
+FAKE_VOICE_EXIT=1 run --no-open
+[ "$status" = 0 ] || { cat "$scratch/err" >&2; fail 'a failing Radio failed the install'; }
+[ -d "$installed" ] || fail 'a failing Radio left Voice uninstalled'
+ran=$(cat "$home/voice-ran" 2>/dev/null || true)
+[ "$ran" = "$(printf 'radio\ninstall\n--')" ] || fail "Radio was not tried once: ${ran:-it never ran}"
+check "$scratch/err" 'voice: the stand-in Radio failed' "voice's failure sentence not printed"
+check "$scratch/err" 'Voice is installed and works without Radio. It will try to install Radio again each time you open it.' 'works-without-Radio line missing'
+echo 'mac_install_test: a failing Radio passed'
 
 # Replaces an old app, including files that the new app no longer contains.
 kit replaces "$arch"

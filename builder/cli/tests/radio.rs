@@ -36,3 +36,19 @@ fn radio_status_without_radio_says_so_and_exits_one() {
     );
     assert!(output.stderr.is_empty());
 }
+
+#[test]
+fn radio_install_without_a_copy_says_so_and_exits_one() {
+    let scratch = Scratch::new();
+    let output = Command::new(env!("CARGO_BIN_EXE_voice"))
+        .env("HOME", scratch.0.join("home"))
+        .args(["radio", "install"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        format!("voice: {}\n", voice_api::radio::text::NO_COPY)
+    );
+}

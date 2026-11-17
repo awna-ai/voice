@@ -89,6 +89,25 @@ pub fn install(home: &Path) -> Result<&'static str> {
     install_within(&radio_beside(&voice)?, &voice, INSTALL_WAIT)
 }
 
+/// The install Voice runs once each time it starts, on a thread of its own so the window never waits
+/// on it: a Voice upgraded by drag and drop upgrades its Radio too, and a same-or-newer Radio makes it
+/// a quick check. Voice works without Radio, so the app drops the handle and its result.
+pub fn install_on_start() -> std::thread::JoinHandle<Result<&'static str>> {
+    in_background(|| {
+        let home = std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+            .ok_or_else(|| Error::Invalid(text::INSTALL_FAILED.into()))?;
+        install(&home)
+    })
+}
+
+fn in_background(
+    install: impl FnOnce() -> Result<&'static str> + Send + 'static,
+) -> std::thread::JoinHandle<Result<&'static str>> {
+    std::thread::spawn(install)
+}
+
 fn install_within(radio: &Path, handler: &Path, wait: Duration) -> Result<&'static str> {
     let invalid = |sentence: &str| Error::Invalid(sentence.into());
     // Only an absolute path: a bare name would be looked up on PATH.
