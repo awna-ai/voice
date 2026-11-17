@@ -12,8 +12,17 @@ real_cargo=$(command -v cargo || true)
 git -C "$repo" worktree add --quiet --detach "$tmp/wt" HEAD
 cp "$repo/scripts/ci-local.sh" "$tmp/wt/scripts/ci-local.sh"
 cd "$tmp/wt"
-commit() { git -c user.name=t -c user.email=t@example.invalid commit --allow-empty -qm "$1"; }
-git add scripts/ci-local.sh
+commit() { git -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=t -c user.email=t@example.invalid commit --allow-empty -qm "$1"; }
+# Stub every suite in the disposable checkout; scan the caller's real sources below.
+for suite in tests/*_test.py tests/*_test.sh; do
+  # The child stub, not this test, expands the marker variable.
+  # shellcheck disable=SC2016
+  case "$suite" in
+    *.py) printf 'import os\nwith open(os.environ["CI_LOCAL_MARKER"], "a") as marker: marker.write("%s\\n")\n' "$suite" > "$suite" ;;
+    *.sh) printf '#!/bin/bash\nprintf "%%s\\n" "%s" >> "$CI_LOCAL_MARKER"\n' "$suite" > "$suite" ;;
+  esac
+done
+git add scripts/ci-local.sh tests
 commit base
 mkdir "$tmp/bin"
 export CI_LOCAL_MARKER="$tmp/marker" CI_LOCAL_REAL_CARGO="$real_cargo"
@@ -121,6 +130,45 @@ else
 fi
 echo 'ci_local_test: full golden list passed'
 
+# Report every new regression before failing, so each missing mapping has a red.
+regressions=0
+expect_step() {
+  if ! grep -Fx -- "$1" "$tmp/out" >/dev/null; then
+    echo "ci_local_test: RED $case_name: missing $1" >&2
+    regressions=$((regressions + 1))
+  fi
+}
+expect_crate() {
+  if [ -n "$real_cargo" ] && ! grep -E "cargo test .* -p $1( |$)" "$tmp/out" >/dev/null; then
+    echo "ci_local_test: RED $case_name: missing crate $1" >&2
+    regressions=$((regressions + 1))
+  fi
+}
+for path in builder/agent/src/sandbox.rs builder/agent/sandbox/claude-code.sb bootstrap/install.sh builder/install/radio-release.txt; do
+  case_name=$path
+  change "$path"
+  touched
+  case "$path" in
+    builder/agent/*)
+      expect_step 'python3 tests/claude_sandbox_probe_test.py'
+      expect_step 'python3 tests/read_fence_probe_test.py'
+      expect_crate voice-agent ;;
+    bootstrap/*) expect_step 'bash tests/crew_install_test.sh'; expect_crate voice-core ;;
+    builder/install/*) expect_step 'bash tests/mac_install_test.sh'; expect_step 'bash tests/fetch_radio_test.sh' ;;
+  esac
+  reset
+done
+case_name='clean tree'
+list --tier touched --base HEAD --list
+expect_step 'bash tests/ci_local_test.sh'
+short_base=$(git rev-parse --short HEAD)
+if ! grep -Fx "ci-local: no changed paths since $short_base, running only the repo-wide scans" "$tmp/err" >/dev/null; then
+  echo 'ci_local_test: RED clean tree: missing no-changed-paths note' >&2
+  regressions=$((regressions + 1))
+fi
+[ "$regressions" = 0 ] || fail "$regressions fixup assertions failed"
+echo 'ci_local_test: fixup mappings, always self-test and empty change set passed'
+
 panel_test() {
   change builder/panel-runner/src/lib.rs
   touched
@@ -153,6 +201,7 @@ change .ai/ci-local-test.md
 touched
 {
   echo "$shellcheck_line"
+  echo 'bash tests/ci_local_test.sh'
   if [ -n "$real_cargo" ]; then
     echo 'cargo fmt --check'
     cat "$tmp/trees"
@@ -213,48 +262,114 @@ if /bin/bash -c '[ "${BASH_VERSINFO[0]}" = 3 ]'; then
   unset test_bash
   echo 'ci_local_test: Bash 3.2 passed'
 fi
-# Resolve literal cross-crate reads independently of the gate's path table.
-python3 -I - <<'PY' > "$tmp/reads"
+# Scan the caller's sources: the disposable checkout contains inert test stubs.
+python3 -I - "$repo" <<'PY' > "$tmp/reads"
 import pathlib
 import re
-root = pathlib.Path.cwd()
-skipped = 0
+import subprocess
+import sys
+root = pathlib.Path(sys.argv[1]).resolve()
+tracked = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z']).decode().split('\0')
 reads = set()
-for crate in sorted((root / 'builder').iterdir()):
-    manifest = crate / 'Cargo.toml'
-    if not manifest.is_file():
-        continue
+skipped = 0
+
+def add(base, target, kind, reader):
+    global skipped
+    path = (base / target.split('{', 1)[0]).resolve()
+    if root != path and root not in path.parents:
+        skipped += 1
+        return
+    if kind == 'rust':
+        crate = crate_dirs[reader]
+        if path == crate or crate in path.parents:
+            return
+    if not path.exists():
+        skipped += 1
+        return
+    if path.is_dir():
+        prefix = str(path.relative_to(root)) + '/'
+        first = next((p for p in tracked if p.startswith(prefix) and (root / p).is_file()), None)
+        if first is None:
+            skipped += 1
+            return
+        path = root / first
+    reads.add((str(path.relative_to(root)), kind, reader))
+
+crate_dirs = {}
+for manifest in sorted((root / 'builder').glob('*/Cargo.toml')):
     match = re.search(r'\[package\]\s*name\s*=\s*"([^"]+)"', manifest.read_text())
-    if not match:
-        continue
+    if match:
+        crate_dirs[match[1]] = manifest.parent
+for reader, crate in sorted(crate_dirs.items()):
+    sources = list(crate.glob('build.rs'))
     for folder in ('src', 'tests'):
-        for source in sorted((crate / folder).rglob('*.rs')):
-            text = source.read_text()
-            targets = [(source.parent, p) for p in re.findall(r'include_(?:str|bytes)!\(\s*"(\.\./[^"]+)"', text)]
-            targets += [(crate, p) for p in re.findall(r'env!\("CARGO_MANIFEST_DIR"\)[^\n]*?\.join\("(\.\./[^"]+)"\)', text)]
-            for base, target in targets:
-                path = (base / target.split('{', 1)[0]).resolve()
-                if crate == path or crate in path.parents:
-                    continue
-                if not path.exists() or (root != path and root not in path.parents):
-                    skipped += 1
-                    continue
-                if path.is_dir():
-                    path /= 'ci-local-drift-probe.txt'
-                reads.add((str(path.relative_to(root)), match[1]))
-for path, name in sorted(reads):
-    print(path + '\t' + name)
-print('ci_local_test: cross-crate reads skipped (missing): ' + str(skipped), file=__import__('sys').stderr)
+        sources += sorted((crate / folder).rglob('*.rs'))
+    for source in sources:
+        text = source.read_text()
+        targets = [(source.parent, p) for p in re.findall(
+            r'include_(?:str|bytes)!\(\s*"(\.\./[^"]+)"', text)]
+        for include, module in re.findall(
+                r'include!\(\s*"([^"]+)"|#\[path\s*=\s*"([^"]+)"', text):
+            targets.append((source.parent, include or module))
+        targets += [(crate, p) for p in re.findall(
+            r'env!\("CARGO_MANIFEST_DIR"\)[\s\S]{0,100}?\.join\(\s*(?:format!\(\s*)?"(\.\./[^"]+)"', text)]
+        targets += [(crate, p) for p in re.findall(
+            r'\.join\(\s*format!\(\s*"(\.\./[^"]+)"', text)]
+        if 'repo()' in text or re.search(r'\.join\(\s*"../.."\s*\)', text):
+            targets += [(root, p) for p in re.findall(
+                r'"((?:scripts|bootstrap|crew|docs|tests|builder)/[^"\n]*|\.gitignore)"', text)]
+        for base, target in targets:
+            add(base, target, 'rust', reader)
+for source in sorted((root / 'tests').glob('*.py')):
+    reader = source.stem if source.name.endswith('_test.py') else '*'
+    for target in re.findall(
+            r'''(?:\bREPO\s*/|\bROOT\s*/|parents\[1\]\s*/|parent\.parent\s*/)\s*['"]([^'"]+)['"]''',
+            source.read_text()):
+        add(root, target, 'python', reader)
+for source in sorted((root / 'tests').glob('*_test.sh')):
+    for target in re.findall(r'"\$(?:here|repo)/([^"$\s]+)', source.read_text()):
+        add(root, target, 'shell', source.stem)
+for path, kind, reader in sorted(reads):
+    print(path + '\t' + kind + '\t' + reader)
+print('ci_local_test: cross-crate reads skipped (missing): ' + str(skipped), file=sys.stderr)
 PY
-count=0
-while IFS=$'\t' read -r path crate; do
-  change "$path"
-  touched
-  if ! cmp -s "$tmp/full" "$tmp/out" && [ -n "$real_cargo" ]; then
-    grep -E "cargo test .* -p $crate( |$)" "$tmp/out" >/dev/null || fail "cross-crate read lost $crate: $path"
+rust_count=0 python_count=0 shell_count=0 full_count=0
+last_path=
+while IFS=$'\t' read -r path kind reader; do
+  # One listing per target, even when several readers consume it.
+  if [ "$path" != "$last_path" ]; then
+    change "$path"
+    touched
+    reset
+    last_path=$path
   fi
-  reset
-  count=$((count + 1))
+  result=picked
+  if cmp -s "$tmp/full" "$tmp/out"; then
+    result=full
+    full_count=$((full_count + 1))
+  else
+    case "$kind" in
+      rust)
+        if [ -n "$real_cargo" ]; then
+          grep -E "cargo test .* -p $reader( |$)" "$tmp/out" >/dev/null || fail "cross-crate read lost $reader: $path"
+        else
+          result=cargo-missing
+        fi ;;
+      python)
+        if [ "$reader" = '*' ]; then
+          grep -E '^python3 tests/.*_test.py$' "$tmp/out" >/dev/null || fail "Python helper lost all suites: $path"
+        else
+          has "python3 tests/$reader.py"
+        fi ;;
+      shell) has "bash tests/$reader.sh" ;;
+    esac
+  fi
+  case "$kind" in
+    rust) rust_count=$((rust_count + 1)) ;;
+    python) python_count=$((python_count + 1)) ;;
+    shell) shell_count=$((shell_count + 1)) ;;
+  esac
+  echo "ci_local_test: read $kind $reader <- $path: $result"
 done < "$tmp/reads"
-echo "ci_local_test: cross-crate reads checked: $count"
+echo "ci_local_test: cross-crate reads checked: rust=$rust_count python=$python_count shell=$shell_count full=$full_count"
 echo 'ci_local_test: all passed'

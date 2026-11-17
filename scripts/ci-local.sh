@@ -155,8 +155,11 @@ map_path() {
     builder/core/src/deny.rs) pick voice-core; python_picked+='read_fence_probe ' ;;
     # Both voice-grow and the Python spec suite read the golden files.
     builder/grow/tests/golden/*) pick voice-grow; python_picked+='growth_loop_spec ' ;;
-    # The Mac installer test reads the shipped installer files.
-    builder/install/*) shell_picked+='mac_install ' ;;
+    # The Mac installer and Radio fetch tests read the shipped installer files.
+    builder/install/*) shell_picked+='mac_install fetch_radio ' ;;
+    # The sandbox probes read the Rust helper and its Seatbelt profile.
+    builder/agent/src/sandbox.rs|builder/agent/sandbox/*)
+      pick voice-agent; python_picked+='claude_sandbox_probe read_fence_probe ' ;;
     # Other builder files belong to the nearest package at builder/<dir> or below.
     builder/*)
       dir=${path%/*}
@@ -181,8 +184,8 @@ map_path() {
       pick voice-core; python_picked=" $python_suites "; shell_picked+='crew_install ' ;;
     # Python suites import one another and the shared scripts.
     scripts/*.py|tests/*.py) python_picked=" $python_suites " ;;
-    # The crew installer test consumes the guided bootstrap.
-    bootstrap/*) shell_picked+='crew_install ' ;;
+    # Rust install parity and the crew installer test consume the guided bootstrap.
+    bootstrap/*) pick voice-core; shell_picked+='crew_install ' ;;
     # The radio fetch test consumes the downloader.
     scripts/fetch-radio.sh) shell_picked+='fetch_radio ' ;;
     # Each shell test exercises itself.
@@ -208,6 +211,9 @@ select_touched() {
      ! git ls-files -z --others --exclude-standard >> "$changed"; then
     rm -f "$changed"
     fallback 'git could not list paths'; return
+  fi
+  if [ ! -s "$changed" ]; then
+    note "ci-local: no changed paths since $(git rev-parse --short "$base"), running only the repo-wide scans"
   fi
   while IFS= read -r -d '' path; do
     map_path "$path"
@@ -271,8 +277,9 @@ if [ "$tier" = full ]; then
   fi
   screens_steps
 else
-  # Repo-wide scans always run: shellcheck, cargo fmt, six feature trees, generated types.
+  # Repo-wide scans always run: shellcheck, the drift guard, fmt, feature trees, generated types.
   add "$shellcheck_line"
+  add 'bash tests/ci_local_test.sh'
   for t in $python_suites; do
     if [[ "$python_picked" == *" $t "* ]]; then add "python3 tests/${t}_test.py"; fi
   done
