@@ -178,7 +178,7 @@ enum Command {
         #[command(subcommand)]
         command: panel::PanelCommand,
     },
-    /// Check the Radio that links your computers
+    /// Check or install the Radio that links your computers
     Radio {
         #[command(subcommand)]
         command: radio::RadioCommand,

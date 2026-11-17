@@ -74,6 +74,40 @@ One record per slice, newest first. Paraphrase only; no real person.
   --locked -- -D warnings`, through `direct-to-main.sh land --check`. Verifier: not required by the spec.
 - **Not verified:** the rest of the suite (unchanged by this slice).
 
+## VO16.6a: Voice installs its Radio from the installer and on start (2026-11-17, lane: V1)
+
+- **Status: built, not landed.** Branch `lane-v1/VO16.6a` (pushed): `4c1dc47` brief, `84583fa` code, then the
+  Verifier and security-review fix-up. **Owed before the land:** the repeat Verifier (Opus) on the fix-up, then the
+  full `ci-local.sh` land.
+- **Why:** VO16.6 (split): Voice becomes a Radio client. This half installs the daemon PB8.9c2 can talk to; the
+  panels half (VO16.6b) waits on a Radio release (R.10).
+- **What:** `voice radio install` (prints PB8.9c2's sentence, exit 0, or `voice: <sentence>`, exit 1). `install.sh`
+  runs the installed copy's own `voice radio install` after every check and the move, with a line before it; a
+  failure adds one line and the install still exits 0. The app's Tauri `setup` hook calls
+  `voice_api::radio::install_on_start()`, which installs on a thread of its own and is dropped; a development build
+  installs nothing on start. Radio now gets only `HOME` and a fixed `PATH`. `How to install.txt` says what Radio is,
+  that it runs from sign-in, and how to turn it off (`radio uninstall --app voice`) before removing Voice.
+  `.ai/SECURITY.md` Radio rows name both callers. Brief: `plans/briefs/VO16.6a-install-radio.md`.
+- **Who built it:** V1, Claude-direct under the fallback rule (Codex at its usage limit until 2026-11-18).
+- **Verified:** red first: the API, CLI and lockdown tests failed (missing function, wrong exit, missing hook) and
+  `mac_install_test.sh` failed on "Radio was not installed once". Green: `radio::tests` 25 and `cli --test radio` 2
+  at `84583fa`; `mac_install_test.sh` and shellcheck after the fix-up. Installer mutations caught: a Radio failure
+  failing the install, no Radio step. **Not verified:** the lockdown test run (its Tauri build didn't finish under
+  load), the fix-up's Rust tests (the environment test, red before the fix-up, and the CLI success test are written; the machine held at load 30 to 38, so they had not run when this was written), clippy, a live `radio install` (attended, owed).
+- **A mistake to keep:** one installer mutation (running the download's `voice`) and five of the Verifier's runs
+  executed the test's quarantined stand-in, which shows a Gatekeeper "Not Opened" dialog on the screen. Never mutate
+  the installer toward the quarantined source copy unattended; the fix-up's test records the path of the `voice`
+  that ran instead.
+- **Security review** (sub-agent): no high or medium. Lows fixed: Radio's inherited environment (`RADIO_LAUNCHCTL`),
+  a development build installing on start, the installer's silent wait. Low kept and filed: the lasting-place rule
+  passes a group-writable folder (`cli_command.rs` `lasting`, pre-existing; SECURITY.md now says so).
+- **Verifier** (edge ⑧): Fable **FAIL** at `84583fa`: must-fix, `How to install.txt` said the installer changes
+  nothing else. Should-fixes, all taken: the how-to's removal steps, the installer test pinning the installed copy
+  (argv[0]) and no run on a collision, the CLI tests' shared scratch folder, tests of the CLI's success path and of a
+  single run, Radio's environment, the SECURITY.md overclaims. Nits taken: the group help, `.ai/PROJECT.md`, the
+  line before the step, Control-C and `launchctl` in *Not covered*. Nit kept: when the lasting rule refuses the
+  installed copy, the installer prints `CLI_PLACE` after "Voice is installed" (rare: a home under `/Volumes`).
+
 ## PB8.9c2: Voice talks to its Radio (2026-11-16, lane: V1)
 
 - **Status: built, not landed.** Branch `lane-v1/PB8.9c2` (pushed): `40fede9` brief, `147d1dd` code, `25b03a1`
