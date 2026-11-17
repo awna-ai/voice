@@ -2,6 +2,42 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## PE2.4v: the gate's touched tier, the changed crates and what depends on them (2026-11-17, lane: V1)
+
+- **Why:** every land ran the whole `scripts/ci-local.sh`, about 3 hours on today's loaded Mac (VF22's land, 3 h 04 min),
+  in a 2-hour run. Plan step PE2.4 (process evaluation, `plans/pending/2026-11-16-process-evaluation.md` in the
+  workspace) asks for a tier that runs what a change touches.
+- **What:** `ci-local.sh` builds its steps, then lists (`--list`) or runs them. `--tier full` (the default) is today's
+  gate plus `bash tests/ci_local_test.sh`. `--tier touched` maps each changed path (branch commits since the merge base
+  with `origin/main`, uncommitted and untracked files) through one rule table to crates, Python suites, shell tests and
+  the screens, adds every workspace crate that depends on a picked one (`cargo metadata`), and falls back to the full
+  gate for any path it can't map. The repo-wide scans run in every touched run: shellcheck, the gate's self-test,
+  `cargo fmt --check`, the six `cargo tree` feature checks and the generated-types check. The read-fence wiring test
+  reads the suite order from `--list` instead of the script's text.
+- **Commits:** the brief (`plans/briefs/PE2.4v-touched-tier.md`), the self-test, the script, fix-up 1
+  (`plans/briefs/PE2.4v-fixup-1.md`), this record.
+- **Who built it:** Codex, from the two briefs; V1 reviewed, committed (Codex's sandbox can't write the worktree's
+  git index) and ran the proofs.
+- **Verified:** red first (the old script ignores `--tier` and `--list`; with `python3` stubbed it stopped at the usage
+  case, "expected exit 2, got 99"), then green. Three mutations each turned the self-test red and were restored with
+  `cmp`: no dependents, no fail-safe default, the `anonymize.rs` cross-read rule removed. **Seeded break:** renaming
+  panel-runner's `BAD_KIND` inside panel-runner only (panel-runner still builds) made `--tier touched` pick
+  `voice-api voice-app voice-cli voice-panel-runner` and go red in voice-api's compile (exit 101, 3 min 32 s on a warm
+  target).
+  **Timing (one real change, VO16.6a's code diff: voice-api, voice-app, voice-cli and the Mac installer):** the
+  touched tier picked those three crates and `mac_install_test.sh`, 15 steps; its first `cargo test` (voice-api and
+  voice-cli with `claude-subscription`) took about 22 min at load1 about 20 on a warm target. The whole run had not
+  ended when this run closed (log `~/.local/state/flightdeck-lane-v/pe24v-time-V1.log`). The full gate on the same
+  load: 3 h 04 min (VF22's land, which runs every step whatever the change).
+- **Reviews:** the security review sub-task found no injection path and two MEDIUM table gaps; the Verifier (Fable)
+  failed `25f5245` on the same two, the Radio pin, and the self-test not running in the touched tier, plus three
+  should-fixes. Fix-up 1 answers all of them. The repeat Verifier (Opus) passed `1d36b35`, with two
+  should-fixes owed to the drift guard: fail on a read it can't resolve (beyond a fixed allowlist), and probe every
+  tracked file of a folder read rather than the first.
+- **Not verified:** the full gate on this branch (it is a code change to the gate, so it lands on the full gate, and how
+  that fits a run is V-Q26). Feature unification differs on purpose: `cargo test -p <subset>` builds what those crates
+  need, not the whole workspace's union (the Verifier judged it acceptable until PE3.3v's full run on `main`).
+
 ## VF24: the sandbox's terminal test waits long enough on a busy computer (2026-11-17, lane: V1)
 
 - **Why:** VF22's full-gate land (started 00:46Z, red at 03:50Z after 3 h 04 min, load1 18 to 22) stopped in
