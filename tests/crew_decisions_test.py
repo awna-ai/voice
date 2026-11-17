@@ -20,7 +20,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from crew_fixtures import assert_cli_error, ask, reply, said  # noqa: E402
+from crew_fixtures import assert_cli_error, ask, reply, said, sandbox_usable  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 CREW = SCRIPTS / "crew_decisions.py"
@@ -82,6 +82,16 @@ class Harness:
 
     def write(self, name, value):
         (self.root / name).write_text(json.dumps(value))
+
+
+def tripwire_crew(h, member, fences, *args):
+    """Kill the child on any fence content or metadata access, including through links."""
+    profile = '(version 1)(allow default)' + ''.join(
+        '(deny file-read* file-write* file-read-metadata (subpath ' + json.dumps(str(p.resolve()), ensure_ascii=False) +
+        ') (with send-signal SIGKILL))' for p in fences)
+    return subprocess.run([shutil.which("sandbox-exec"), "-p", profile, sys.executable,
+                           str(CREW), "--member", member, *args], capture_output=True, text=True,
+                          cwd=h.root, env={**os.environ, "HOME": str(TEST_HOME)}, timeout=60)
 
 
 def ada_fixture(h):
@@ -1327,6 +1337,158 @@ class Compartments(unittest.TestCase):
                 with self.subTest(command=command, env=env, cwd=cwd), patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": env}), \
                      patch.object(os, "getcwd", return_value=cwd), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                     self.assertEqual(self.c.main(list(command), member={**ADA, "compartments": self.config}), 4)
+
+    def fenced_source_fixture(self):
+        fence = self.h.root / "fence"
+        fence.mkdir()
+        (fence / "mail.mbox").write_text("From sender\n")
+        (fence / "live.jsonl").write_text("")
+        (fence / "conversations.json").write_text("[]")
+        link = self.h.root / "link"
+        link.symlink_to(fence, target_is_directory=True)
+        self.config["fenced"] = [str(fence)]
+        self.save_config()
+        return fence, (fence, link, fence.with_name("FENCE"))
+
+    def trace_fence(self, fence):
+        stack = ExitStack()
+        roots = (fence, fence.resolve())
+        for owner, name in ((os, "lstat"), (os, "stat"), (os, "readlink"), (os, "scandir"),
+                            (os, "open"), (builtins, "open")):
+            original = getattr(owner, name)
+            def guarded(path, *args, _original=original, **kwargs):
+                if isinstance(path, (str, bytes, os.PathLike)):
+                    self.assertFalse(any(self.c.under(Path(os.fsdecode(path)), root) for root in roots),
+                                     "touched fence")
+                return _original(path, *args, **kwargs)
+            stack.enter_context(patch.object(owner, name, guarded))
+        return stack
+
+    def test_source_openers_refuse_before_io(self):
+        fence, paths = self.fenced_source_fixture()
+        m = self.c.load_member(self.c.read_member(self.member))
+        for root in paths:
+            for kind, filename in (("mbox", "mail.mbox"), ("live", "live.jsonl")):
+                source = {"name": "fixture", "kind": kind, "path": str(root / filename),
+                          "own_addresses": ["sam@example.com"]}
+                with self.subTest(root=root, kind=kind), self.trace_fence(fence), \
+                        patch.object(os.path, "lexists", side_effect=AssertionError("lexists before refusal")), \
+                        patch.object(os, "open", side_effect=AssertionError("opened source")):
+                    with self.assertRaises(self.c.Fenced):
+                        {"mbox": self.c.mine_mbox, "live": self.c.mine_live}[kind](m, source)
+
+    def test_source_openers_cli_exit_four(self):
+        fence, paths = self.fenced_source_fixture()
+        for root in paths:
+            for kind, filename in (("mbox", "mail.mbox"), ("live", "live.jsonl")):
+                self.h.write("private.json", {"sources": [{"name": "fixture", "kind": kind,
+                    "path": str(root / filename), "consent": "2026-11-01",
+                    **({"own_addresses": ["sam@example.com"]} if kind == "mbox" else {})}]})
+                with self.subTest(root=root, kind=kind):
+                    proc = self.h.crew(self.member, "sources", "mine", "--name", "fixture")
+                    self.assertEqual(proc.returncode, 4, proc.stderr)
+                    self.assertEqual(proc.stderr, "crew_decisions: refusing: fenced\n")
+
+    @unittest.skipUnless(sandbox_usable(), "sandbox-exec cannot apply a profile here")
+    def test_source_openers_kernel_tripwire(self):
+        fence, paths = self.fenced_source_fixture()
+        for root in paths:
+            for kind, filename in (("mbox", "mail.mbox"), ("live", "live.jsonl")):
+                self.h.write("private.json", {"sources": [{"name": "fixture", "kind": kind,
+                    "path": str(root / filename), "consent": "2026-11-01",
+                    **({"own_addresses": ["sam@example.com"]} if kind == "mbox" else {})}]})
+                with self.subTest(root=root, kind=kind):
+                    proc = tripwire_crew(self.h, self.member, [fence], "sources", "mine", "--name", "fixture")
+                    self.assertEqual(proc.returncode, 4, proc.stderr)
+
+    def test_export_opener_refuses_before_io(self):
+        fence, paths = self.fenced_source_fixture()
+        m = self.c.load_member(self.c.read_member(self.member))
+        for root in paths:
+            with self.subTest(root=root), self.trace_fence(fence), \
+                    patch.object(Path, "is_dir", side_effect=AssertionError("stat export")):
+                with self.assertRaises(self.c.Fenced):
+                    self.c.cmd_claudeai_inspect(m, self.c.argparse.Namespace(export=str(root / "conversations.json")))
+
+    def test_default_state_paths_refuse_before_commands(self):
+        fence, paths = self.fenced_source_fixture()
+        for root in paths:
+            for command in (("record",), ("similar", "--query", "q"), ("pending",)):
+                with self.subTest(root=root, command=command), self.trace_fence(fence), \
+                        patch.dict(self.c.COMMANDS, {command[0]: lambda *args: self.fail("command ran")}):
+                    with redirect_stderr(io.StringIO()):
+                        rc = self.c.main(list(command), member={**ADA, "state_dir": str(root),
+                                                               "compartments": self.config})
+                    self.assertEqual(rc, 4)
+
+    @unittest.skipUnless(sandbox_usable(), "sandbox-exec cannot apply a profile here")
+    def test_default_state_paths_kernel_tripwire(self):
+        fence, paths = self.fenced_source_fixture()
+        for root in paths:
+            member = self.h.member({**ADA, "state_dir": str(root), "compartments": "compartments.json"})
+            for command in (("record",), ("similar", "--query", "q"), ("pending",)):
+                with self.subTest(root=root, command=command):
+                    proc = tripwire_crew(self.h, member, [fence], *command)
+                    self.assertEqual(proc.returncode, 4, proc.stderr)
+
+    def test_hub_children_and_resolutions_cached_per_member(self):
+        hub = self.h.root / "hub"
+        hub.mkdir()
+        (hub / "garden").mkdir()
+        (hub / "file").write_text("fixture")
+        fence = self.h.root / "fence"
+        fence.mkdir()
+        (hub / "linked").symlink_to(fence)
+        self.config["fenced"] = [str(fence)]
+        self.config["hub"]["paths"] = [str(hub)]
+        m = self.c.load_member({**ADA, "compartments": self.config})
+        with patch.object(self.c, "safe_resolve", wraps=self.c.safe_resolve) as resolve, \
+                patch.object(os, "scandir", wraps=os.scandir) as scan:
+            with patch.object(self.c, "safe_resolve", side_effect=AssertionError("route key resolved")):
+                self.assertEqual(self.c.hub_project_compartment(m.compartments, hub, "CLIENT-STACK"), "client")
+            for _ in range(2):
+                for name, expected in (("garden", "p:garden"), ("linked", None), ("file", None), ("absent", None)):
+                    self.assertEqual(self.c.hub_project_compartment(m.compartments, hub, name), expected)
+            self.assertEqual(scan.call_count, 1)
+            self.assertEqual([call.args[1] for call in resolve.call_args_list],
+                             [hub, hub / "garden", hub / "linked"])
+        other = self.c.load_member({**ADA, "compartments": self.config})
+        with patch.object(os, "scandir", wraps=os.scandir) as scan:
+            self.assertEqual(self.c.hub_project_compartment(other.compartments, hub, "garden"), "p:garden")
+            self.assertEqual(scan.call_count, 1)
+
+    def test_folded_fence_comparisons_prepared_once(self):
+        m = self.c.load_member({**ADA, "compartments": self.config})
+        lexical = self.c.lexical_fences(m.compartments, self.h.root)
+        resolved = self.c.fenced_forms(m.compartments, self.h.root)
+        original = self.c.encode
+        def encode(path):
+            self.assertNotIn(Path(path), (*lexical, *resolved), "re-encoded a fence root")
+            return original(path)
+        with patch.object(self.c, "encode", side_effect=encode):
+            for roots in (lexical, resolved):
+                for _ in range(2):
+                    self.assertTrue(self.c.matches_fence(roots[0] / "child", roots))
+                    self.assertFalse(self.c.matches_fence(self.h.root / "allowed", roots))
+
+    def test_hub_distinct_megabyte_names_with_two_fences(self):
+        self.config["fenced"].append("~/other-fence")
+        m = self.c.load_member({**ADA, "compartments": self.config})
+        value = " ".join("~/.hub/projects/unknown-%05d/file" % i for i in range(30000))
+        self.assertGreater(len(value), 1024 * 1024)
+        def deadline(signum, frame):
+            self.fail("distinct hub routing exceeded 4 seconds")
+        old = signal.signal(signal.SIGALRM, deadline)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 4)
+            start = time.perf_counter()
+            actual = self.c.hub_compartment(m.compartments, "work", [self.write_tool(value)])
+            elapsed = time.perf_counter() - start
+            self.assertEqual(actual, "work")
+            self.assertLess(elapsed, 4)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old)
 
     def test_fenced_root_forms_cached_per_member(self):
         m = self.save_config()

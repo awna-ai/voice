@@ -35,14 +35,24 @@ def walk(root, strict=False):
     if root.is_symlink():
         raise Unreadable("symlink")
     paths = []
-    for folder, dirs, files in os.walk(root, followlinks=False, onerror=raise_error if strict else None):
-        for name in dirs + files:
-            if ignored(name):
-                continue
-            path = Path(folder) / name
-            if path.is_symlink() or name in files:
-                paths.append(path.relative_to(root))
-        dirs[:] = [name for name in dirs if not ignored(name) and not (Path(folder) / name).is_symlink()]
+    pending = [root]
+    while pending:
+        folder = pending.pop()
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    if ignored(entry.name):
+                        continue
+                    path = folder / entry.name
+                    if entry.is_symlink():
+                        paths.append(path.relative_to(root))
+                    elif entry.is_dir(follow_symlinks=False):
+                        pending.append(path)
+                    else:
+                        paths.append(path.relative_to(root))
+        except OSError:
+            if strict:
+                raise
     return sorted(paths, key=lambda p: p.as_posix())
 
 

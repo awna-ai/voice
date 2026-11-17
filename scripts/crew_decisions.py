@@ -122,6 +122,9 @@ class CompartmentMap(dict):
     """Validated config with lazily resolved fence roots, private to one member."""
     _fenced_roots = None
     _resolved_home = None
+    _lexical_fenced_roots = None
+    _hub_children = None
+    _hub_projects = None
 
 
 def check_compartments(c):
@@ -202,8 +205,30 @@ def absolute_path(path, cwd):
     return path
 
 
+class FenceRoots(tuple):
+    """Fence spellings and their folded comparisons, prepared once per member."""
+    def __new__(cls, roots):
+        value = super().__new__(cls, roots)
+        value.comparisons = tuple((tuple(map(fold, root.parts)), fold(encode(root))) for root in value)
+        return value
+
+
 def matches_fence(path, roots):
-    return any(under(path, root) or fold(encode(root)) in fold(encode(path)) for root in roots)
+    if not roots:
+        return False
+    comparisons = roots.comparisons if isinstance(roots, FenceRoots) else FenceRoots(roots).comparisons
+    parts = tuple(map(fold, path.parts))
+    encoded = fold(encode(path))
+    return any(parts[:len(root)] == root or spelling in encoded for root, spelling in comparisons)
+
+
+def lexical_fences(c, cwd):
+    cached = getattr(c, "_lexical_fenced_roots", None)
+    if cached is None:
+        cached = FenceRoots(Path(os.path.abspath(absolute_path(root, cwd))) for root in c["fenced"])
+        if isinstance(c, CompartmentMap):
+            c._lexical_fenced_roots = cached
+    return cached
 
 
 def walk_resolve(path, roots):
@@ -254,7 +279,7 @@ def fenced_forms(c, cwd):
             # Resolve only the parent: never lstat the fence folder itself.
             parent, blocked = walk_resolve(raw.parent, ())
             forms.extend((lexical, Path(raw.anchor) if blocked else parent / raw.name))
-        cached = tuple(forms)
+        cached = FenceRoots(forms)
         if isinstance(c, CompartmentMap):
             c._fenced_roots = cached
     return cached
@@ -264,7 +289,7 @@ def safe_resolve(c, path, cwd):
     """Return a resolved path and whether resolving it encounters a fence."""
     raw = absolute_path(path, cwd)
     lexical = Path(os.path.abspath(raw))
-    if matches_fence(lexical, (Path(os.path.abspath(absolute_path(root, cwd))) for root in c["fenced"])):
+    if matches_fence(lexical, lexical_fences(c, cwd)):
         return lexical, True
     return walk_resolve(raw, fenced_forms(c, cwd))
 
@@ -278,17 +303,44 @@ def route_compartment(hub, project):
 
 
 def hub_project_compartment(c, hub_path, project):
-    """Accept only literal, known hub projects, without probing fenced paths."""
+    """Accept only route keys or listed hub children, without probing fenced paths."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", project):
         return None
     target = Path(hub_path).expanduser() / project
-    real, fenced = safe_resolve(c, target, os.getcwd())
-    if fenced:
+    if matches_fence(Path(os.path.abspath(target)), lexical_fences(c, os.getcwd())):
         return None
     hub = c["hub"]
-    if any(fold(name) == fold(project) for name in hub["routes"]) or os.path.isdir(real):
+    if any(fold(name) == fold(project) for name in hub["routes"]):
         return route_compartment(hub, project)
-    return None
+    children = getattr(c, "_hub_children", None)
+    if children is None:
+        children = {}
+        if isinstance(c, CompartmentMap):
+            c._hub_children = children
+    if hub_path not in children:
+        names = set()
+        real, fenced = safe_resolve(c, hub_path, os.getcwd())
+        if not fenced:
+            try:
+                with os.scandir(real) as entries:
+                    for entry in entries:
+                        if entry.is_symlink() or entry.is_dir(follow_symlinks=False):
+                            names.add(fold(entry.name))
+            except OSError:
+                pass
+        children[hub_path] = names
+    if fold(project) not in children[hub_path]:
+        return None
+    projects = getattr(c, "_hub_projects", None)
+    if projects is None:
+        projects = {}
+        if isinstance(c, CompartmentMap):
+            c._hub_projects = projects
+    key = (hub_path, project)
+    if key not in projects:
+        real, fenced = safe_resolve(c, target, os.getcwd())
+        projects[key] = not fenced and os.path.isdir(real)
+    return route_compartment(hub, project) if projects[key] else None
 
 
 def folder_compartment(c, folder_name):
@@ -1396,10 +1448,11 @@ MINE_MARKS = {"y", "yes", "mine"}
 REVIEW_COLUMNS = ("mine", "created", "updated", "messages", "project", "title", "uuid")
 
 
-def export_files(path):
+def export_files(m, path):
     """The export's file names and its parsed conversations.json, from a zip, a folder or the file itself.
     Read in memory: nothing from the export is unpacked to disk."""
     path = Path(path).expanduser()
+    refuse_fenced_path(m, path)
     if path.is_dir():
         names = sorted(p.name for p in path.iterdir() if p.is_file())
         return names, json.loads((path / "conversations.json").read_text())
@@ -1453,7 +1506,7 @@ def missing_fields(tree):
 
 
 def cmd_claudeai_inspect(m, args):
-    names, conversations = export_files(args.export)
+    names, conversations = export_files(m, args.export)
     if not isinstance(conversations, list):
         raise Failed(f"conversations.json is a {type_name(conversations)}, not a list")
     tree = key_tree(conversations, "", {})
@@ -1540,7 +1593,7 @@ def opening_title(m, humans):
 
 
 def cmd_claudeai_titles(m, args):
-    _, conversations = export_files(args.export)
+    _, conversations = export_files(m, args.export)
     marks_by_uuid = {r["uuid"]: r["mine"] for r in read_review(args.out)}
     rows, untitled = [], Counter()
     for c in sorted(conversations, key=lambda c: (utc(c["created_at"]), c["uuid"])):
@@ -1582,7 +1635,7 @@ def cmd_claudeai_mark(m, args):
 
 
 def cmd_claudeai_mine(m, args):
-    _, conversations = export_files(args.export)
+    _, conversations = export_files(m, args.export)
     review = {r["uuid"]: r for r in read_review(args.review)}
     kept, dropped, read, not_mine, unmarked = [], Counter(), 0, 0, 0
     for c in conversations:
@@ -2083,9 +2136,15 @@ def mail_record(m, source, message, own, excluded, dropped):
     return message_record(f"src-{source['name']}", when, source["name"], text, "")
 
 
-def open_source_file(name, path, what):
+def refuse_fenced_path(m, path):
+    if m.compartments is not None and path_compartment(m.compartments, path, os.getcwd()) == "fenced":
+        raise Fenced("refusing: fenced")
+
+
+def open_source_file(m, name, path, what):
     """A source's file opened read-only without following a link, so it cannot be swapped for one
     between the check and the read."""
+    refuse_fenced_path(m, path)
     if not os.path.lexists(path):
         raise Failed(f"{name}: no {what} at the source's path")
     try:
@@ -2106,7 +2165,7 @@ def mine_mbox(m, source):
     own = {a.lower() for a in source["own_addresses"]}
     excluded = compile_pattern(f"{name}: exclude_to", source["exclude_to"]) if "exclude_to" in source else None
     kept, skipped, dropped, records, read, inside = [], Counter(), Counter(), Counter(), 0, 0
-    with open_source_file(name, Path(source["path"]).expanduser(), "mbox") as box:
+    with open_source_file(m, name, Path(source["path"]).expanduser(), "mbox") as box:
         for raw, from_lines in crew_mail.messages(box):
             read += 1
             inside += from_lines
@@ -2181,10 +2240,11 @@ def live_record(m, line):
 def mine_live(m, source):
     name = source["name"]
     path = Path(source.get("path") or m.state("live.jsonl")).expanduser()
+    refuse_fenced_path(m, path)
     if not os.path.lexists(path):
         print(f"{name}: no log yet")
         return
-    with open_source_file(name, path, "log") as log:
+    with open_source_file(m, name, path, "log") as log:
         data = log.read(MAX_LIVE_BYTES + 1)
     if len(data) > MAX_LIVE_BYTES:
         raise Failed(f"{name}: the log is over {MAX_LIVE_BYTES // 1024**2} MiB")
@@ -2798,6 +2858,7 @@ def main(argv=None, member=None, prog="crew_decisions", description=None):
         if getattr(args, name, None):
             setattr(args, name, str(Path(getattr(args, name)).expanduser()))
     try:
+        refuse_fenced_path(m, m.state_dir)
         if m.compartments is not None:
             for name in PATH_ARGUMENTS:
                 # These commands render/raise their own cwd refusal (where also prints JSON).

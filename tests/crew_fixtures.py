@@ -1,5 +1,20 @@
 """Fictional transcript records shared by the crew CLI tests."""
 
+from functools import lru_cache
+import shutil
+import subprocess
+
+
+@lru_cache(maxsize=1)
+def sandbox_usable():
+    """Whether this process can apply a sandbox profile, checked once."""
+    sandbox = shutil.which("sandbox-exec")
+    if sandbox is None:
+        return False
+    return subprocess.run([sandbox, "-p", "(version 1)(allow default)", "/usr/bin/true"],
+                          capture_output=True).returncode == 0
+
+
 HUMAN = {"kind": "human"}
 
 

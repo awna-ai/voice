@@ -4,13 +4,15 @@ import hashlib
 import json
 import os
 import sys
+import unicodedata
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from crew_decisions_test import ARI, Harness  # noqa: E402
-from crew_fixtures import assert_cli_error  # noqa: E402
+from crew_decisions_test import ARI, Harness, tripwire_crew  # noqa: E402
+from crew_fixtures import assert_cli_error, sandbox_usable  # noqa: E402
 
 
 class Documents(unittest.TestCase):
@@ -118,6 +120,95 @@ class Documents(unittest.TestCase):
         for path in self.output.iterdir():
             self.assertNotIn("SYMLINK_TARGET_CONTENT", path.read_text())
             self.assertNotIn("HIDDEN_CONTENT", path.read_text())
+
+    def test_walk_parity_and_unreadable_subfolder(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import crew_documents as docs
+        for name in ("z.txt", "a/b.txt", ".hidden.txt", "__MACOSX/x.txt", "~$draft.txt",
+                     "Thumbs.db", "desktop.ini", "denied/x.txt"):
+            self.file(name, "fixture")
+        for name, target in (("file-link", self.source / "z.txt"), ("dir-link", self.source / "a"),
+                             ("dangling", self.source / "missing")):
+            (self.source / name).symlink_to(target)
+        def old_walk(strict):
+            paths = []
+            for folder, dirs, files in os.walk(self.source, followlinks=False,
+                    onerror=docs.raise_error if strict else None):
+                for name in dirs + files:
+                    if not docs.ignored(name):
+                        path = Path(folder) / name
+                        if path.is_symlink() or name in files:
+                            paths.append(path.relative_to(self.source))
+                dirs[:] = [name for name in dirs if not docs.ignored(name)
+                           and not (Path(folder) / name).is_symlink()]
+            return sorted(paths, key=lambda p: p.as_posix())
+        original = os.scandir
+        def scan(path):
+            if Path(path) == self.source / "denied":
+                raise PermissionError("unreadable fixture")
+            return original(path)
+        for denied in (False, True):
+            with self.subTest(denied=denied), patch.object(os, "scandir", scan if denied else original):
+                self.assertEqual(docs.walk(self.source), old_walk(False))
+                if denied:
+                    for walk in (lambda: old_walk(True), lambda: docs.walk(self.source, strict=True)):
+                        with self.assertRaisesRegex(PermissionError, "unreadable fixture"):
+                            walk()
+                else:
+                    self.assertEqual(docs.walk(self.source, strict=True), old_walk(True))
+        link = self.h.root / "root-link"
+        link.symlink_to(self.source)
+        with self.assertRaisesRegex(docs.Unreadable, "symlink"):
+            docs.walk(link)
+
+    def test_walk_never_classifies_link_targets(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import crew_documents as docs
+        self.file("a.txt", "fixture")
+        (self.source / "link").symlink_to(self.source / "a.txt")
+        original = os.scandir
+        case = self
+        class Entry:
+            def __init__(self, entry):
+                self.entry = entry
+                self.name = entry.name
+            def is_symlink(self):
+                return self.entry.is_symlink()
+            def is_dir(self, *, follow_symlinks=True):
+                case.assertFalse(follow_symlinks, "classified link target")
+                return self.entry.is_dir(follow_symlinks=False)
+        class Scan:
+            def __init__(self, path):
+                self.scan = original(path)
+            def __enter__(self):
+                return self
+            def __iter__(self):
+                return self
+            def __next__(self):
+                return Entry(next(self.scan))
+            def __exit__(self, *args):
+                self.scan.close()
+        with patch.object(os, "scandir", Scan):
+            self.assertEqual(docs.walk(self.source), [Path("a.txt"), Path("link")])
+
+    @unittest.skipUnless(sandbox_usable(), "sandbox-exec cannot apply a profile here")
+    def test_document_and_folder_review_kernel_tripwire(self):
+        fence = self.h.root / "Café"
+        (fence / "sub").mkdir(parents=True)
+        (fence / "a.txt").write_text("fenced")
+        for name, target in (("dir-link", fence / "sub"), ("file-link", fence / "a.txt"),
+                             ("nfd-link", Path(unicodedata.normalize("NFD", str(fence))))):
+            (self.source / name).symlink_to(target)
+        self.file("ok.txt", "Keep the harbour.")
+        self.h.write("compartments.json", {"version": 1, "fenced": [str(fence)], "compartments": {}})
+        self.member = self.h.member({**ARI, "compartments": "compartments.json"})
+        self.h.write("private.json", {"sources": [{"name": "fixture", "kind": "folder",
+            "path": str(self.source), "consent": "2026-11-01"}]})
+        for command in (("documents", "--dir", str(self.source), "--out-dir", str(self.output)),
+                        ("sources", "review", "--name", "fixture", "--projects", str(self.h.projects))):
+            with self.subTest(command=command):
+                proc = tripwire_crew(self.h, self.member, [fence], *command)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_fifo_is_skipped_without_opening_and_regular_file_is_read(self):
         self.file("a.txt", "Keep the harbour.")
