@@ -52,36 +52,39 @@ pub fn cli_word(path: &Path, home: &Path) -> Result<String> {
 
 /// `shipped_cli()` as one shell word for a SKILL.md (see `cli_word`). A release build refuses
 /// with `CLI_PLACE` unless the command is in a place that lasts (see `lasting`); a development
-/// build runs from its own build folder, wherever that is.
+/// build runs from its own build folder, wherever that is; in a release build the word uses the
+/// canonical path the rule checked.
 pub fn shipped_cli_word(home: &Path) -> Result<String> {
     word_from(&shipped_cli()?, home, !cfg!(debug_assertions))
 }
 
 /// `shipped_cli()`, refused with `CLI_PLACE` in a release build unless it is in a place that
-/// lasts (see `lasting`): for a path another program keeps, such as the handler Radio records.
+/// lasts (see `lasting`): for a path another program keeps, such as the handler Radio records;
+/// in a release build this is the canonical path the rule checked.
 pub fn shipped_lasting_cli(home: &Path) -> Result<PathBuf> {
     let path = shipped_cli()?;
     if !cfg!(debug_assertions) {
-        lasting_at_home(&path, home)?;
+        return lasting_at_home(&path, home);
     }
     Ok(path)
 }
 
 fn word_from(path: &Path, home: &Path, lasting_only: bool) -> Result<String> {
     if lasting_only {
-        lasting_at_home(path, home)?;
+        cli_word(&lasting_at_home(path, home)?, home)
+    } else {
+        cli_word(path, home)
     }
-    cli_word(path, home)
 }
 
-fn lasting_at_home(path: &Path, home: &Path) -> Result<()> {
+fn lasting_at_home(path: &Path, home: &Path) -> Result<PathBuf> {
     lasting(
         path,
         &[&home.join("Applications"), Path::new("/Applications")],
     )
 }
 
-fn lasting(path: &Path, roots: &[&Path]) -> Result<()> {
+fn lasting(path: &Path, roots: &[&Path]) -> Result<PathBuf> {
     let metadata = std::fs::symlink_metadata(path).map_err(|source| Error::Io {
         path: path.to_path_buf(),
         source,
@@ -125,7 +128,7 @@ fn lasting(path: &Path, roots: &[&Path]) -> Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(canonical)
 }
 
 /// The command itself: owned by the person or root, and writable by no one else (Radio's handler rule).
@@ -239,6 +242,23 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_lasting_path_is_the_canonical_one_checked() {
+        let root = Scratch::new();
+        let command = command_at(root.path(), "Applications/Voice.app/Contents/MacOS/voice");
+        let expected = command.canonicalize().unwrap();
+        assert_ne!(
+            command, expected,
+            "the scratch path should go through the /var link"
+        );
+        assert_eq!(lasting(&command, &[root.path()]).unwrap(), expected);
+        assert_eq!(
+            word_from(&command, root.path(), true).unwrap(),
+            cli_word(&expected, root.path()).unwrap()
+        );
+    }
+
     #[test]
     fn a_missing_command_is_an_io_error() {
         let root = Scratch::new();
@@ -335,7 +355,7 @@ mod tests {
         assert!(lasting(&command, &[root.path()]).is_ok());
         assert_eq!(
             word_from(&command, root.path(), true).unwrap(),
-            cli_word(&command, root.path()).unwrap()
+            cli_word(&command.canonicalize().unwrap(), root.path()).unwrap()
         );
         let applications = root.path().join("Applications");
         let gid = fs::symlink_metadata(&applications).unwrap().gid();
@@ -357,7 +377,7 @@ mod tests {
         let command = command_at(home.path(), "Applications/Voice.app/Contents/MacOS/voice");
         assert_eq!(
             word_from(&command, home.path(), true).unwrap(),
-            cli_word(&command, home.path()).unwrap()
+            cli_word(&command.canonicalize().unwrap(), home.path()).unwrap()
         );
         let download = command_at(
             home.path(),
