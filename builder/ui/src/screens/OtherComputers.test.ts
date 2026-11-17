@@ -82,11 +82,12 @@ it.each([undefined, { writeText: vi.fn().mockRejectedValue(new Error('private de
   await button(wrapper, 'Copy').trigger('click'); await flushPromises()
   expect(wrapper.get('[role="alert"]').text()).toBe("Voice couldn't copy the code. Select it and copy it yourself.")
 })
-it('keeps the entire invite refusal including its recovery sentence', async () => {
+it('shows the invite failure and its recovery sentence exactly once', async () => {
   const message = `Voice couldn't make a join code. ${recovery}`
   const { wrapper } = await linked({ radioInvite: vi.fn().mockRejectedValue({ message }) })
   await button(wrapper, 'Make a join code').trigger('click'); await flushPromises()
-  expect(wrapper.findAll('[role="alert"]').map(alert => alert.text())).toContain(message)
+  expect(wrapper.get('[role="alert"]').text()).toBe("Voice couldn't make a join code.")
+  expect(wrapper.text().split(radioWords.recoverySentence('~/example/radio-recovery.key')).length - 1).toBe(1)
 })
 it('sets an empty address, keeps a refused field, and changes an existing address', async () => {
   const { wrapper, backend } = await linked({ radioLinkAddress: vi.fn().mockResolvedValue({ ...address, addresses: [] }), radioSetLinkAddress: vi.fn().mockRejectedValueOnce({ message: 'Try that address again.' }).mockResolvedValue({ ...address, addresses: ['10.0.0.7'], port: 7342 }) })
@@ -194,7 +195,7 @@ it.each([
 it('keeps a recovery path from a refusal after a later invite succeeds without one', async () => {
   const { wrapper } = await linked({ radioInvite: vi.fn().mockRejectedValueOnce({ message: `Try again. ${recovery}` }).mockResolvedValue(invite) })
   await button(wrapper, 'Make a join code').trigger('click'); await flushPromises()
-  expect(wrapper.text()).toContain(`Try again. ${recovery}`)
+  expect(wrapper.findAll('[role="alert"]').map(alert => alert.text())).toEqual(['Try again.', recovery])
   await button(wrapper, 'Make a join code').trigger('click'); await flushPromises()
   expect(wrapper.get('[role="alert"]').text()).toBe(recovery)
 })

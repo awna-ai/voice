@@ -91,7 +91,10 @@ async function makeCode() {
   } catch (failure) {
     error.value = failureMessage(failure, "Voice couldn't make a join code. Try again.")
     const path = recoveryPath(error.value)
-    if (path !== null) recoveryFile.value = path
+    if (path !== null) {
+      recoveryFile.value = path
+      error.value = error.value.replace(recoverySentence(path), '').trim()
+    }
   } finally { action.value = '' }
 }
 async function copy() {
