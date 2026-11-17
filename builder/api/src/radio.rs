@@ -45,8 +45,7 @@ pub mod text {
     pub const NOT_RUNNING: &str = "Radio isn't running on this computer.";
     pub const NO_ANSWER: &str = "Radio didn't answer. Try again in a moment.";
     pub const REFUSED: &str = "Radio refused, without saying why.";
-    pub const TOO_OLD: &str =
-        "The Radio on this computer can't link computers. Install Voice again to update it.";
+    pub const TOO_OLD: &str = "The Radio on this computer is older than this Voice. Run voice radio install to update it.";
     pub const NO_COMPUTERS: &str = "Linked computers: none yet.";
     pub const OTHER_MAJOR: &str =
         "The Radio on this computer speaks a version this Voice doesn't. Install the newest Voice.";
@@ -250,7 +249,7 @@ impl Radio {
         }
     }
 
-    /// Radio's version, refusing one that can't link computers.
+    /// Radio's version, refusing one older than this Voice or missing a link op.
     pub fn hello(&self) -> Result<Hello> {
         let response = self.ask(Request::Hello {})?;
         let protocol = response.protocol.ok_or_else(no_answer)?;

@@ -1,4 +1,9 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    io::Write,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 struct Scratch(PathBuf);
 
@@ -20,6 +25,36 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn radio_message_is_refused_printing_and_writing_nothing() {
+    let scratch = Scratch::new();
+    let home = scratch.0.join("home");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_voice"))
+        .args(["message"])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("HOME", &home)
+        .env("RADIO_FROM_KEY", "a".repeat(64))
+        .env("RADIO_FROM_NAME", "pebble")
+        .env("RADIO_MESSAGE_ID", "0".repeat(32))
+        .current_dir("/")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"kind":"seat_turn","room":"r1"}"#)
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(fs::read_dir(&home).unwrap().next().is_none());
 }
 
 #[test]
