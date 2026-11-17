@@ -355,3 +355,50 @@ That was so before this slice and is a PB8.9 design note, not this fix-up's.
 Gate: `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`; `cargo test --locked -p
 voice-ingest`, `-p voice-api`, `-p voice-cli --test radio` (the socket tests can't run in your sandbox: say which
 you couldn't run). Load is high here: `-j 2` and `--test-threads 2`. Don't commit.
+
+## Fix-up 6 (the repeat Verifier on `0a460af`: FAIL, 2026-11-17)
+
+Fix-up 5 closed the label prompt: no delivered record can push one past the provider's 8 MiB. Two later steps
+still can, with records under `PART_BYTES` that `check_record` takes, and a stored record never goes away:
+
+- **Distil.** A row copies `project` (and, for a question, `q`, the option labels and `picks`) in full;
+  `distil_prompt` shortens only `msg`, `own` and `notes` (`builder/build/src/build.rs` `distil_prompt`), and a
+  prompt over `DISTIL_BYTES` (700,000) ends the build. Two delivered messages with a 390 KB `project` and the same
+  text land in one group and end every build. Locally `project` is a folder name (`mine::project_name`), at most
+  255 bytes.
+- **The backtest.** Held-out questions are the newest by timestamp, `split` keeps `project`, `header`, `question`
+  and `options`, and `backtest_prompt` puts up to `BATCH` (40) of them, plus up to `PRECEDENTS` (6) precedents
+  each, into one prompt. Thirty delivered questions of 390 KB dated far in the future go past 8 MiB.
+
+**The rule:** a delivered record may be no bigger than a real record of that kind, and small enough that a full
+backtest batch of them fits one prompt. Then a peer can do nothing a heavy local history can't.
+
+1. **The writer's two missing limits, in `check_record`** (`builder/ingest/src/mine.rs`):
+   - `project` is at most 255 bytes (`len()`), a const named for the folder-name limit and documented as such.
+   - a message's `text` is at most 4000 characters (`chars().count()`), one const shared with `own_message`'s
+     `> 4000` (replace the literal there).
+   - Tests beside the fix-up 5 ones: 255 bytes of `project` passes, 256 is refused; 4000 characters of `text`
+     passes (also with a multi-byte character), 4001 is refused. The drift test still passes unchanged.
+2. **A smaller line limit for a delivered record.** In `builder/api/src/sending.rs`, replace fix-up 5's
+   `PART_BYTES` skip with `const DELIVERED_RECORD_BYTES: usize = 16 * 1024;`, measured the same way (one JSONL
+   line, `mine::to_jsonl`), still skipping only that record. Its doc comment says why 16 KiB: a full backtest batch
+   (40 held-out questions, each with 6 precedents) of records this size stays under the provider's 8 MiB, and a real
+   message (4000 characters, a 300-character context, a 255-byte project) fits unless it is mostly emoji or control
+   characters, which is then skipped on its own, not the whole send. Add a test (no socket needed) that pins the
+   arithmetic with the real consts: `voice_build::build::BATCH * (1 + voice_build::build::PRECEDENTS) *
+   DELIVERED_RECORD_BYTES < voice_agent::provider::MAX_PROMPT` (`voice-api` already depends on both crates; check
+   the module paths before writing it). Move fix-up 5's two size tests to
+   the new limit: `DELIVERED_RECORD_BYTES + 1` is skipped beside an ordinary record, exactly
+   `DELIVERED_RECORD_BYTES` is kept.
+3. **Mutation-check** each new rule (drop the project check, the text check, flip each `>` to `>=`, put the skip
+   back to `PART_BYTES`): each must fail a test. `cp` backups and `cmp`, never `git checkout --`.
+
+Not changed, recorded: a peer chooses its records' timestamps, so it can make its own questions the held-out set
+(the score then measures those); with every record at most 16 KiB this can't end a build. Distil's group limit
+(about 43 delivered questions of 16 KiB in one category reach `DISTIL_BYTES`) is the same limit a large local
+history already meets ("splitting a large group is not built yet"). A peer can still make the build computer pay
+for one label call per part of its records, up to its 256 MiB peer file.
+
+Gate: `cargo fmt --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; `cargo test --locked -p
+voice-ingest --lib`, and the voice-api `sending` tests (`cargo test --locked -p voice-api --lib sending`); say which
+socket tests your sandbox couldn't run. Load is high: `-j 2` and `--test-threads 2`. Don't commit.
