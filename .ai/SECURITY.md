@@ -75,10 +75,11 @@ Applications folder in the home folder (where `install.sh` puts it) or `/Applica
 `/Volumes` or an `AppTranslocation` folder, and the command and every folder above it must be owned
 by the person or root; the command may not be writable by its group or by others, and a folder may
 be writable by its group only when that group is wheel or admin (as `/Applications` is), never by
-others (Radio's own rule for a handler); anything else is refused with a sentence that
-says to install with `install.sh` (`builder/core/src/cli_command.rs` tests). Known limits: a
-development build skips the rule (it runs from its own build folder); the rule is checked when the
-assistant is made, not each time the command runs.
+others (Radio's own rule for a handler, except that Voice also refuses a world-writable folder with
+the sticky bit, which Radio allows); anything else is refused with a sentence that says to install
+with `install.sh` (`builder/core/src/cli_command.rs` tests). Known limits: a development build skips
+the rule (it runs from its own build folder); the rule is checked when the assistant is made, not
+each time the command runs.
 
 The texts an assistant's SKILL.md records or looks up never pass through the
 shell: the SKILL.md (and the guided build's backtest brief) gives them to `--stdin` as one JSON
