@@ -201,7 +201,7 @@ impl From<voice_core::error::Error> for FoldError {
     }
 }
 /// Preserve existing records verbatim; only new ids pass through this member's privacy filters.
-/// Skip individual delivered records whose JSONL line exceeds one build part.
+/// Skip individual delivered records whose JSONL line exceeds `DELIVERED_RECORD_BYTES`.
 fn fold(
     member: &voice_core::member::Member,
     filters: &Filters,
