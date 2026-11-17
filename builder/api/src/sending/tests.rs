@@ -24,7 +24,12 @@ fn assistant(home: &Path, member: bool) -> PathBuf {
     }
     state
 }
+fn message_id(label: &str) -> String {
+    let hex: String = label.bytes().take(6).map(|b| format!("{b:02x}")).collect();
+    format!("message:{hex:0<12}")
+}
 fn record(id: &str, text: &str) -> Value {
+    let id = message_id(id);
     json!({"id":id,"timestamp":"2026-11-17","kind":"message","project":"demo","text":text,"context":""})
 }
 fn lines(records: &[Value]) -> Vec<u8> {
@@ -287,7 +292,7 @@ fn takes_two_peers_and_never_shrinks_then_pages_from_saved_cursor() {
             .iter()
             .map(|(_, r)| r["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["one", "three", "two"]
+        [message_id("one"), message_id("three"), message_id("two")]
     );
     private(&s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl"));
     private(&s.join("decisions-from-bbbbbbbbbbbbbbbb.jsonl"));
@@ -441,7 +446,7 @@ fn fold_keeps_old_ids_and_deduplicates_a_shorter_read() {
             .iter()
             .map(|(_, r)| r["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["a", "b", "c"]
+        [message_id("a"), message_id("b"), message_id("c")]
     );
     assert_eq!(records[0].1["text"], "Keep this.");
 }
@@ -457,7 +462,7 @@ fn fold_reruns_the_members_personal_and_secret_filters() {
     let (bytes, _) = fold(&member(&h.0), &filters(&h.0), b"", &input, PEER_LIMIT).unwrap();
     let records = corpus::read_records("history", &bytes).unwrap();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].1["id"], "ok");
+    assert_eq!(records[0].1["id"], message_id("ok"));
 }
 #[test]
 fn failed_send_keeps_the_pending_file_and_success_clears_it() {
@@ -839,7 +844,7 @@ fn delivery_folder_ownership_fault_keeps_delivery_and_cursor() {
 }
 
 fn complete_question() -> Value {
-    json!({"id":"q1","timestamp":"2999-01-01","kind":"question","project":"demo",
+    json!({"id":"question:abcdef012345","timestamp":"2999-01-01","kind":"question","project":"demo",
         "question":"Which?","header":"Pick","options":[{"label":"A","description":"a"}],
         "picks":["A"],"own_words":"","notes":"","multiSelect":false,
         "recommended":"A","outcome":"took_rec"})
@@ -883,8 +888,8 @@ fn delivered_questions_require_every_heldout_field_without_changing_peer() {
         .as_object_mut()
         .unwrap()
         .insert(member.pick_field(), json!("A"));
-    // Includes the Verifier's exact missing-fields case, then every individual projection key.
-    let verifier = json!({"id":"q1","timestamp":"2999-01-01","kind":"question","question":"Which?","header":"Pick","options":[{"label":"A","description":"a"}],"picks":["A"],"own_words":"","notes":""});
+    // Includes the Verifier's missing-fields case, then every individual projection key.
+    let verifier = json!({"id":"question:abcdef012345","timestamp":"2999-01-01","kind":"question","question":"Which?","header":"Pick","options":[{"label":"A","description":"a"}],"picks":["A"],"own_words":"","notes":""});
     let mut invalid = vec![verifier];
     for key in [
         "project",
@@ -1275,5 +1280,74 @@ fn delivered_records_accept_optional_reader_split() {
             assert_eq!(count, 1);
             assert!(!bytes.is_empty());
         }
+    }
+}
+
+fn sized_message(line_bytes: usize) -> Value {
+    let mut value = record("sized", "");
+    let overhead =
+        voice_ingest::mine::to_jsonl(std::slice::from_ref(value.as_object().unwrap())).len();
+    value["text"] = json!("x".repeat(line_bytes - overhead));
+    assert_eq!(
+        voice_ingest::mine::to_jsonl(std::slice::from_ref(value.as_object().unwrap(),)).len(),
+        line_bytes
+    );
+    value
+}
+
+#[test]
+fn delivery_skips_only_records_above_one_build_part() {
+    let (h, s) = prepare_delivery();
+    let ordinary = record("small", "Keep it small.");
+    let oversized = sized_message(voice_build::build::PART_BYTES + 1);
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    fs::write(&incoming, lines(&[oversized, ordinary.clone()])).unwrap();
+    let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.taken, 1);
+    assert_eq!(answer.refused, 0);
+    assert!(
+        fs::read(s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl")).unwrap() == lines(&[ordinary]),
+        "only the ordinary record should be stored"
+    );
+    assert_eq!(saved.computers[&"a".repeat(64)].records, 1);
+    assert_eq!(saved.after, 1);
+    assert!(!incoming.exists());
+}
+
+#[test]
+fn delivery_keeps_record_at_exactly_one_build_part() {
+    let (h, s) = prepare_delivery();
+    let value = sized_message(voice_build::build::PART_BYTES);
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    fs::write(&incoming, lines(std::slice::from_ref(&value))).unwrap();
+    let (_, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.taken, 1);
+    assert_eq!(answer.refused, 0);
+    assert!(
+        fs::read(s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl")).unwrap() == lines(&[value]),
+        "the exact-boundary record should be stored"
+    );
+}
+
+#[test]
+fn delivery_refuses_writer_id_and_context_violations_without_changing_peer() {
+    for (key, value) in [
+        ("id", json!("message:bad")),
+        ("context", json!("界".repeat(301))),
+    ] {
+        let (h, s) = prepare_delivery();
+        let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
+        let old = lines(&[record("old", "Keep this.")]);
+        fs::write(&peer, &old).unwrap();
+        let mut bad = record("new", "Keep it small.");
+        bad[key] = value;
+        let incoming = s.join("deliveries/history-1-1.jsonl");
+        fs::write(&incoming, lines(&[bad])).unwrap();
+        let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+        assert_eq!(answer.refused, 1, "invalid {key}");
+        assert_eq!(answer.taken, 0);
+        assert_eq!(fs::read(&peer).unwrap(), old);
+        assert_eq!(saved.after, 1);
+        assert!(!incoming.exists());
     }
 }

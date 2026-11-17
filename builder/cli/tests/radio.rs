@@ -496,7 +496,7 @@ fn radio_take_prints_totals_and_computers_without_history_or_keys() {
     fs::create_dir(&folder).unwrap();
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
-    let record = json!({"id":"invented-id","kind":"message","timestamp":"2026-11-17T12:00:00Z","project":"demo","text":"Keep the first change small.","context":""});
+    let record = json!({"id":"message:abcdef012345","kind":"message","timestamp":"2026-11-17T12:00:00Z","project":"demo","text":"Keep the first change small.","context":""});
     fs::write(folder.join("history-1-1.jsonl"), format!("{record}\n")).unwrap();
     fs::write(folder.join("other.txt"), "invented unrelated file").unwrap();
     let key = "ab".repeat(32);

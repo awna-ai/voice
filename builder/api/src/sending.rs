@@ -196,6 +196,7 @@ impl From<voice_core::error::Error> for FoldError {
     }
 }
 /// Preserve existing records verbatim; only new ids pass through this member's privacy filters.
+/// Skip individual delivered records whose JSONL line exceeds one build part.
 fn fold(
     member: &voice_core::member::Member,
     filters: &Filters,
@@ -227,6 +228,11 @@ fn fold(
             unreachable!()
         };
         voice_ingest::mine::check_record(member, &record)?;
+        if voice_ingest::mine::to_jsonl(std::slice::from_ref(&record)).len()
+            > voice_build::build::PART_BYTES
+        {
+            continue;
+        }
         kept.push(record);
     }
     kept.sort_by(|a, b| {

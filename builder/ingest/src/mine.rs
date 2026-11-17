@@ -199,12 +199,15 @@ pub fn project_name(folder: &str, home: &Path) -> String {
         None => name.to_owned(),
     }
 }
+const RECORD_ID_HEX_CHARS: usize = 12;
+const MESSAGE_CONTEXT_CHARS: usize = 300;
+
 fn record_id(kind: &str, session: &str, when: &str, text: &str) -> String {
     // SHA-1 is only a stable record id, never a security control.
     let digest = sha1_smol::Sha1::from(format!("{session}\n{when}\n{text}"))
         .digest()
         .to_string();
-    format!("{kind}:{}", &digest[..12])
+    format!("{kind}:{}", &digest[..RECORD_ID_HEX_CHARS])
 }
 struct Builder<'a> {
     member: &'a Member,
@@ -574,6 +577,25 @@ pub fn check_record(member: &Member, record: &Map<String, Value>) -> Result<()> 
     {
         return Err(invalid());
     }
+    let id = record["id"].as_str().ok_or_else(invalid)?;
+    if !id.strip_prefix(&format!("{kind}:")).is_some_and(|suffix| {
+        suffix.len() == RECORD_ID_HEX_CHARS
+            && suffix
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        return Err(invalid());
+    }
+    if kind == "message"
+        && record["context"]
+            .as_str()
+            .ok_or_else(invalid)?
+            .chars()
+            .count()
+            > MESSAGE_CONTEXT_CHARS
+    {
+        return Err(invalid());
+    }
     if kind == "question" {
         if !record.get("multiSelect").is_some_and(Value::is_boolean) {
             return Err(invalid());
@@ -641,7 +663,12 @@ pub(crate) fn message_record(
 ) -> Map<String, Value> {
     let context: String = context
         .chars()
-        .skip(context.chars().count().saturating_sub(300))
+        .skip(
+            context
+                .chars()
+                .count()
+                .saturating_sub(MESSAGE_CONTEXT_CHARS),
+        )
         .collect();
     Map::from_iter([
         (
@@ -1000,12 +1027,67 @@ mod tests {
     }
 
     #[test]
+    fn check_record_requires_writer_id_form_for_each_kind() {
+        let member =
+            voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();
+        for kind in ["message", "question"] {
+            let mut record = message_record("session", "now", "demo", "Keep it small.", "");
+            if kind == "question" {
+                record = serde_json::json!({"kind":"question", "timestamp":"now", "project":"demo",
+                    "header":"Pick", "question":"Which?", "multiSelect":false,
+                    "options":[{"label":"A", "description":"a"}], "recommended":null,
+                    "picks":[], "own_words":"", "notes":"", "outcome":"no_rec"})
+                .as_object()
+                .unwrap()
+                .clone();
+                record.insert(member.pick_field(), Value::Null);
+            }
+            record.insert(
+                "id".into(),
+                Value::from(record_id(kind, "session", "now", "Keep it small.")),
+            );
+            check_record(&member, &record).unwrap();
+            let other = if kind == "message" {
+                "question"
+            } else {
+                "message"
+            };
+            for id in [
+                format!("{kind}:{}", "a".repeat(13)),
+                format!("{kind}:{}", "a".repeat(11)),
+                format!("{kind}:{}A", "a".repeat(11)),
+                format!("{kind}:{}g", "a".repeat(11)),
+                format!("{other}:{}", "a".repeat(12)),
+            ] {
+                record.insert("id".into(), Value::from(id.clone()));
+                assert!(check_record(&member, &record).is_err(), "invalid {id}");
+            }
+        }
+    }
+
+    #[test]
+    fn check_record_limits_context_by_characters() {
+        let member =
+            voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();
+        for character in ["a", "界"] {
+            let mut record = message_record("session", "now", "demo", "Keep it small.", "");
+            record.insert("context".into(), Value::from(character.repeat(300)));
+            check_record(&member, &record).unwrap();
+            record.insert("context".into(), Value::from(character.repeat(301)));
+            assert!(
+                check_record(&member, &record).is_err(),
+                "301 {character} characters"
+            );
+        }
+    }
+
+    #[test]
     fn check_record_requires_every_writer_field_and_type() {
         let member =
             voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();
         let message = message_record("session", "now", "demo", "keep it small", "");
         let mut question =
-            serde_json::json!({"id":"q", "kind":"question", "timestamp":"now", "project":"demo",
+            serde_json::json!({"id":"question:abcdef012345", "kind":"question", "timestamp":"now", "project":"demo",
             "header":"Pick", "question":"Which?", "multiSelect":false,
             "options":[{"label":"A", "description":"a"}], "recommended":null,
             "picks":["A"], "own_words":"", "notes":"", "outcome":"no_rec"})
