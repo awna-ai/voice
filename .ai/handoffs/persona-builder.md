@@ -2,6 +2,26 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF22: the universal Mac build works on a case-insensitive disk (2026-11-16, lane: V1)
+
+- **Why:** PB8.9c1's delta Verifier (should-fix 1): `scripts/build-mac-app.sh --universal` wrote the joined `voice`
+  command to `$staging/voice`, the same path as the `$staging/Voice` package folder on a stock Mac's
+  case-insensitive disk, so `lipo` failed (`errno=21`) and no universal build could finish.
+- **What:** the joined command goes to `$staging/cli/voice` (its own folder, still under the build's cleanup
+  trap); the single-architecture path is unchanged. `tests/build_mac_app_test.sh` runs the whole build script in
+  a scratch git copy with stand-ins for `cargo`, `pnpm`, `rustup` and `curl` (each makes a real Mach-O with `cc`),
+  one architecture and universal, and checks the zip: the app, `voice` and `radio` for every architecture,
+  `install.sh`, Radio's licence, tracked files unchanged. `scripts/ci-local.sh` runs and shellchecks it. Brief:
+  `plans/briefs/VF22-universal-build-case-insensitive.md`.
+- **Who built it:** Claude-direct (Codex at its usage limit until 2026-11-18).
+- **Verified:** red first on the old script (`lipo: open() failed, errno=21`), green after the fix, red again
+  on the old script with the final test. Mutations on `cp` copies, restored and `cmp`-checked: joining one
+  architecture fails the build's own check; dropping Radio's licence fails the test. shellcheck clean.
+  Security review (sub-agent): PASS, two INFOs; the second taken (the build in the test sees only the stand-ins
+  and system tools). Verifier: not required by the card.
+- **Not verified:** a run on a case-sensitive disk; a real cargo and Tauri universal build. Not landed yet: the
+  full `ci-local.sh` didn't fit the run that built it.
+
 ## PB8.9c1: Voice.app carries a pinned Radio (2026-11-16, lane: V1)
 
 - **Why:** PB8.9's member computers send their history to the build computer over Radio's link (plan
