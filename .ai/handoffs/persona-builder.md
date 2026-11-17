@@ -5,7 +5,8 @@ One record per slice, newest first. Paraphrase only; no real person.
 ## PB8.9d1: add another computer, the engine, the CLI and the app commands (2026-11-17, lane: V1)
 
 - **Status:** built and verified on `lane-v1/PB8.9d1`: `3d75d4c` brief, `d6ba93a` the change, `9e0b2bd` fix-up 1
-  brief, `1a4e850` fix-up 1, `a0698d0` fix-up 2 (with its brief), `099a446` fix-up 3 (with its brief), this record.
+  brief, `1a4e850` fix-up 1, `a0698d0` fix-up 2 (with its brief), `099a446` fix-up 3 (with its brief), `ee4ce19` this record and fix-up 4's brief,
+  then fix-up 4.
 - **Why split:** PB8.9d (plan step 2.2) was split at pickup, as PB8.9b was: the engine, CLI and app commands here;
   the screens in PB8.9d2, on top of the five app commands. PB8.9e waits on both.
 - **What it does:** `voice radio address [<ip>]` shows or sets this computer's VPN address (Radio's link address;
@@ -28,7 +29,9 @@ One record per slice, newest first. Paraphrase only; no real person.
   removing the old address; the missing-home sentence). Security review (Opus): PASS WITH FIXES, three lows → fix-up
   2 (the threat model's join claim and every join-code copy that isn't zeroed; the name sentence matches its check).
   Verifier (Fable): PASS WITH FIXES, one must-fix (a refusal after `fleet_init` lost the recovery key's path for
-  good) and three should-fixes → fix-up 3. Repeat Verifier (Opus) on `099a446`: see the next bullet.
+  good) and three should-fixes → fix-up 3. Repeat Verifier (Opus) on `099a446`: PASS WITH FIXES, every finding fixed, one should-fix left (`voice radio
+  invite` exited before printing the recovery line when it couldn't read the code's expiry time) → fix-up 4, its own
+  two tests green.
 - **Verified:** red first; `cargo test -p voice-api --lib -- pairing radio` 52 passed and `-p voice-cli --test
   radio` 8 on `099a446`; the whole `voice-api` and `voice-cli` suites passed on `a0698d0`; workspace clippy
   `-D warnings` and fmt clean; UI vitest 663 passed and `vue-tsc` clean (vitest caught the example name `Office

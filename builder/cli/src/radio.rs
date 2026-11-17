@@ -55,18 +55,32 @@ fn address_line(addresses: &[String], port: u16) -> String {
     }
 }
 
-fn local_time(expires_at: f64) -> Result<String> {
+fn local_time(expires_at: f64) -> Option<String> {
     let timestamp = expires_at as libc::time_t;
     let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
     // SAFETY: both pointers refer to live storage; localtime_r initializes local on success.
     if unsafe { libc::localtime_r(&timestamp, local.as_mut_ptr()) }.is_null() {
-        return Err(Error::Invalid(
-            "Voice couldn't read the join code's expiry time.".into(),
-        ));
+        return None;
     }
     // SAFETY: localtime_r succeeded and initialized every field.
     let local = unsafe { local.assume_init() };
-    Ok(format!("{:02}:{:02}", local.tm_hour, local.tm_min))
+    Some(format!("{:02}:{:02}", local.tm_hour, local.tm_min))
+}
+
+fn invite_lines(invite: &dto::Invite) -> Vec<String> {
+    let expiry = match local_time(invite.expires_at) {
+        Some(until) => format!("It works once, until {until}."),
+        None => "It works once, for a short while.".into(),
+    };
+    let mut lines = vec![
+        address_line(&invite.addresses, invite.port),
+        format!("Join code: {}", invite.code),
+        expiry,
+    ];
+    if let Some(path) = &invite.recovery_file {
+        lines.push(text::recovery(path));
+    }
+    lines
 }
 
 static SAVED_TERMINAL: std::sync::atomic::AtomicPtr<libc::termios> =
@@ -212,12 +226,8 @@ pub fn run(command: RadioCommand) -> Result<std::process::ExitCode> {
         }
         RadioCommand::Invite { slug } => {
             let invite = pairing::invite(&home, &slug).map_err(failure)?;
-            let until = local_time(invite.expires_at)?;
-            println!("{}", address_line(&invite.addresses, invite.port));
-            println!("Join code: {}", invite.code);
-            println!("It works once, until {until}.");
-            if let Some(path) = invite.recovery_file {
-                println!("{}", text::recovery(&path));
+            for line in invite_lines(&invite) {
+                println!("{line}");
             }
         }
         RadioCommand::Join { slug, name } => {
@@ -231,4 +241,49 @@ pub fn run(command: RadioCommand) -> Result<std::process::ExitCode> {
         }
     }
     Ok(std::process::ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invite(expires_at: f64) -> dto::Invite {
+        dto::Invite {
+            code: "test-join-code".into(),
+            expires_at,
+            port: 43123,
+            addresses: vec!["192.0.2.1".into()],
+            recovery_file: Some("radio-recovery.key".into()),
+        }
+    }
+
+    #[test]
+    fn invite_lines_keep_recovery_when_time_cannot_be_read() {
+        let invite = invite(1e300);
+        let lines = invite_lines(&invite);
+
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], address_line(&invite.addresses, invite.port));
+        assert_eq!(lines[1], "Join code: test-join-code");
+        assert_eq!(lines[2], "It works once, for a short while.");
+        assert_eq!(
+            lines.last(),
+            Some(&text::recovery(invite.recovery_file.as_deref().unwrap()))
+        );
+    }
+
+    #[test]
+    fn invite_lines_show_normal_time_before_recovery() {
+        let invite = invite(1_700_000_000.0);
+        let lines = invite_lines(&invite);
+
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], address_line(&invite.addresses, invite.port));
+        assert_eq!(lines[1], "Join code: test-join-code");
+        assert!(lines[2].starts_with("It works once, until "));
+        assert_eq!(
+            lines.last(),
+            Some(&text::recovery(invite.recovery_file.as_deref().unwrap()))
+        );
+    }
 }
