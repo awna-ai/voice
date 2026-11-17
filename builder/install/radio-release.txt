@@ -1,6 +1,6 @@
 # The Radio release Voice ships inside Voice.app (https://github.com/awna-ai/radio/releases):
 # its tag, then the SHA-256 of each Mac tarball, copied from that release's SHA256SUMS.
 # scripts/fetch-radio.sh refuses a download that doesn't match. Move to a newer tag on purpose.
-tag v0.2.0
-arm64 f49c9ab2f6704139345aa4f06329698a7a38f398300413582fbc91749c864477
-x86_64 adc24144bd48c6b05eb41368f35ce8bfbcb3a45cb6750846aef0c4c8c1e3e90e
+tag v0.3.0
+arm64 08ff6a7e268f306fb8e2e718519ee08d7cc94611a5c6cfab1ce702ec874e64d8
+x86_64 1d77e0ce3b877d4e01582e7f936c8cbcd0b07a3449d8b57a7a2364d9d581cb63

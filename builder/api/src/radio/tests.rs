@@ -84,7 +84,7 @@ impl FakeRadio {
 }
 
 fn link_hello() -> Value {
-    json!({"ok": true, "radio": "0.2.0", "protocol": {"major": 1, "minor": 7}, "majors": [1],
+    json!({"ok": true, "radio": "0.3.0", "protocol": {"major": 1, "minor": 11}, "majors": [1],
         "ops": radio_client::OPS})
 }
 
@@ -103,19 +103,24 @@ fn message(error: Error) -> String {
 fn hello_names_the_version_and_protocol() {
     let fake = one(link_hello());
     let hello = fake.radio().hello().unwrap();
-    assert_eq!(hello.radio, "0.2.0");
-    assert_eq!((hello.major, hello.minor), (1, 7));
+    assert_eq!(hello.radio, "0.3.0");
+    assert_eq!((hello.major, hello.minor), (1, 11));
     assert_eq!(fake.requests(), vec![json!({"op": "hello", "v": 1})]);
 }
 
 #[test]
 fn hello_refuses_a_radio_that_cannot_link() {
     let mut old = link_hello();
-    old["protocol"]["minor"] = 6.into();
+    old["protocol"]["minor"] = 10.into();
     let mut other_major = link_hello();
     other_major["protocol"]["major"] = 2.into();
     let mut missing_op = link_hello();
-    missing_op["ops"] = json!(radio_client::OPS[..radio_client::OPS.len() - 1]);
+    missing_op["ops"] = json!(
+        radio_client::OPS
+            .iter()
+            .filter(|have| **have != LINK_OPS[0])
+            .collect::<Vec<_>>()
+    );
     for answer in [old, other_major, missing_op] {
         let fake = one(answer);
         assert_eq!(
@@ -437,7 +442,7 @@ fn status_with_radio_names_its_version_and_computers() {
         lines,
         vec![
             "Voice's copy of Radio: /A/Voice.app/radio".to_owned(),
-            "Radio is running: version 0.2.0, protocol 1.7.".to_owned(),
+            "Radio is running: version 0.3.0, protocol 1.11.".to_owned(),
             "Linked computers: pebble (accepted), k3 (pending).".to_owned(),
         ]
     );
@@ -477,7 +482,7 @@ fn status_without_radio_still_shows_no_hidden_character() {
 #[test]
 fn status_never_prints_a_hidden_character() {
     let mut hello = link_hello();
-    hello["radio"] = json!("0.2.0\u{1b}[2J");
+    hello["radio"] = json!("0.3.0\u{1b}[2J");
     let fake = FakeRadio::answering(&[
         hello,
         json!({"ok": true, "computers": [
@@ -487,7 +492,7 @@ fn status_never_prints_a_hidden_character() {
     let (lines, _) = status_lines(Ok(PathBuf::from("/r")), &fake.radio());
     assert_eq!(
         lines[1],
-        "Radio is running: version 0.2.0?[2J, protocol 1.7."
+        "Radio is running: version 0.3.0?[2J, protocol 1.11."
     );
     assert_eq!(
         lines[2],

@@ -3005,8 +3005,8 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "radio-client"
-version = "0.2.0"
-source = "git+https://github.com/awna-ai/radio?tag=v0.2.0#a686dc51d175472562d511911a8b7e642b8d4511"
+version = "0.3.0"
+source = "git+https://github.com/awna-ai/radio?tag=v0.3.0#09f499a6519ea4c0e92340d861a7ad294849c689"
 dependencies = [
  "serde",
  "serde_json",
@@ -3014,8 +3014,8 @@ dependencies = [
 
 [[package]]
 name = "radio-panels"
-version = "0.2.0"
-source = "git+https://github.com/awna-ai/radio?tag=v0.2.0#a686dc51d175472562d511911a8b7e642b8d4511"
+version = "0.3.0"
+source = "git+https://github.com/awna-ai/radio?tag=v0.3.0#09f499a6519ea4c0e92340d861a7ad294849c689"
 dependencies = [
  "regex",
  "serde",
