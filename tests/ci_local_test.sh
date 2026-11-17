@@ -170,7 +170,11 @@ for path in scripts/verify-main.sh scripts/release-check.sh tests/verify_main_te
     regressions=$((regressions + 1))
   fi
   case "$path" in
-    scripts/verify-main.sh|scripts/release-check.sh|tests/verify_main_test.sh)
+    scripts/verify-main.sh|scripts/release-check.sh)
+      expect_step 'bash tests/verify_main_test.sh'
+      expect_step 'bash tests/crew_install_test.sh'
+      no_tests ;;
+    tests/verify_main_test.sh)
       expect_step 'bash tests/verify_main_test.sh'
       no_tests ;;
     scripts/slack_select.py)

@@ -192,13 +192,14 @@ map_path() {
     scripts/fetch-radio.sh) shell_picked+='fetch_radio crew_install build_mac_app ' ;;
     # The build test reads the build script; the crew installer test copies scripts/.
     scripts/build-mac-app.sh) shell_picked+='crew_install build_mac_app ' ;;
+    # The main check and release guard test reads them; the crew installer test copies scripts/.
+    scripts/verify-main.sh|scripts/release-check.sh) shell_picked+='verify_main crew_install ' ;;
     # Each shell test exercises itself.
     tests/crew_install_test.sh) shell_picked+='crew_install ' ;;
     tests/mac_install_test.sh) shell_picked+='mac_install ' ;;
     tests/fetch_radio_test.sh) shell_picked+='fetch_radio ' ;;
     tests/build_mac_app_test.sh) shell_picked+='build_mac_app ' ;;
-    # Main verification and the release guard share one shell suite.
-    scripts/verify-main.sh|scripts/release-check.sh|tests/verify_main_test.sh) shell_picked+='verify_main ' ;;
+    tests/verify_main_test.sh) shell_picked+='verify_main ' ;;
     # Unmapped inputs can affect any test, so fail safe to the full gate.
     *) path_fallback 'maps to no part' ;;
   esac
