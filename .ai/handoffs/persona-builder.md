@@ -2,6 +2,29 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF24: the sandbox's terminal test waits long enough on a busy computer (2026-11-17, lane: V1)
+
+- **Why:** VF22's full-gate land (started 00:46Z, red at 03:50Z after 3 h 04 min, load1 18 to 22) stopped in
+  `builder/agent/tests/sandbox_profile.rs` `refuses_the_persons_terminals_and_system_logs`: `sandbox read timed out:
+  /dev/ttyse`. The test gave each sandboxed read 2 s, and a slow `sandbox-exec` start alone took longer. Run alone right
+  after, it passed 3 times in 3 (8 to 11 s). The VF4, VF16 and VF20 family.
+- **What:** test only. The deadline goes from 2 s to 30 s, with a comment: a refused read exits at once and an allowed
+  one blocks on the terminal, so an allow still fails. Every assertion is unchanged.
+- **Commits:** the brief (`plans/briefs/VF24-sandbox-terminal-test-waits.md`), the test change, this record.
+- **Who built it:** V1 directly from the brief; Codex was at its usage limit (until 2026-11-18).
+- **Verified:** red (stand-in for a slow start): the old loop with a 20 ms deadline failed as the land did
+  (`sandbox read timed out: /dev/console`). Green: the new test passes and checked 28 terminal and system-log paths
+  (5.5 s). Mutation: `(regex #"^/dev/ttys")` added to the profile's `allow file-read*` list turned it red
+  (`sandbox read timed out: /dev/ttys0`, 31 s); restored, checked with `cmp`.
+- **Security review (sub-agent):** pass, info only. The longer wait can't turn an allow into a pass (an allowed read
+  exits 0 and fails the exit-code check, or blocks and hits the deadline); a timed-out child is killed and reaped
+  before the panic, and `sandbox-exec` execs `cat`/`ls`, so nothing is left holding a terminal; no new input, path,
+  dependency or privilege.
+- **Gate:** a test-only slice (V-Q19): `cargo fmt --check`, `VOICE_REQUIRE_PARITY=1 VOICE_REQUIRE_SANDBOX=1 cargo test
+  --locked -p voice-agent --features claude-subscription --test sandbox_profile`, and `cargo clippy --all-targets
+  --locked -- -D warnings`, through `direct-to-main.sh land --check`. Verifier: not required by the spec.
+- **Not verified:** the rest of the suite (unchanged by this slice).
+
 ## PB8.9c2: Voice talks to its Radio (2026-11-16, lane: V1)
 
 - **Status: built, not landed.** Branch `lane-v1/PB8.9c2` (pushed): `40fede9` brief, `147d1dd` code, `25b03a1`
