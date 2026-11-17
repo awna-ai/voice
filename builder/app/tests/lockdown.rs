@@ -226,3 +226,18 @@ fn app_exit_stops_a_pending_claude_sign_in() {
     assert!(main.contains("tauri::RunEvent::Exit"));
     assert!(main.contains("voice_api::claude_sign_in_shutdown(Duration::from_secs(1))"));
 }
+
+#[test]
+fn app_start_installs_radio_once_off_the_window() {
+    let main = source("src/main.rs");
+    let call = "drop(voice_api::radio::install_on_start());";
+    assert_eq!(main.matches("install_on_start").count(), 1);
+    let setup = main
+        .split_once(".setup(")
+        .expect("main.rs has a setup hook")
+        .1
+        .split_once(".invoke_handler(")
+        .expect("setup comes before the command list")
+        .0;
+    assert!(setup.contains(call), "{setup}");
+}

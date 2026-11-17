@@ -1,12 +1,14 @@
-//! The Radio that links your computers: `voice radio status`.
+//! The Radio that links your computers: `voice radio status` and `voice radio install`.
 use clap::Subcommand;
-use voice_api::radio::{Radio, shipped_radio, status_lines};
+use voice_api::radio::{Radio, install, shipped_radio, status_lines};
 use voice_core::error::Result;
 
 #[derive(Subcommand)]
 pub enum RadioCommand {
     /// Show Voice's copy of Radio, whether it answers, and your linked computers
     Status,
+    /// Install or update Radio from Voice's own copy
+    Install,
 }
 
 pub fn run(command: RadioCommand) -> Result<std::process::ExitCode> {
@@ -22,6 +24,10 @@ pub fn run(command: RadioCommand) -> Result<std::process::ExitCode> {
             } else {
                 std::process::ExitCode::FAILURE
             })
+        }
+        RadioCommand::Install => {
+            println!("{}", install(&crate::home()?)?);
+            Ok(std::process::ExitCode::SUCCESS)
         }
     }
 }

@@ -91,6 +91,11 @@ fi
 rm -rf "$installed"
 mv "$copy" "$installed"
 echo "Voice is installed in your Applications folder: $installed"
+# Radio, which links your computers, is installed by the installed copy's own voice, so the handler
+# Radio records is the one that lasts. Voice works without Radio: its failure never fails this install.
+if ! "$installed/Contents/MacOS/voice" radio install; then
+  echo 'Voice is installed and works without Radio. It will try to install Radio again each time you open it.' >&2
+fi
 if ! "$no_open"; then
   open "$installed"
 fi
