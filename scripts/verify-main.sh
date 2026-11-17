@@ -12,7 +12,7 @@ check=(bash scripts/ci-local.sh)
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --remote)
-      [ "$#" -ge 2 ] && [ -n "$2" ] && [[ "$2" != --* ]] || usage
+      [ "$#" -ge 2 ] && [ -n "$2" ] && [[ "$2" != -* ]] || usage
       remote=$2; shift 2 ;;
     --) shift; [ "$#" -gt 0 ] || usage; check=("$@"); break ;;
     *) usage ;;
@@ -20,18 +20,16 @@ while [ "$#" -gt 0 ]; do
 done
 git remote get-url -- "$remote" >/dev/null 2>&1 || usage
 lock="$(git rev-parse --git-common-dir)/verify-main.lock"
-pid=
-if ! mkdir "$lock" 2>/dev/null; then
-  if [ -r "$lock/pid" ]; then IFS= read -r pid < "$lock/pid" || true; fi
+if ! ln -s "$$" "$lock" 2>/dev/null; then
+  pid=$(readlink "$lock" 2>/dev/null || true)
   if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
     echo "verify-main: already running (pid $pid)"
     exit 0
   fi
-  rm -rf "$lock"
-  if ! mkdir "$lock" 2>/dev/null; then
-    pid=unknown
-    if [ -r "$lock/pid" ]; then IFS= read -r pid < "$lock/pid" || true; fi
-    echo "verify-main: already running (pid $pid)"
+  if [ "$(readlink "$lock" 2>/dev/null || true)" = "$pid" ]; then rm -f "$lock"; fi
+  if ! ln -s "$$" "$lock" 2>/dev/null; then
+    pid=$(readlink "$lock" 2>/dev/null || true)
+    echo "verify-main: already running (pid ${pid:-unknown})"
     exit 0
   fi
 fi
@@ -43,13 +41,12 @@ cleanup() {
     git worktree remove --force "$scratch/wt" >/dev/null 2>&1 || true
     rm -rf "$scratch"
   fi
-  rm -rf "$lock"
+  if [ "$(readlink "$lock" 2>/dev/null || true)" = "$$" ]; then rm -f "$lock"; fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
-printf '%s\n' "$$" > "$lock/pid"
 fail() { echo "verify-main: $*"; exit 1; }
 valid_oid() { [[ "$1" =~ ^[[:xdigit:]]{40}$ || "$1" =~ ^[[:xdigit:]]{64}$ ]]; }
 read_refs() {
@@ -91,15 +88,17 @@ for attempt in 1 2; do
 done
 if $passed; then
   if [ "$attempt" = 2 ]; then echo "verify-main: ${head:0:12} passed on the rerun (the first run was red)"; fi
-  push=(--atomic --porcelain "$remote" "--force-with-lease=refs/green/main:$green" "$head:refs/green/main")
+  push=(--atomic --porcelain "--force-with-lease=refs/green/main:$green")
   clear=false
   if [ -n "$frozen" ]; then
     ensure_commit "$frozen" || fail "could not fetch freeze ${frozen:0:12}"
     if git merge-base --is-ancestor "$frozen" "$head"; then
-      push+=("--force-with-lease=refs/green/frozen:$frozen" :refs/green/frozen)
+      push+=("--force-with-lease=refs/green/frozen:$frozen")
       clear=true
     fi
   fi
+  push+=(-- "$remote" "$head:refs/green/main")
+  if $clear; then push+=(:refs/green/frozen); fi
   pushed=true
   push_output=$(git push "${push[@]}") || pushed=false
   printf '%s\n' "$push_output"
@@ -139,7 +138,7 @@ else
   red="red $head across $count commits from $first to $head"
   code=6
 fi
-if ! git push --porcelain "$remote" "--force-with-lease=refs/green/frozen:$frozen" "$head:refs/green/frozen"; then
+if ! git push --porcelain "--force-with-lease=refs/green/frozen:$frozen" -- "$remote" "$head:refs/green/frozen"; then
   echo "$red"
   fail "${head:0:12} is red, and the freeze could not be pushed"
 fi

@@ -55,6 +55,9 @@ runs() { [ "$(wc -l < "$tmp/ran" | tr -d ' ')" = "$1" ] || fail "expected $1 che
 verify() { : > "$tmp/ran"; run verify-main --remote origin -- "$tmp/check.sh"; }
 no_scratch() {
   [ "$(git worktree list --porcelain | grep -c '^worktree ')" = 1 ] || fail 'scratch worktree remains'
+  local lock
+  lock="$(git rev-parse --git-common-dir)/verify-main.lock"
+  [ ! -e "$lock" ] && [ ! -L "$lock" ] || fail 'lock remains'
 }
 push_commit initial
 usage='Usage: scripts/verify-main.sh [--remote <name>] [-- <check command>...]'
@@ -66,10 +69,17 @@ for arg in nosuch --bogus; do
   run verify-main --remote "$arg"
   [ "$status" = 2 ] && [ "$(cat "$tmp/err")" = "$usage" ] || fail 'remote usage'
 done
+git remote add -- -oevil "$tmp/remote.git"
+run verify-main --remote -oevil -- "$tmp/check.sh"
+[ "$status" = 2 ] && [ "$(cat "$tmp/err")" = "$usage" ] || fail 'verify single-dash remote usage'
+echo 'verify_main_test: verify single-dash remote passed'
 run verify-main --
 [ "$status" = 2 ] && [ "$(cat "$tmp/err")" = "$usage" ] || fail 'empty check usage'
 run release-check
 [ "$status" = 2 ] && [ "$(cat "$tmp/err")" = 'Usage: scripts/release-check.sh [--remote <name>] <commit>' ] || fail 'release usage'
+run release-check --remote -oevil main
+[ "$status" = 2 ] && [ "$(cat "$tmp/err")" = 'Usage: scripts/release-check.sh [--remote <name>] <commit>' ] || fail 'release single-dash remote usage'
+echo 'verify_main_test: release single-dash remote passed'
 run release-check nosuchref
 [ "$status" = 2 ] && [ "$(cat "$tmp/err")" = 'release-check: nosuchref is not a commit' ] || fail 'unknown commit'
 echo 'verify_main_test: usage passed'
@@ -160,6 +170,10 @@ expect 1 'release-check: nothing on main has passed the full check yet.'
 orphan=$(printf 'orphan\n' | git commit-tree "HEAD^{tree}")
 git -C "$tmp/remote.git" fetch -q "$tmp/work" "$orphan"
 git -C "$tmp/remote.git" update-ref refs/green/main "$orphan"
+git fetch -q origin refs/green/main
+run release-check "$orphan"
+expect 1 "release-check: green ${orphan:0:12} is not on origin/main; nothing can be released until verify-main.sh moves it."
+echo 'verify_main_test: release off-main green passed'
 verify
 expect 1 "verify-main: green ${orphan:0:12} is not on origin/main — nothing changed"
 runs 0
@@ -177,20 +191,20 @@ ref_is refs/green/main "$old"
 rm "$tmp/move"
 echo 'verify_main_test: release checks, off-main green and leases passed'
 lock="$(git rev-parse --git-common-dir)/verify-main.lock"
-mkdir "$lock"
 sleep 30 &
 live=$!
-printf '%s\n' "$live" > "$lock/pid"
+ln -s "$live" "$lock"
 verify
 expect 0 "verify-main: already running (pid $live)"
 runs 0
+[ -L "$lock" ] && [ "$(readlink "$lock")" = "$live" ] || fail 'live lock changed'
 kill "$live"
 wait "$live" 2>/dev/null || true
 live=
 verify
 expect 0 "green $head"
 runs 1
-[ ! -d "$lock" ] || fail 'lock remains'
+[ ! -e "$lock" ] && [ ! -L "$lock" ] || fail 'lock remains'
 push_commit strange-argument
 : > "$tmp/ran"
 # shellcheck disable=SC2016
