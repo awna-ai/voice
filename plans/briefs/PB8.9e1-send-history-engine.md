@@ -187,3 +187,69 @@ same Never list.
 
 Gate as before. Your sandbox can't open sockets, so the fake-Radio tests may fail there with a socket error: say
 which, and Claude runs them outside. Don't commit.
+
+## Fix-up 2 (the security review and the Verifier on `dcd5e4f`, 2026-11-17)
+
+Change only what follows. Same skills, same Never list, test-first, a mutation check per item.
+
+1. **A peer's merged file has a ceiling.** `decisions-from-<peer>.jsonl` never shrinks, so an accepted computer
+   sending 64 MiB deliveries of new ids grows it without limit, and every take reads it whole. Add
+   `const PEER_LIMIT: u64 = 256 * 1024 * 1024;`. Read the old peer file with
+   `private::read_private_optional_at_max(home, slug, None, &file, PEER_LIMIT)` (use the existing function; check its
+   signature). A fold whose output is larger than `PEER_LIMIT` is refused like a bad delivery (counted `refused`, the
+   delivery deleted, the cursor moves, the peer file unchanged). Count records with the fold's own record count
+   (return it from `fold`, e.g. `(Vec<u8>, u64)`), not by parsing the merged bytes again. Test: with a small limit
+   made testable (pass the limit into the function that folds, the public path uses `PEER_LIMIT`), an over-limit
+   fold leaves the peer file byte-for-byte unchanged and counts one refused.
+2. **Only a content problem discards a delivery.** Today any `Err` reading the delivery (an `EMFILE`, an `EIO`, the
+   deliveries folder failing its ownership check) counts it refused, deletes it and moves the cursor, so a send is
+   lost for good. Split the two: a bad name, a bad key, a link, a non-regular file, a file over 64 MiB, and a
+   delivered file that fails `fold`'s shape or filter checks are refused, deleted and passed, as today; any other
+   error (the old peer file unreadable or unparsable, an I/O error opening or reading the delivery, the write)
+   returns `TAKE_FAILED` with the delivery left in place and the cursor not moved. Find how
+   `read_private_optional_at_max` reports a link, a non-regular file and an over-size file (its error values) and
+   match those exactly; everything else is I/O. Tests: the old peer file holding a line that isn't JSON makes
+   `take` answer `TAKE_FAILED`, leaves the delivery file and `deliveries-taken.json` unchanged; the existing
+   refused cases still pass.
+3. **`remove_entry` doesn't recurse.** Delete a delivery entry with one `unlinkat(…, 0)`: a file or a link goes; a
+   folder (`EISDIR`/`EPERM`) is left where it is and the delivery still counts refused and the cursor moves. Radio
+   writes only regular files, so a folder there was put by a process of the person's own. Remove the recursive
+   branch and its now-unused code; change the test `nonempty_delivery_directory_is_removed_without_following_nested_links`
+   to show the folder and its nested link are left untouched (nothing outside followed), the delivery counted
+   refused and the cursor moved.
+4. **The threat model says what isn't covered.** In `.ai/SECURITY.md`'s row "History sent between a person's
+   computers": say the state folder is never writable by others (an older build may have left it 0750, so the
+   group can list file names but not read the 0600 files) instead of "0700 folders"; add the peer-file ceiling
+   (256 MiB) and that an I/O fault leaves the delivery for the next take; and add, as not covered: if Radio's
+   delivery ids ever started again from a lower number (its store reset), deliveries at or below the saved cursor
+   would never be listed and would stay in `deliveries/` until Forget.
+5. **A delivered question must pass the build's held-out check (the Verifier's must-fix).** A delivered
+   `kind: "question"` record without `project` (or another key `corpus::split` projects) is taken, passes
+   `corpus::merge`, then fails `corpus::split` when `merge`'s hold-out marks it held out, and every build stops.
+   In `builder/ingest/src/corpus.rs`, move the two key lists `split` projects for a held-out question into one
+   `pub fn question_shape(member: &Member, name: &str, line: usize, record: &Map<String, Value>) -> Result<()>` that
+   checks every key of both lists (the second list's pick field is `member.pick_field()`), and have `split` keep
+   its behaviour (same errors, same output; call the new function or share the lists, no second copy of either
+   list). `fold` takes the `Member` (`take_with` already has it) and calls `question_shape` on every new delivered
+   record whose `kind` is `"question"` (any question can be held out); a failure fails the fold (refused, as a
+   missing `kind`). Also read `builder/build/src/build.rs` `parts` and anything else the build runs per record after
+   `split`: if it requires a field `merge`, `split` and this check don't, apply the same treatment and say so; if
+   not, say so. Tests: the Verifier's record
+   `{"id":"q1","timestamp":"2999-01-01","kind":"question","question":"Which?","header":"Pick","options":[{"label":"A","description":"a"}],"picks":["A"],"own_words":"","notes":""}`
+   is refused and the peer file is unchanged; a complete question record is taken; and after a take, the peer file
+   run through `corpus::merge` with `Split::Holdout(1.0)` and then `corpus::split` succeeds. `corpus`'s existing
+   tests stay green.
+6. **Tests the Verifier showed missing.** Each must fail when its rule is removed (mutate a copy and say so):
+   (a) a delivered record with `kind` but no string `timestamp` is refused, peer file unchanged; (b) keys of 63
+   and 65 characters and a 64-character key with a non-hex character are each refused, deleted and passed;
+   (c) a failed send when an older `pending-send.jsonl` exists leaves the new history's bytes in it, not the old;
+   (d) a FIFO named like a history file is refused without hanging, removed, and passed. Make the test from item 5
+   that runs the brief's existing "missing kind" case meaningful too, or delete it if (a) and item 5 cover it.
+7. **Small ones.** `peer_file` takes lowercase hex only (Radio's own key check is lowercase). The CLI shows a
+   computer's last time as `HH:MM` when it is today (local) and `YYYY-MM-DD` otherwise (keep `local_time` for the
+   join code's expiry as it is; add the date form beside it); test both forms in `builder/cli/tests/radio.rs`
+   (an `at` of `1800.0` is a past date).
+
+Not changed, recorded instead: a delivery name outside Radio's character set is counted refused but left in place
+(unreachable with a conforming Radio; no path is built from it), and the state lock is held across Radio's send
+(up to its 150-second wait). Gate as before; don't commit.
