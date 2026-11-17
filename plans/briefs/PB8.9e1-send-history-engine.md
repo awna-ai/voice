@@ -318,3 +318,40 @@ Not changed, recorded: the cursor-restore path after a failed delete has no test
 after the cursor is written); folding a 256 MiB peer file parses it whole in memory.
 
 Gate as before, plus `cargo test -p voice-ingest`; don't commit.
+
+## Fix-up 5 (the repeat Verifier on `c259b31`: FAIL, 2026-11-17)
+
+The schema is right: no record `check_record` takes is refused by a later step, and the writer's records all pass.
+What it misses is size. One delivered record of a few MiB (a 9 MiB `context`, `text` or `notes`, or a 300 KB `id`)
+passes, `build::parts` puts it alone in a part, its label prompt goes past the provider's 8 MiB limit, and that
+error ends every later build. `fold` keeps stored records as they are, so the record never goes away.
+
+1. **The writer's id and context limits, in `check_record`.** In `builder/ingest/src/mine.rs`:
+   - `id` must be exactly `"{kind}:"` followed by 12 lowercase hex characters (`[0-9a-f]`), the form `record_id`
+     writes. Name the 12 once (a const `record_id` and the check share).
+   - A message's `context` must be at most 300 characters (`chars().count()`). Name the 300 once (a const
+     `message_record`'s cut and the check share).
+   - Tests in `mine.rs`'s tests, beside `check_record_requires_every_writer_field_and_type`: a message and a
+     question whose id is too long, too short, has uppercase or non-hex, or names the other kind, are each refused;
+     a context of 300 characters (multi-byte ones included) passes and 301 is refused. The drift test
+     `mined_fixture_records_pass_check_record` must still pass unchanged.
+2. **A delivered record too big for one build part is skipped, not taken.** In `builder/api/src/sending.rs`
+   `fold`, after `check_record` passes, measure the record as one JSONL line the same way `build::parts` does
+   (`voice_ingest::mine::to_jsonl(std::slice::from_ref(&record)).len()`); if it is greater than
+   `voice_build::build::PART_BYTES`, skip that record (`continue`, like a filtered record) and keep folding the
+   rest. Only that record: a real member's one huge pasted message must not sink their whole send. Add one line
+   on the rule to `fold`'s doc comment.
+   - Tests in `sending/tests.rs`: a delivery with one ordinary message and one message whose `text` makes its line
+     `PART_BYTES + 1` bytes is taken: the peer file gains the ordinary record only. A record whose line is exactly
+     `PART_BYTES` bytes is kept. A delivery whose only record has an over-long `context` or a malformed `id` is
+     refused with the peer file unchanged (the existing refusal path).
+3. **Mutation-check** each new rule (drop the id check, the context check, the size skip, flip `>` to `>=`): each
+   must fail a test. Use `cp` backups and `cmp`, never `git checkout --`.
+
+Not changed, recorded: a peer can copy a real record id from the build computer's own interview or live files, and
+the merge keeps the first copy it reads (peer files sort first); the id form check doesn't stop a deliberate copy.
+That was so before this slice and is a PB8.9 design note, not this fix-up's.
+
+Gate: `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`; `cargo test --locked -p
+voice-ingest`, `-p voice-api`, `-p voice-cli --test radio` (the socket tests can't run in your sandbox: say which
+you couldn't run). Load is high here: `-j 2` and `--test-threads 2`. Don't commit.
