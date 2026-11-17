@@ -220,6 +220,45 @@ pub struct Heldout {
     pub questions: Vec<Map<String, Value>>,
     pub answers: Vec<Map<String, Value>>,
 }
+const QUESTION_FIELDS: [&str; 8] = [
+    "id",
+    "timestamp",
+    "project",
+    "header",
+    "question",
+    "multiSelect",
+    "options",
+    "recommended",
+];
+fn answer_fields(pick: &str) -> [&str; 8] {
+    [
+        "id",
+        "recommended",
+        pick,
+        "picks",
+        "own_words",
+        "notes",
+        "outcome",
+        "multiSelect",
+    ]
+}
+/// Check every field a question needs if it is later held out by the build.
+pub fn question_shape(
+    member: &Member,
+    name: &str,
+    line: usize,
+    record: &Map<String, Value>,
+) -> Result<()> {
+    for key in QUESTION_FIELDS
+        .into_iter()
+        .chain(answer_fields(&member.pick_field()))
+    {
+        if !record.contains_key(key) {
+            return Err(shape(name, line, key));
+        }
+    }
+    Ok(())
+}
 pub fn split(member: &Member, name: &str, bytes: &[u8]) -> Result<Heldout> {
     let mut heldout = Heldout {
         questions: vec![],
@@ -256,35 +295,15 @@ pub fn split(member: &Member, name: &str, bytes: &[u8]) -> Result<Heldout> {
                 .collect()
         };
     for (line, record) in &held {
-        heldout.questions.push(project(
-            *line,
-            record,
-            &[
-                "id",
-                "timestamp",
-                "project",
-                "header",
-                "question",
-                "multiSelect",
-                "options",
-                "recommended",
-            ],
-        )?);
+        heldout
+            .questions
+            .push(project(*line, record, &QUESTION_FIELDS)?);
     }
     for (line, record) in &held {
         heldout.answers.push(project(
             *line,
             record,
-            &[
-                "id",
-                "recommended",
-                &member.pick_field(),
-                "picks",
-                "own_words",
-                "notes",
-                "outcome",
-                "multiSelect",
-            ],
+            &answer_fields(&member.pick_field()),
         )?);
     }
     Ok(heldout)

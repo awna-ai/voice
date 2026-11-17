@@ -25,7 +25,7 @@ fn assistant(home: &Path, member: bool) -> PathBuf {
     state
 }
 fn record(id: &str, text: &str) -> Value {
-    json!({"id":id,"timestamp":"2026-11-17","kind":"message","text":text})
+    json!({"id":id,"timestamp":"2026-11-17","kind":"message","project":"demo","text":text})
 }
 fn lines(records: &[Value]) -> Vec<u8> {
     records
@@ -201,6 +201,7 @@ fn send_refusals_keep_private_pending_copy() {
         let s = assistant(&h.0, true);
         let bytes = lines(&[record("one", "Keep the tests.")]);
         fs::write(s.join("decisions-claude-code.jsonl"), &bytes).unwrap();
+        fs::write(s.join("pending-send.jsonl"), b"older pending history").unwrap();
         let fake = FakeRadio::answering(&send_answers(
             vec![computer("founder", "accepted", None)],
             json!({"ok":false,"error":phrase}),
@@ -344,7 +345,8 @@ fn refuses_bad_files_deletes_them_and_advances_cursor() {
     assert_eq!(answer.taken, 0);
     assert!(answer.computers.is_empty());
     assert!(outside.exists());
-    assert!(fs::read_dir(folder).unwrap().next().is_none());
+    assert!(folder.join("history-3-1.jsonl").is_dir());
+    assert_eq!(fs::read_dir(folder).unwrap().count(), 1);
     assert_eq!(fake.requests()[4]["after"], 6);
     let saved: Value =
         serde_json::from_slice(&fs::read(s.join("deliveries-taken.json")).unwrap()).unwrap();
@@ -432,7 +434,7 @@ fn fold_keeps_old_ids_and_deduplicates_a_shorter_read() {
         record("a", "A changed duplicate."),
         json!({"kind":"message","text":"No id."}),
     ]);
-    let bytes = fold(&filters(&h.0), &old, &new).unwrap();
+    let (bytes, _) = fold(&member(&h.0), &filters(&h.0), &old, &new, PEER_LIMIT).unwrap();
     let records = corpus::read_records("history", &bytes).unwrap();
     assert_eq!(
         records
@@ -452,7 +454,7 @@ fn fold_reruns_the_members_personal_and_secret_filters() {
         record("private", "my therapist"),
         record("secret", "Contact example@example.test"),
     ]);
-    let bytes = fold(&filters(&h.0), b"", &input).unwrap();
+    let (bytes, _) = fold(&member(&h.0), &filters(&h.0), b"", &input, PEER_LIMIT).unwrap();
     let records = corpus::read_records("history", &bytes).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].1["id"], "ok");
@@ -498,10 +500,11 @@ fn process(h: &Scratch, d: Value) -> (Received, dto::Taken) {
     take_one(
         &h.0,
         "wren",
-        &filters(&h.0),
+        (&member(&h.0), &filters(&h.0)),
         &mut saved,
         &mut answer,
         &serde_json::from_value(d).unwrap(),
+        PEER_LIMIT,
     )
     .unwrap();
     (saved, answer)
@@ -579,10 +582,11 @@ fn file_processor_merges_two_peers_and_repeated_delivery_is_harmless() {
         take_one(
             &h.0,
             "wren",
-            &filters(&h.0),
+            (&member(&h.0), &filters(&h.0)),
             &mut saved,
             &mut answer,
             &serde_json::from_value(delivery(id, key, &name)).unwrap(),
+            PEER_LIMIT,
         )
         .unwrap();
     }
@@ -617,11 +621,11 @@ fn invalid_delivery_names_nonregular_files_and_bad_shapes_are_refused() {
     fs::create_dir(s.join("deliveries/history-1-1.jsonl")).unwrap();
     let (_, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
     assert_eq!(answer.refused, 1);
-    assert!(fs::read_dir(s.join("deliveries")).unwrap().next().is_none());
+    assert!(s.join("deliveries/history-1-1.jsonl").is_dir());
 }
 
 #[test]
-fn nonempty_delivery_directory_is_removed_without_following_nested_links() {
+fn nonempty_delivery_directory_is_left_without_following_nested_links() {
     let (h, s) = prepare_delivery();
     let outside = h.0.join("outside");
     fs::create_dir(&outside).unwrap();
@@ -633,7 +637,9 @@ fn nonempty_delivery_directory_is_removed_without_following_nested_links() {
     let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
     assert_eq!(answer.refused, 1);
     assert_eq!(saved.after, 1);
-    assert!(!rejected.exists());
+    assert!(rejected.is_dir());
+    assert_eq!(fs::read(rejected.join("nested/file")).unwrap(), b"invented");
+    assert_eq!(fs::read_link(rejected.join("link")).unwrap(), outside);
     assert_eq!(fs::read(outside.join("keep")).unwrap(), b"keep this");
 }
 
@@ -643,27 +649,6 @@ fn exported_counts_match_the_json_numbers_the_bridge_receives() {
     assert!(
         <dto::SentFrom as ts_rs::TS>::decl(&ts_rs::Config::default()).contains("records: number")
     );
-}
-
-#[test]
-fn delivery_missing_kind_is_refused_without_changing_peer_history() {
-    let (h, s) = prepare_delivery();
-    let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
-    let old = lines(&[record("old", "Keep the checks.")]);
-    fs::write(&peer, &old).unwrap();
-    let incoming = s.join("deliveries/history-1-1.jsonl");
-    fs::write(
-        &incoming,
-        lines(&[json!({"id":"new","timestamp":"2026-11-17","text":"Keep it small."})]),
-    )
-    .unwrap();
-    let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
-    assert_eq!(answer.refused, 1);
-    assert_eq!(answer.taken, 0);
-    assert_eq!(saved.after, 1);
-    assert_eq!(fs::read(&peer).unwrap(), old);
-    assert!(!incoming.exists());
-    assert!(saved.computers.is_empty());
 }
 
 #[test]
@@ -698,10 +683,12 @@ fn fold_sorts_old_records_without_required_keys_without_panicking() {
         json!({"timestamp":"2026-11-17","text":"Old record without an id."}),
         record("old", "Keep this."),
     ]);
-    let bytes = fold(
+    let (bytes, _) = fold(
+        &member(&h.0),
         &filters(&h.0),
         &old,
         &lines(&[record("new", "Keep it small.")]),
+        PEER_LIMIT,
     )
     .unwrap();
     assert_eq!(corpus::read_records("history", &bytes).unwrap().len(), 4);
@@ -779,4 +766,351 @@ fn older_last_sent_without_bytes_reads_as_zero() {
             .bytes,
         0
     );
+}
+
+#[test]
+fn peer_ceiling_refuses_growth_without_changing_existing_bytes() {
+    let (h, s) = prepare_delivery();
+    let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
+    let old = lines(&[record("old", "Keep this.")]);
+    fs::write(&peer, &old).unwrap();
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    fs::write(&incoming, lines(&[record("new", "Another thought.")])).unwrap();
+    let mut saved = Received::default();
+    let mut answer = empty_taken();
+    take_one(
+        &h.0,
+        "wren",
+        (&member(&h.0), &filters(&h.0)),
+        &mut saved,
+        &mut answer,
+        &serde_json::from_value(delivery(1, 'a', "history-1-1.jsonl")).unwrap(),
+        old.len() as u64,
+    )
+    .unwrap();
+    assert_eq!(answer.refused, 1);
+    assert_eq!(answer.taken, 0);
+    assert_eq!(fs::read(peer).unwrap(), old);
+    assert!(!incoming.exists());
+    assert_eq!(saved.after, 1);
+}
+
+#[test]
+fn unreadable_or_unparsable_old_peer_keeps_delivery_and_cursor() {
+    for bad_json in [true, false] {
+        let (h, s) = prepare_delivery();
+        let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
+        if bad_json {
+            fs::write(&peer, b"not json\n").unwrap();
+        } else {
+            std::os::unix::fs::symlink(h.0.join("absent"), &peer).unwrap();
+        }
+        assert_take_fault_keeps_delivery(&h, &s);
+    }
+}
+fn assert_take_fault_keeps_delivery(h: &Scratch, s: &Path) {
+    let cursor = br#"{"after":0,"computers":{}}"#;
+    fs::write(s.join("deliveries-taken.json"), cursor).unwrap();
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    let bytes = lines(&[record("new", "Keep it small.")]);
+    fs::write(&incoming, &bytes).unwrap();
+    let mut saved = Received::default();
+    let mut answer = empty_taken();
+    let result = take_one(
+        &h.0,
+        "wren",
+        (&member(&h.0), &filters(&h.0)),
+        &mut saved,
+        &mut answer,
+        &serde_json::from_value(delivery(1, 'a', "history-1-1.jsonl")).unwrap(),
+        PEER_LIMIT,
+    );
+    assert_eq!(result.unwrap_err().message, TAKE_FAILED);
+    assert_eq!(fs::read(incoming).unwrap(), bytes);
+    assert_eq!(fs::read(s.join("deliveries-taken.json")).unwrap(), cursor);
+    assert_eq!(saved.after, 0);
+    assert_eq!(answer.refused, 0);
+}
+#[test]
+fn delivery_folder_ownership_fault_keeps_delivery_and_cursor() {
+    let (h, s) = prepare_delivery();
+    fs::set_permissions(s.join("deliveries"), fs::Permissions::from_mode(0o770)).unwrap();
+    assert_take_fault_keeps_delivery(&h, &s);
+}
+
+fn complete_question() -> Value {
+    json!({"id":"q1","timestamp":"2999-01-01","kind":"question","project":"demo",
+        "question":"Which?","header":"Pick","options":[{"label":"A","description":"a"}],
+        "picks":["A"],"own_words":"","notes":"","multiSelect":false,
+        "recommended":"A","outcome":"took_rec"})
+}
+#[test]
+fn delivered_question_refuses_options_that_are_a_string() {
+    assert_bad_question_options_leave_peer_unchanged(json!("A"));
+}
+#[test]
+fn delivered_question_refuses_option_without_description() {
+    assert_bad_question_options_leave_peer_unchanged(json!([{"label":"A"}]));
+}
+fn assert_bad_question_options_leave_peer_unchanged(options: Value) {
+    let (h, s) = prepare_delivery();
+    let member = member(&h.0);
+    let mut question = complete_question();
+    question
+        .as_object_mut()
+        .unwrap()
+        .insert(member.pick_field(), json!("A"));
+    question["options"] = options;
+    let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
+    let old = lines(&[record("old", "Keep it small.")]);
+    fs::write(&peer, &old).unwrap();
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    fs::write(&incoming, lines(&[question])).unwrap();
+    let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.refused, 1);
+    assert_eq!(answer.taken, 0);
+    assert_eq!(fs::read(peer).unwrap(), old);
+    assert!(!incoming.exists());
+    assert_eq!(saved.after, 1);
+}
+#[test]
+fn delivered_questions_require_every_heldout_field_without_changing_peer() {
+    let h = Scratch::new();
+    assistant(&h.0, false);
+    let member = crate::assistants::listed(&h.0, "wren").unwrap().member;
+    let mut complete = complete_question();
+    complete
+        .as_object_mut()
+        .unwrap()
+        .insert(member.pick_field(), json!("A"));
+    // Includes the Verifier's exact missing-fields case, then every individual projection key.
+    let verifier = json!({"id":"q1","timestamp":"2999-01-01","kind":"question","question":"Which?","header":"Pick","options":[{"label":"A","description":"a"}],"picks":["A"],"own_words":"","notes":""});
+    let mut invalid = vec![verifier];
+    for key in [
+        "project",
+        "header",
+        "question",
+        "multiSelect",
+        "options",
+        "recommended",
+        "picks",
+        "own_words",
+        "notes",
+        "outcome",
+        &member.pick_field(),
+    ] {
+        let mut value = complete.clone();
+        value.as_object_mut().unwrap().remove(key);
+        invalid.push(value);
+    }
+    for value in invalid {
+        let (h, s) = prepare_delivery();
+        let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
+        let old = lines(&[record("old", "Keep it small.")]);
+        fs::write(&peer, &old).unwrap();
+        let incoming = s.join("deliveries/history-1-1.jsonl");
+        fs::write(&incoming, lines(&[value])).unwrap();
+        let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+        assert_eq!(answer.refused, 1);
+        assert_eq!(answer.taken, 0);
+        assert_eq!(fs::read(peer).unwrap(), old);
+        assert!(!incoming.exists());
+        assert_eq!(saved.after, 1);
+    }
+}
+#[test]
+fn complete_delivered_question_passes_merge_and_full_holdout_split() {
+    let (h, s) = prepare_delivery();
+    let member = crate::assistants::listed(&h.0, "wren").unwrap().member;
+    let mut question = complete_question();
+    question
+        .as_object_mut()
+        .unwrap()
+        .insert(member.pick_field(), json!("A"));
+    fs::write(s.join("deliveries/history-1-1.jsonl"), lines(&[question])).unwrap();
+    let (_, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.taken, 1);
+    let bytes = fs::read(s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl")).unwrap();
+    let merged = corpus::merge(
+        &filters(&h.0),
+        &[corpus::Input {
+            name: "peer",
+            mode: corpus::Mode::History,
+            bytes: &bytes,
+        }],
+        &voice_ingest::mine::Split::Holdout(1.0),
+    )
+    .unwrap();
+    assert_eq!(merged.held, 1);
+    let held = corpus::split(
+        &member,
+        "peer",
+        voice_ingest::mine::to_jsonl(&merged.records).as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(held.questions.len(), 1);
+    assert_eq!(held.answers.len(), 1);
+}
+
+#[test]
+fn delivered_messages_require_the_builds_project_and_text_fields() {
+    for key in ["project", "text"] {
+        let (h, s) = prepare_delivery();
+        let mut value = record("new", "Keep it small.");
+        value["project"] = json!("demo");
+        value.as_object_mut().unwrap().remove(key);
+        fs::write(s.join("deliveries/history-1-1.jsonl"), lines(&[value])).unwrap();
+        let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+        assert_eq!(answer.refused, 1);
+        assert_eq!(saved.after, 1);
+        assert!(!s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl").exists());
+    }
+}
+
+fn member(home: &Path) -> voice_core::member::Member {
+    crate::assistants::listed(home, "wren").unwrap().member
+}
+
+#[test]
+fn delivered_timestamp_must_be_a_string_and_peer_stays_unchanged() {
+    for timestamp in [None, Some(json!(42))] {
+        let (h, s) = prepare_delivery();
+        let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
+        let old = lines(&[record("old", "Keep this.")]);
+        fs::write(&peer, &old).unwrap();
+        let mut value = record("new", "Keep it small.");
+        value.as_object_mut().unwrap().remove("timestamp");
+        if let Some(timestamp) = timestamp {
+            value["timestamp"] = timestamp;
+        }
+        let incoming = s.join("deliveries/history-1-1.jsonl");
+        fs::write(&incoming, lines(&[value])).unwrap();
+        let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+        assert_eq!(answer.refused, 1);
+        assert_eq!(answer.taken, 0);
+        assert_eq!(saved.after, 1);
+        assert_eq!(fs::read(peer).unwrap(), old);
+        assert!(!incoming.exists());
+    }
+}
+#[test]
+fn malformed_peer_keys_are_refused_deleted_and_passed() {
+    for key in [
+        "a".repeat(63),
+        "a".repeat(65),
+        format!("{}g", "a".repeat(63)),
+    ] {
+        let (h, s) = prepare_delivery();
+        let incoming = s.join("deliveries/history-1-1.jsonl");
+        fs::write(&incoming, lines(&[record("new", "Keep it small.")])).unwrap();
+        let mut d = delivery(1, 'a', "history-1-1.jsonl");
+        d["key"] = json!(key);
+        let (saved, answer) = process(&h, d);
+        assert_eq!(answer.refused, 1);
+        assert_eq!(answer.taken, 0);
+        assert_eq!(saved.after, 1);
+        assert!(!incoming.exists());
+        assert!(!s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl").exists());
+    }
+}
+#[test]
+fn fifo_delivery_is_refused_without_waiting_for_a_writer() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let (h, s) = prepare_delivery();
+        let incoming = s.join("deliveries/history-1-1.jsonl");
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(incoming.as_os_str().as_bytes()).unwrap();
+        // SAFETY: path is a terminated string naming a new entry in the scratch folder.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+        assert_eq!(answer.refused, 1);
+        assert_eq!(answer.taken, 0);
+        assert_eq!(saved.after, 1);
+        assert!(!incoming.exists());
+        tx.send(()).unwrap();
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(3))
+        .expect("FIFO must not block take");
+    thread.join().unwrap();
+}
+
+#[test]
+fn failed_send_replaces_older_pending_with_new_history() {
+    let h = Scratch::new();
+    let s = assistant(&h.0, true);
+    fs::write(s.join("pending-send.jsonl"), b"older history").unwrap();
+    let new = lines(&[record("new", "Keep the checks.")]);
+    let result = send_pending(&h.0, "wren", &new, "Studio".into(), |pending| {
+        assert_eq!(fs::read(pending).unwrap(), new);
+        Err(AskError::Refused("the computer did not answer".into()))
+    });
+    assert_eq!(result.unwrap_err().message, text::NOT_REACHED_BUILDER);
+    assert_eq!(fs::read(s.join("pending-send.jsonl")).unwrap(), new);
+    private(&s.join("pending-send.jsonl"));
+    assert!(!s.join("last-sent.json").exists());
+}
+
+#[test]
+fn uppercase_peer_key_is_refused_deleted_and_passed() {
+    let (h, s) = prepare_delivery();
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    fs::write(&incoming, lines(&[record("new", "Keep it small.")])).unwrap();
+    let mut d = delivery(1, 'a', "history-1-1.jsonl");
+    d["key"] = json!("AB".repeat(32));
+    let (saved, answer) = process(&h, d);
+    assert_eq!(answer.refused, 1);
+    assert_eq!(answer.taken, 0);
+    assert_eq!(saved.after, 1);
+    assert!(!incoming.exists());
+}
+
+#[test]
+fn cursor_write_fault_keeps_delivery_and_cursor() {
+    let (h, s) = prepare_delivery();
+    fs::create_dir(s.join("deliveries-taken.json")).unwrap();
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    fs::write(&incoming, lines(&[record("new", "Keep it small.")])).unwrap();
+    let mut saved = Received::default();
+    let mut answer = empty_taken();
+    let error = take_one(
+        &h.0,
+        "wren",
+        (&member(&h.0), &filters(&h.0)),
+        &mut saved,
+        &mut answer,
+        &serde_json::from_value(delivery(1, 'a', "history-1-1.jsonl")).unwrap(),
+        PEER_LIMIT,
+    )
+    .unwrap_err();
+    assert!(incoming.exists());
+    assert_eq!(error.message, TAKE_FAILED);
+    assert_eq!(saved.after, 0);
+    assert!(s.join("deliveries-taken.json").is_dir());
+}
+
+#[test]
+fn cleanup_fault_rolls_back_cursor_and_keeps_delivery() {
+    let (h, s) = prepare_delivery();
+    let cursor = br#"{"after":0,"computers":{}}"#;
+    fs::write(s.join("deliveries-taken.json"), cursor).unwrap();
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    fs::write(&incoming, lines(&[record("new", "Keep it small.")])).unwrap();
+    let mut saved = Received::default();
+    let mut answer = empty_taken();
+    fs::set_permissions(s.join("deliveries"), fs::Permissions::from_mode(0o500)).unwrap();
+    let result = take_one(
+        &h.0,
+        "wren",
+        (&member(&h.0), &filters(&h.0)),
+        &mut saved,
+        &mut answer,
+        &serde_json::from_value(delivery(1, 'a', "history-1-1.jsonl")).unwrap(),
+        PEER_LIMIT,
+    );
+    fs::set_permissions(s.join("deliveries"), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(result.unwrap_err().message, TAKE_FAILED);
+    assert!(incoming.exists());
+    assert_eq!(saved.after, 0);
+    assert_eq!(fs::read(s.join("deliveries-taken.json")).unwrap(), cursor);
 }

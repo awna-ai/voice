@@ -99,8 +99,37 @@ fn invite_lines(invite: &dto::Invite) -> Vec<String> {
     lines
 }
 
+// History shows a clock time only on the same local calendar day.
+fn local_date(at: f64) -> Option<String> {
+    let timestamp = at as libc::time_t;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as libc::time_t;
+    let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
+    let mut today = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // SAFETY: all pointers refer to live storage; localtime_r initializes each output on success.
+    if unsafe { libc::localtime_r(&timestamp, local.as_mut_ptr()) }.is_null()
+        || unsafe { libc::localtime_r(&now, today.as_mut_ptr()) }.is_null()
+    {
+        return None;
+    }
+    // SAFETY: both calls succeeded and initialized every field.
+    let (local, today) = unsafe { (local.assume_init(), today.assume_init()) };
+    if local.tm_year == today.tm_year && local.tm_yday == today.tm_yday {
+        local_time(at)
+    } else {
+        Some(format!(
+            "{:04}-{:02}-{:02}",
+            local.tm_year + 1900,
+            local.tm_mon + 1,
+            local.tm_mday
+        ))
+    }
+}
+
 fn shown_time(at: f64) -> String {
-    local_time(at).unwrap_or_else(|| "unknown time".into())
+    local_date(at).unwrap_or_else(|| "unknown time".into())
 }
 
 fn print_computers(computers: &[dto::SentFrom]) {

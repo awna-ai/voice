@@ -496,7 +496,7 @@ fn radio_take_prints_totals_and_computers_without_history_or_keys() {
     fs::create_dir(&folder).unwrap();
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
-    let record = json!({"id":"invented-id","kind":"message","timestamp":"2026-11-17T12:00:00Z","text":"Keep the first change small."});
+    let record = json!({"id":"invented-id","kind":"message","timestamp":"2026-11-17T12:00:00Z","project":"demo","text":"Keep the first change small."});
     fs::write(folder.join("history-1-1.jsonl"), format!("{record}\n")).unwrap();
     fs::write(folder.join("other.txt"), "invented unrelated file").unwrap();
     let key = "ab".repeat(32);
@@ -539,4 +539,40 @@ fn radio_take_prints_totals_and_computers_without_history_or_keys() {
             .is_ok_and(|day| (1..=31).contains(&day));
     assert!(is_time || is_date, "invalid local timestamp: {timestamp}");
     assert_eq!(lines[2], "Left out 1 files that weren't Voice's history.");
+}
+
+#[test]
+fn radio_history_shows_today_as_local_time_and_past_as_date() {
+    let scratch = Scratch::new();
+    let home = scratch.0.join("home");
+    member_computer(&home);
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expected = Command::new("/bin/date")
+        .env("TZ", "UTC")
+        .args(["-r", &at.to_string(), "+%H:%M"])
+        .output()
+        .unwrap();
+    assert!(expected.status.success());
+    let expected = String::from_utf8(expected.stdout).unwrap();
+    fs::write(
+        home.join(".claude/state/wren/deliveries-taken.json"),
+        serde_json::json!({"after":2,"computers":{
+            "a".repeat(64):{"name":"Today","at":at,"records":1},
+            "b".repeat(64):{"name":"Past","at":1800.0,"records":2}
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let output = history_command(&home, "history");
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "Today: 1 records, last {}\nPast: 2 records, last 1970-01-01\n",
+            expected.trim()
+        )
+    );
 }

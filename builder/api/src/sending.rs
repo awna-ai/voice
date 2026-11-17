@@ -14,13 +14,14 @@ use std::{
 use voice_ingest::{corpus, filters::Filters, privacy, private};
 use voice_save::record::{Role, SaveRecord};
 type Result<T> = std::result::Result<T, dto::Failure>;
+const PEER_LIMIT: u64 = 256 * 1024 * 1024;
 const FILE_LIMIT: u64 = 64 * 1024 * 1024;
 const HISTORY_FAILED: &str = "Voice couldn't open this computer's history. Try reading it again.";
 const TAKE_FAILED: &str = "Voice couldn't take the history your other computers sent. Try again.";
 const STATUS_FAILED: &str = "Voice couldn't read the history status. Try again.";
 const SEND_FAILED: &str = "Voice couldn't save this computer's history status. Try again.";
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Received {
     after: u64,
     computers: BTreeMap<String, dto::SentFrom>,
@@ -114,11 +115,26 @@ fn send_with(home: &Path, slug: &str, radio: &Radio) -> Result<dto::Sent> {
     let _lock = private::lock_state(home, slug).map_err(|_| failure(SEND_FAILED))?;
     pairing::register(home, radio)?;
     let builder = founder(radio.computer_list().map_err(pairing::radio_error)?)?;
-    let pending = private::write_private(home, slug, "pending-send.jsonl", &history)
-        .map_err(|_| failure(SEND_FAILED))?;
     let name = format!("history-{}-{}.jsonl", now()?.as_nanos(), std::process::id());
-    let sent = radio.send_phrase(&builder.id, &name, &pending);
-    finish_send(home, slug, builder.name.unwrap_or(builder.id), sent)
+    send_pending(
+        home,
+        slug,
+        &history,
+        builder.name.clone().unwrap_or(builder.id.clone()),
+        |pending| radio.send_phrase(&builder.id, &name, pending),
+    )
+}
+fn send_pending(
+    home: &Path,
+    slug: &str,
+    history: &[u8],
+    to: String,
+    send: impl FnOnce(&Path) -> std::result::Result<u64, AskError>,
+) -> Result<dto::Sent> {
+    let pending = private::write_private(home, slug, "pending-send.jsonl", history)
+        .map_err(|_| failure(SEND_FAILED))?;
+    let sent = send(&pending);
+    finish_send(home, slug, to, sent)
 }
 fn finish_send(
     home: &Path,
@@ -160,14 +176,35 @@ fn history_name(name: &str) -> bool {
         .all(|(s, max)| !s.is_empty() && s.len() <= *max && s.bytes().all(|b| b.is_ascii_digit()))
 }
 fn peer_file(key: &str) -> Option<String> {
-    if key.len() != 64 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if key.len() != 64
+        || !key
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return None;
     }
     Some(format!("decisions-from-{}.jsonl", &key[..16]))
 }
+#[derive(Debug)]
+enum FoldError {
+    Stored,
+    Content,
+}
+impl From<voice_core::error::Error> for FoldError {
+    fn from(_: voice_core::error::Error) -> Self {
+        Self::Content
+    }
+}
 /// Preserve existing records verbatim; only new ids pass through this member's privacy filters.
-fn fold(filters: &Filters, old: &[u8], delivered: &[u8]) -> voice_core::error::Result<Vec<u8>> {
-    let mut kept: Vec<Map<String, Value>> = corpus::read_records("history", old)?
+fn fold(
+    member: &voice_core::member::Member,
+    filters: &Filters,
+    old: &[u8],
+    delivered: &[u8],
+    limit: u64,
+) -> std::result::Result<(Vec<u8>, u64), FoldError> {
+    let mut kept: Vec<Map<String, Value>> = corpus::read_records("history", old)
+        .map_err(|_| FoldError::Stored)?
         .into_iter()
         .map(|(_, r)| r)
         .collect();
@@ -175,7 +212,7 @@ fn fold(filters: &Filters, old: &[u8], delivered: &[u8]) -> voice_core::error::R
         .iter()
         .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect();
-    for (_, record) in corpus::read_records("history", delivered)? {
+    for (line, record) in corpus::read_records("history", delivered)? {
         let Some(id) = record.get("id").and_then(Value::as_str) else {
             continue;
         };
@@ -189,13 +226,25 @@ fn fold(filters: &Filters, old: &[u8], delivered: &[u8]) -> voice_core::error::R
         if value.get("kind").and_then(Value::as_str).is_none()
             || value.get("timestamp").and_then(Value::as_str).is_none()
         {
-            return Err(voice_core::error::Error::Invalid(
-                "A history record has no date.".into(),
-            ));
+            return Err(FoldError::Content);
         }
         let Value::Object(record) = value else {
             unreachable!()
         };
+        if record.get("kind").and_then(Value::as_str) == Some("question") {
+            corpus::question_shape(member, "history", line, &record)?;
+            voice_steps::input::Record {
+                name: "history",
+                line,
+                map: &record,
+            }
+            .options()?;
+        } else if ["project", "text"]
+            .iter()
+            .any(|key| record.get(*key).and_then(Value::as_str).is_none())
+        {
+            return Err(FoldError::Content);
+        }
         kept.push(record);
     }
     kept.sort_by(|a, b| {
@@ -209,12 +258,16 @@ fn fold(filters: &Filters, old: &[u8], delivered: &[u8]) -> voice_core::error::R
             ))
     });
     let mut bytes = Vec::new();
+    let count = kept.len() as u64;
     for record in kept {
         // JSON values already parsed by read_records are serializable.
         serde_json::to_writer(&mut bytes, &record).expect("parsed history record");
         bytes.push(b'\n');
+        if bytes.len() as u64 > limit {
+            return Err(FoldError::Content);
+        }
     }
-    Ok(bytes)
+    Ok((bytes, count))
 }
 pub fn take_deliveries(home: &Path, slug: &str) -> Result<dto::Taken> {
     take_with(home, slug, &Radio::for_home(home))
@@ -229,7 +282,9 @@ fn take_with(home: &Path, slug: &str, radio: &Radio) -> Result<dto::Taken> {
     }
     let _lock = private::lock_state(home, slug).map_err(|_| failure(TAKE_FAILED))?;
     let filters = Filters::compile(&assistant.filters).map_err(|_| failure(TAKE_FAILED))?;
-    let mut saved: Received = read_json(home, slug, "deliveries-taken.json")?.unwrap_or_default();
+    let mut saved: Received = read_json(home, slug, "deliveries-taken.json")
+        .map_err(|_| failure(TAKE_FAILED))?
+        .unwrap_or_default();
     // Radio's deliveries op requires the app to be registered, even when it has no members.
     pairing::register(home, radio)?;
     let mut answer = dto::Taken {
@@ -245,7 +300,15 @@ fn take_with(home: &Path, slug: &str, radio: &Radio) -> Result<dto::Taken> {
             break;
         }
         for delivery in deliveries {
-            take_one(home, slug, &filters, &mut saved, &mut answer, &delivery)?;
+            take_one(
+                home,
+                slug,
+                (&assistant, &filters),
+                &mut saved,
+                &mut answer,
+                &delivery,
+                PEER_LIMIT,
+            )?;
         }
     }
     answer.computers = saved.computers.into_values().map(shown_from).collect();
@@ -254,23 +317,25 @@ fn take_with(home: &Path, slug: &str, radio: &Radio) -> Result<dto::Taken> {
 fn take_one(
     home: &Path,
     slug: &str,
-    filters: &Filters,
+    (member, filters): (&voice_core::member::Member, &Filters),
     saved: &mut Received,
     answer: &mut dto::Taken,
     delivery: &radio_client::Delivery,
+    peer_limit: u64,
 ) -> Result<()> {
     let after = u64::try_from(delivery.id)
         .ok()
         .filter(|id| *id > saved.after)
         .ok_or_else(|| failure(TAKE_FAILED))?;
+    let mut updated = saved.clone();
     // Radio guarantees a plain file name. Refuse malformed replies without constructing any path.
-    if delivery.name.is_empty()
+    let malformed = delivery.name.is_empty()
         || delivery.name.starts_with('.')
         || !delivery
             .name
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
-    {
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+    if malformed {
         answer.refused += 1;
     } else {
         let file = peer_file(&delivery.key);
@@ -291,17 +356,15 @@ fn take_one(
             Ok(None) => (),
             Ok(Some(bytes)) => {
                 let file = file.expect("checked peer key");
-                let old = private::read_private_optional(home, slug, &file)
-                    .map_err(|_| failure(TAKE_FAILED))?
-                    .unwrap_or_default();
-                match fold(filters, &old, &bytes) {
-                    Ok(merged) => {
-                        let records = corpus::read_records("history", &merged)
-                            .map_err(|_| failure(TAKE_FAILED))?
-                            .len() as u64;
+                let old =
+                    private::read_private_optional_at_max(home, slug, None, &file, peer_limit)
+                        .map_err(|_| failure(TAKE_FAILED))?
+                        .unwrap_or_default();
+                match fold(member, filters, &old, &bytes, peer_limit) {
+                    Ok((merged, records)) => {
                         private::write_private(home, slug, &file, &merged)
                             .map_err(|_| failure(TAKE_FAILED))?;
-                        saved.computers.insert(
+                        updated.computers.insert(
                             delivery.key.clone(),
                             dto::SentFrom {
                                 name: delivery.computer.clone(),
@@ -311,16 +374,65 @@ fn take_one(
                         );
                         answer.taken += 1;
                     }
-                    Err(_) => answer.refused += 1,
+                    Err(FoldError::Content) => answer.refused += 1,
+                    Err(FoldError::Stored) => return Err(failure(TAKE_FAILED)),
                 }
             }
-            Err(_) => answer.refused += 1,
+            Err(error) => {
+                if !history_name(&delivery.name)
+                    || file.is_none()
+                    || delivery_content_error(home, slug, &delivery.name, &error)?
+                {
+                    answer.refused += 1;
+                } else {
+                    return Err(failure(TAKE_FAILED));
+                }
+            }
         }
-        private::remove_private_entry_at(home, slug, "deliveries", &delivery.name)
-            .map_err(|_| failure(TAKE_FAILED))?;
     }
-    saved.after = after;
-    save_json(home, slug, "deliveries-taken.json", saved)
+    let previous = private::read_private_optional(home, slug, "deliveries-taken.json")
+        .map_err(|_| failure(TAKE_FAILED))?;
+    updated.after = after;
+    save_json(home, slug, "deliveries-taken.json", &updated).map_err(|_| failure(TAKE_FAILED))?;
+    // Keep the delivery until every write succeeds. If cleanup fails, restore the cursor.
+    if !malformed
+        && private::remove_private_entry_at(home, slug, "deliveries", &delivery.name).is_err()
+    {
+        match previous {
+            Some(bytes) => {
+                private::write_private(home, slug, "deliveries-taken.json", &bytes).map(drop)
+            }
+            None => private::remove_private(home, slug, "deliveries-taken.json").map(drop),
+        }
+        .map_err(|_| failure(TAKE_FAILED))?;
+        return Err(failure(TAKE_FAILED));
+    }
+    *saved = updated;
+    Ok(())
+}
+// Match only the private reader's three content refusals. Ownership and I/O faults retry.
+fn delivery_content_error(
+    home: &Path,
+    slug: &str,
+    name: &str,
+    error: &voice_core::error::Error,
+) -> Result<bool> {
+    let voice_core::error::Error::Invalid(message) = error else {
+        return Ok(false);
+    };
+    let path = std::fs::canonicalize(home)
+        .map_err(|_| failure(TAKE_FAILED))?
+        .join(".claude/state")
+        .join(slug)
+        .join("deliveries")
+        .join(name);
+    Ok(message
+        == &format!(
+            "{} is a link: Voice reads only real files, never links. Move it away and try again",
+            path.display()
+        )
+        || message == &format!("{} is not a file", path.display())
+        || message == &format!("{name} is too big to read (over {} KiB)", FILE_LIMIT / 1024))
 }
 fn shown_from(mut computer: dto::SentFrom) -> dto::SentFrom {
     computer.name = shown(computer.name);
