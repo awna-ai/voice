@@ -26,6 +26,7 @@ fn addresses(answer: radio::LinkAddresses) -> dto::LinkAddress {
     dto::LinkAddress {
         port: answer.port,
         addresses: answer.addresses,
+        computer_name: None,
     }
 }
 pub fn link_address(home: &Path) -> Result<dto::LinkAddress> {
@@ -267,11 +268,16 @@ fn name_in(home: &Path, radio: &Radio, name: &str) -> Result<()> {
     })
 }
 
+fn named(mut address: dto::LinkAddress) -> dto::LinkAddress {
+    address.computer_name = voice_save::computer::name();
+    address
+}
+
 pub fn radio_link_address() -> Result<dto::LinkAddress> {
-    link_address(&crate::assistants::home(text::NO_HOME)?)
+    link_address(&crate::assistants::home(text::NO_HOME)?).map(named)
 }
 pub fn radio_set_link_address(r: dto::RadioAddressRequest) -> Result<dto::LinkAddress> {
-    set_link_address(&crate::assistants::home(text::NO_HOME)?, &r.address)
+    set_link_address(&crate::assistants::home(text::NO_HOME)?, &r.address).map(named)
 }
 pub fn radio_invite(r: dto::SlugRequest) -> Result<dto::Invite> {
     invite(&crate::assistants::home(text::NO_HOME)?, &r.slug)

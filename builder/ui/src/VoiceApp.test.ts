@@ -112,22 +112,23 @@ it('opens save without requiring permission and gates report and review', async 
   await flushPromises()
   expect(wrapper.get('main h2').text()).toBe(`Keep ${assistant.name} safe`)
   expect(wrapper.get('[aria-current="step"]').text()).toBe('Save')
-  expect(backend.saveOptions).toHaveBeenCalledExactlyOnceWith({ slug: assistant.slug })
+  expect(backend.saveOptions).toHaveBeenCalledWith({ slug: assistant.slug })
+  expect(backend.saveOptions).toHaveBeenCalledTimes(2)
   expect(backend.agreeConsent).not.toHaveBeenCalled()
 })
 
-it('shows six save cards and preserves the forget message while resetting permission', async () => {
+it('shows seven save cards and preserves the forget message while resetting permission', async () => {
   const backend = fakeBackend({ listAssistants: vi.fn().mockResolvedValue([{ ...assistant, consent: { agreed: true, agreedOn: '2026-10-25' } }]), forgetPreview: vi.fn().mockResolvedValue({ files: 7 }) })
   const wrapper = screen(VoiceApp, backend)
   await flushPromises(); await button(wrapper, 'Open').trigger('click'); await flushPromises()
   await button(wrapper, 'Save').trigger('click'); await flushPromises()
-  expect(wrapper.findAll('main h2').map(h => h.text())).toEqual([`Keep ${assistant.name} safe`, 'Use it in Claude Code', 'Use it in claude.ai', 'Your skills', 'What your assistant may read', 'Forget what Example learned from'])
+  expect(wrapper.findAll('main h2').map(h => h.text())).toEqual([`Keep ${assistant.name} safe`, 'Your other computers', 'Use it in Claude Code', 'Use it in claude.ai', 'Your skills', 'What your assistant may read', 'Forget what Example learned from'])
   await button(wrapper, 'Forget…').trigger('click'); await flushPromises()
   await button(wrapper, 'Delete these files').trigger('click'); await flushPromises()
   expect(wrapper.get('.alert-success').text()).toBe('Deleted 7 files.')
   expect(wrapper.findAll('ol li')[1]!.text()).toContain('Needs your permission first')
   expect(wrapper.findAll('ol li')[1]!.get('button').attributes('disabled')).toBeDefined()
-  expect(backend.saveOptions).toHaveBeenCalledTimes(2)
+  expect(backend.saveOptions).toHaveBeenCalledTimes(4)
   expect(backend.claudeCodeStatus).toHaveBeenCalledTimes(2)
   expect(backend.claudeAiFiles).toHaveBeenCalledTimes(2)
   expect(backend.listSkills).toHaveBeenCalledTimes(2)
@@ -342,7 +343,7 @@ it('replaces the current assistant after Save updates it without remounting Save
   expect(wrapper.get('aside h2').text()).toBe('Making Wren')
   expect(wrapper.getComponent({ name: 'Save' }).element).toBe(save.element)
   expect(wrapper.get('main h2').text()).toBe('Keep Wren safe')
-  expect(backend.saveOptions).toHaveBeenCalledTimes(1)
+  expect(backend.saveOptions).toHaveBeenCalledTimes(2)
 })
 
 it('keeps Your assistants locked until opening finishes', async () => {

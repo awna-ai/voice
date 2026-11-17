@@ -1089,6 +1089,8 @@ pub struct BringInRequest {
 pub struct LinkAddress {
     pub port: u16,
     pub addresses: Vec<String>,
+    /// This computer's own name, the join form's first guess. Only the app's commands fill it.
+    pub computer_name: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, TS)]

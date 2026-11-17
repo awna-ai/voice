@@ -6,6 +6,7 @@ import NewAssistant from './screens/NewAssistant.vue'
 import Consent from './screens/Consent.vue'
 import ConnectClaude from './screens/ConnectClaude.vue'
 import Save from './screens/Save.vue'
+import OtherComputers from './screens/OtherComputers.vue'
 import Sources from './screens/Sources.vue'
 import TurnOn from './screens/TurnOn.vue'
 import ClaudeAiFiles from './screens/ClaudeAiFiles.vue'
@@ -145,6 +146,7 @@ function home() {
             <Report v-else-if="view === 'report' && assistant" :assistant="assistant" @build="goToStep('build')" @next="goToStep('review')" />
             <template v-else-if="view === 'save' && assistant">
               <Save :key="`save-${assistant.slug}-${resets}`" :assistant="assistant" @updated="assistant = $event" />
+              <OtherComputers :key="`computers-${assistant.slug}-${resets}`" :assistant="assistant" />
               <TurnOn :key="`on-${assistant.slug}-${resets}`" :assistant="assistant" />
               <ClaudeAiFiles :key="`files-${assistant.slug}-${resets}`" :assistant="assistant" />
               <Skills :key="`skills-${assistant.slug}-${resets}`" :assistant="assistant" />
