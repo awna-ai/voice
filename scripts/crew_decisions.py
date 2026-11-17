@@ -121,6 +121,7 @@ def encode(path):
 class CompartmentMap(dict):
     """Validated config with lazily resolved fence roots, private to one member."""
     _fenced_roots = None
+    _resolved_home = None
 
 
 def check_compartments(c):
@@ -198,7 +199,7 @@ def absolute_path(path, cwd):
     path = Path(path).expanduser()
     if not path.is_absolute():
         path = Path(cwd).expanduser() / path
-    return Path(os.path.abspath(path))
+    return path
 
 
 def matches_fence(path, roots):
@@ -211,24 +212,33 @@ def walk_resolve(path, roots):
     remaining = list(path.parts[1:])
     hops = 0
     while remaining:
-        candidate = prefix / remaining.pop(0)
+        name = remaining.pop(0)
+        if name in ("", "."):
+            continue
+        if name == "..":
+            prefix = prefix.parent
+            if matches_fence(prefix, roots):
+                return prefix, True
+            continue
+        candidate = prefix / name
         if matches_fence(candidate, roots):
             return candidate, True
         try:
             mode = os.lstat(candidate).st_mode
         except FileNotFoundError:
-            resolved = candidate.joinpath(*remaining)
-            return resolved, matches_fence(resolved, roots)
+            prefix = candidate
+            continue
         if stat.S_ISLNK(mode):
             # The candidate was checked before lstat and before readlink.
             hops += 1
             if hops > 40:
                 return candidate, True
-            target = absolute_path(os.readlink(candidate), prefix).joinpath(*remaining)
-            if matches_fence(target, roots):
-                return target, True
-            prefix = Path(target.anchor)
-            remaining = list(target.parts[1:])
+            target = Path(os.readlink(candidate))
+            if target.is_absolute():
+                prefix = Path(target.anchor)
+                remaining = list(target.parts[1:]) + remaining
+            else:
+                remaining = list(target.parts) + remaining
         else:
             prefix = candidate
     return prefix, matches_fence(prefix, roots)
@@ -239,10 +249,11 @@ def fenced_forms(c, cwd):
     if cached is None:
         forms = []
         for path in c["fenced"]:
-            lexical = absolute_path(path, cwd)
+            raw = absolute_path(path, cwd)
+            lexical = Path(os.path.abspath(raw))
             # Resolve only the parent: never lstat the fence folder itself.
-            parent, blocked = walk_resolve(lexical.parent, ())
-            forms.extend((lexical, Path(lexical.anchor) if blocked else parent / lexical.name))
+            parent, blocked = walk_resolve(raw.parent, ())
+            forms.extend((lexical, Path(raw.anchor) if blocked else parent / raw.name))
         cached = tuple(forms)
         if isinstance(c, CompartmentMap):
             c._fenced_roots = cached
@@ -251,14 +262,15 @@ def fenced_forms(c, cwd):
 
 def safe_resolve(c, path, cwd):
     """Return a resolved path and whether resolving it encounters a fence."""
-    lexical = absolute_path(path, cwd)
-    if matches_fence(lexical, (absolute_path(root, cwd) for root in c["fenced"])):
+    raw = absolute_path(path, cwd)
+    lexical = Path(os.path.abspath(raw))
+    if matches_fence(lexical, (Path(os.path.abspath(absolute_path(root, cwd))) for root in c["fenced"])):
         return lexical, True
-    return walk_resolve(lexical, fenced_forms(c, cwd))
+    return walk_resolve(raw, fenced_forms(c, cwd))
 
 
 def path_forms(path, cwd, c):
-    return absolute_path(path, cwd), safe_resolve(c, path, cwd)[0]
+    return Path(os.path.abspath(absolute_path(path, cwd))), safe_resolve(c, path, cwd)[0]
 
 
 def route_compartment(hub, project):
@@ -269,7 +281,7 @@ def hub_project_compartment(c, hub_path, project):
     """Accept only literal, known hub projects, without probing fenced paths."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", project):
         return None
-    target = Path(os.path.abspath(Path(hub_path).expanduser() / project))
+    target = Path(hub_path).expanduser() / project
     real, fenced = safe_resolve(c, target, os.getcwd())
     if fenced:
         return None
@@ -304,12 +316,26 @@ def folder_compartment(c, folder_name):
     return max(matches)[1] if matches else "p:" + project_name(folder_name)
 
 
+def fallback_compartment(c, path, cwd):
+    """Use the home spelling for names only; matching keeps the resolved path."""
+    cached = getattr(c, "_resolved_home", None)
+    if cached is None:
+        cached = safe_resolve(c, Path.home(), cwd)
+        if isinstance(c, CompartmentMap):
+            c._resolved_home = cached
+    home, fenced = cached
+    path = Path(path)
+    if not fenced and path.is_relative_to(home):
+        path = Path.home() / path.relative_to(home)
+    return "p:" + project_name(encode(path))
+
+
 def path_compartment(c, path, cwd, *, resolve=True):
-    absolute = absolute_path(path, cwd)
     if resolve:
         real, fenced = safe_resolve(c, path, cwd)
-        forms = (absolute, real)
+        forms = (real,)
     else:
+        absolute = Path(os.path.abspath(absolute_path(path, cwd)))
         forms = (absolute,)
         fenced = matches_fence(absolute, fenced_forms(c, cwd))
     if fenced:
@@ -318,25 +344,25 @@ def path_compartment(c, path, cwd, *, resolve=True):
     if hub:
         for hub_path in hub["paths"]:
             for form in forms:
-                hub_roots = path_forms(hub_path, cwd, c) if resolve else (Path(hub_path).expanduser(),)
+                hub_roots = (safe_resolve(c, hub_path, cwd)[0],) if resolve else (Path(hub_path).expanduser(),)
                 for root in hub_roots:
                     if under(form, root) and len(form.parts) > len(root.parts):
                         route = hub_project_compartment(c, hub_path, form.parts[len(root.parts)])
                         if route is not None:
                             return route
     matches = [(len(root.parts), compartment) for compartment, folder in declared_folders(c)
-               for root in (path_forms(folder, cwd, c) if resolve else (folder,))
+               for root in ((safe_resolve(c, folder, cwd)[0],) if resolve else (folder,))
                if any(under(form, root) for form in forms)]
     if matches:
         return max(matches)[1]
     if not resolve:
-        return "p:" + project_name(encode(forms[0].parent))
+        return fallback_compartment(c, forms[0].parent, cwd)
     directory = forms[0] if forms[0].is_dir() else forms[0].parent
     for ancestor in (directory, *directory.parents):
         if os.path.lexists(ancestor / ".git"):
             base = str(ancestor).split("/.claude/worktrees/", 1)[0]
-            return "p:" + project_name(encode(base))
-    return "p:" + project_name(encode(directory))
+            return fallback_compartment(c, base, cwd)
+    return fallback_compartment(c, directory, cwd)
 
 
 def record_compartment(c, record):

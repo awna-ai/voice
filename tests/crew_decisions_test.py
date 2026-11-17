@@ -3,6 +3,7 @@
 
 Every case runs the real CLI over fixture transcripts in a temp dir, so no test reads a real one.
 """
+import builtins
 import io
 import json
 import os
@@ -601,7 +602,7 @@ class Compartments(unittest.TestCase):
         repo = self.h.root / "repo"
         (repo / ".git").mkdir(parents=True)
         (repo / "sub").mkdir()
-        expected = "p:" + self.c.project_name(self.c.encode(repo))
+        expected = "p:" + self.c.project_name(self.c.encode(repo.resolve()))
         self.assertEqual(self.c.path_compartment(c, repo / "sub/file.md", home), expected)
         wt = repo / ".claude/worktrees/branch"
         (wt / ".git").mkdir(parents=True)
@@ -613,6 +614,43 @@ class Compartments(unittest.TestCase):
                                   ("garden-club", "fenced"), ("unknown", "p:unknown")):
             self.assertEqual(self.c.record_compartment(c, {"project": project}), expected)
         self.assertEqual(self.c.record_compartment(c, {"compartment": "hub-mixed"}), "hub-mixed")
+
+    def test_fallback_names_with_symlink_home_preserve_fences(self):
+        home = self.h.root.resolve() / "home"
+        home.mkdir()
+        linked_home = self.h.root / "linked-home"
+        linked_home.symlink_to(home, target_is_directory=True)
+        project = home / "projects/queues-app"
+        project.mkdir(parents=True)
+        repo = home / "projects/repo"
+        (repo / ".git").mkdir(parents=True)
+        worktree = repo / ".claude/worktrees/branch"
+        (worktree / ".git").mkdir(parents=True)
+        fenced = home / "garden-club"
+        fenced.mkdir()
+        (project / "blocked").symlink_to(fenced, target_is_directory=True)
+        cases = (("projects/queues-app", True, "p:queues-app"),
+                 ("projects/queues-app/queue.md", False, "p:queues-app"),
+                 ("projects/repo/queue.md", True, "p:repo"),
+                 ("projects/repo/.claude/worktrees/branch/queue.md", True, "p:repo"))
+        for spelling in (home, linked_home):
+            with self.subTest(home=spelling), patch.dict(os.environ, {"HOME": str(spelling)}):
+                c = self.c.check_compartments({"version": 1, "fenced": ["~/garden-club"],
+                                               "compartments": {}})
+                for relative, resolve, expected in cases:
+                    with self.subTest(relative=relative, resolve=resolve):
+                        self.assertEqual(self.c.path_compartment(c, spelling / relative, spelling,
+                                                                resolve=resolve), expected)
+                outside = self.h.root.resolve()
+                expected = "p:" + self.c.project_name(self.c.encode(outside))
+                self.assertEqual(self.c.path_compartment(c, outside, spelling), expected)
+                lstat = os.lstat
+                def guarded(path, *args, **kwargs):
+                    self.assertFalse(self.c.under(Path(path), fenced), "probed fence")
+                    return lstat(path, *args, **kwargs)
+                with patch.object(os, "lstat", side_effect=guarded):
+                    self.assertEqual(self.c.path_compartment(c, project / "blocked/queue.md", spelling),
+                                     "fenced")
 
     def test_hub_paths_validation(self):
         for hub, error in (({"path": "~/.hub/projects", "routes": {}}, "hub.path"),
@@ -1135,6 +1173,54 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(self.c.main(["--member", self.member, "record", "--work", "~/lnk/c.md",
                     "--kind", "decided", "--category", "scope", "--tier", "high", "--question", "q",
                     "--ada-pick", "keep"]), 4)
+
+    def test_parent_components_after_links_never_probe_fence(self):
+        base = self.h.root.resolve()
+        fenced = base / "elsewhere/a/fence"
+        (base / "elsewhere/a/b").mkdir(parents=True)
+        fenced.mkdir()
+        (base / "deep").symlink_to("elsewhere/a/b", target_is_directory=True)
+        (base / "lnk").symlink_to("deep/../fence", target_is_directory=True)
+        # Climb twice from the link's real target, then return to its parent.
+        (base / "climb").symlink_to("deep/../../a/fence", target_is_directory=True)
+        self.config["fenced"] = [str(fenced)]
+        self.save_config()
+
+        def guard(original):
+            def checked(path, *args, **kwargs):
+                if not isinstance(path, int):
+                    self.assertFalse(self.c.under(Path(path), fenced), "probed fence: " + str(path))
+                return original(path, *args, **kwargs)
+            return checked
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, {"HOME": str(base)}))
+            for owner, name in ((os, "lstat"), (os, "stat"), (os, "readlink"),
+                                (os.path, "isdir"), (os.path, "lexists"), (os.path, "realpath"),
+                                (Path, "resolve"), (io, "open"), (builtins, "open")):
+                stack.enter_context(patch.object(owner, name, guard(getattr(owner, name))))
+            for target in ("~/lnk", "~/deep/../fence", "~/climb"):
+                for entry in ("path", "work", "log", "cwd", "touched"):
+                    with self.subTest(target=target, entry=entry):
+                        m = self.c.load_member(self.c.read_member(self.member))
+                        if entry == "path":
+                            self.assertEqual(self.c.path_compartment(m.compartments, target + "/c.md", base), "fenced")
+                        elif entry == "touched":
+                            self.h.session("allowed", "s", self.write_tool(target + "/c.md"))
+                            self.assertEqual(self.c.claude_touched(m, self.h.projects), {})
+                        else:
+                            command = (["similar", "--cwd", target, "--query", "q"] if entry == "cwd" else
+                                       ["record", "--" + entry, target + ("/l.jsonl" if entry == "log" else "/c.md"),
+                                        "--kind", "decided", "--category", "scope", "--tier", "high",
+                                        "--question", "q", "--ada-pick", "keep"])
+                            if entry == "log":
+                                command.extend(["--work", str(base / "allowed")])
+                            with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                                self.assertEqual(self.c.main(["--member", self.member, *command]), 4)
+        self.assertEqual(list(fenced.iterdir()), [])
+
+    def test_parent_at_root_stays_at_root(self):
+        self.assertEqual(self.c.walk_resolve(Path("/../.."), ()), (Path("/"), False))
 
     def test_fence_parent_link_and_link_hop_limit(self):
         base = self.h.root.resolve()
