@@ -213,7 +213,9 @@ fn refuses_the_persons_terminals_and_system_logs() {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // A refused read exits at once; an allowed one blocks on the terminal. The wait is long so a
+        // busy computer's slow start of the sandbox is never read as an allowed read.
+        let deadline = Instant::now() + Duration::from_secs(30);
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() {
                 break status;
