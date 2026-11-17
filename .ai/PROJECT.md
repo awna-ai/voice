@@ -10,6 +10,8 @@ member and no real person's data.
 | `crew/_template/` | Member template, filled by `bootstrap/install.sh --name <Name>` | `tests/crew_install_test.sh` |
 | `bootstrap/` | The guided build (`PROMPT.md`) and its installer | `tests/crew_install_test.sh` |
 | `scripts/ci-local.sh` | The gate: `--tier full` (default) runs everything; `--tier touched` runs the changed crates and their dependents plus the repo-wide scans, and falls back to full for anything it can't map; `--list` prints the steps | `tests/ci_local_test.sh` |
+| `scripts/verify-main.sh` | Checks the remote's `main` with the full gate, moves `refs/green/main` on a pass, reruns a red once, and freezes releases with `refs/green/frozen` on a second red | `tests/verify_main_test.sh` |
+| `scripts/release-check.sh` | Refuses a release of a commit that is not green, or any release while frozen | `tests/verify_main_test.sh` |
 | `scripts/crew_decisions.py` | Mine, split, tally, label, score, record, privacy-check | `tests/crew_*_test.py` |
 | `scripts/crew_documents.py` | Read text, Word and PDF inputs for the lens | `tests/crew_documents_test.py` |
 | `scripts/crew_mail.py`, `crew_decisions.py sources` | Extra sources listed in `private.json`, each read only with a consent date: sent mail from an mbox, the live log, project folders reviewed file by file for the lens | `tests/crew_extra_sources_test.py` |

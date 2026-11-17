@@ -80,7 +80,7 @@ done
 echo 'ci_local_test: usage passed'
 
 python_suites='crew_decisions crew_sources crew_extra_sources crew_labels crew_hardening crew_documents crew_rounds slack_mine slack_select crew_personas growth_loop_spec claude_sandbox_probe read_fence_probe'
-shellcheck_line='shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/build_mac_app_test.sh tests/ci_local_test.sh'
+shellcheck_line='shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/build_mac_app_test.sh tests/ci_local_test.sh scripts/verify-main.sh scripts/release-check.sh tests/verify_main_test.sh'
 prefix='VOICE_REQUIRE_PARITY=1 '
 if [ "$(uname -s)" = Darwin ]; then prefix+='VOICE_REQUIRE_SANDBOX=1 '; fi
 cat > "$tmp/trees" <<'GOLDEN'
@@ -98,6 +98,7 @@ GOLDEN
   echo 'bash tests/fetch_radio_test.sh'
   echo 'bash tests/build_mac_app_test.sh'
   echo 'bash tests/ci_local_test.sh'
+  echo 'bash tests/verify_main_test.sh'
   echo "$shellcheck_line"
 } > "$tmp/prefix"
 cp "$tmp/prefix" "$tmp/golden"
@@ -127,7 +128,7 @@ cmp "$tmp/full" "$tmp/out" || fail 'explicit full differs'
 if [ "$(uname -s)" = Darwin ] && [ -n "$real_cargo" ]; then
   diff -u "$tmp/golden" "$tmp/out" || fail 'full gate order changed'
 else
-  head -n 19 "$tmp/out" > "$tmp/actual-prefix"
+  head -n 20 "$tmp/out" > "$tmp/actual-prefix"
   cmp "$tmp/prefix" "$tmp/actual-prefix" || fail 'full gate prefix changed'
 fi
 echo 'ci_local_test: full golden list passed'
@@ -160,7 +161,7 @@ for path in builder/agent/src/sandbox.rs builder/agent/sandbox/claude-code.sb bo
   esac
   reset
 done
-for path in scripts/slack_select.py scripts/fetch-radio.sh scripts/build-mac-app.sh tests/build_mac_app_test.sh tests/slack_mine_test.py docs/spec/growth-loop.md builder/grow/tests/golden/case.json; do
+for path in scripts/verify-main.sh scripts/release-check.sh tests/verify_main_test.sh scripts/slack_select.py scripts/fetch-radio.sh scripts/build-mac-app.sh tests/build_mac_app_test.sh tests/slack_mine_test.py docs/spec/growth-loop.md builder/grow/tests/golden/case.json; do
   case_name=$path
   change "$path"
   touched
@@ -169,6 +170,9 @@ for path in scripts/slack_select.py scripts/fetch-radio.sh scripts/build-mac-app
     regressions=$((regressions + 1))
   fi
   case "$path" in
+    scripts/verify-main.sh|scripts/release-check.sh|tests/verify_main_test.sh)
+      expect_step 'bash tests/verify_main_test.sh'
+      no_tests ;;
     scripts/slack_select.py)
       expect_step 'bash tests/crew_install_test.sh'
       for suite in $python_suites; do expect_step "python3 tests/${suite}_test.py"; done ;;

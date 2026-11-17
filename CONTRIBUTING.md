@@ -27,3 +27,13 @@ The public build signs in with an Anthropic Console account only. A tester's cop
 Claude subscription sign-in. Build it with `bash scripts/build-mac-app.sh --testers`, or
 `cargo build -p voice-cli --features claude-subscription` for the command alone. Never hand a
 testers' build to anyone outside the testing group. No release passes this feature.
+
+## Releasing
+
+Before tagging a release, run `bash scripts/release-check.sh <commit>`; it must say the commit
+passed. `main` is checked after lands by `bash scripts/verify-main.sh`, which runs the full gate
+on the newest `main` and moves `refs/green/main` when it passes. If `main` goes red twice,
+releases stay frozen until a fix passes.
+
+Use semver tags `vX.Y.Z`, on the commit the build comes from. Bump the workspace version in
+`Cargo.toml`, `builder/app/tauri.conf.json` and `builder/ui/package.json` together.
