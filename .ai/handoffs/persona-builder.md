@@ -2,6 +2,34 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF25: the `voice` Voice hands to Radio is the checked one, never a link (2026-11-17, lane: V1)
+
+- **Status: built, not landed.** Branch `lane-v1/VF25` (pushed), stacked on `lane-v1/VF23`: `d0b9fec` brief,
+  `8f4e22e` code, fix-up 1 brief and `d70b666` fix-up 1, this record. It lands with VF23 in one full-gate land from
+  this branch.
+- **Why:** filed from VF23's Verifier (note 4). `shipped_cli` returns `<the program's folder>/voice` unresolved when
+  the program isn't `voice` (the app's is `voice-app`). `lasting` checked that path's canonical target, but Voice
+  wrote, handed Radio and ran the `radio` beside the unresolved path, so a linked `voice` left the folder it really
+  used unchecked. A folder named `voice` passed too.
+- **What:** `lasting` refuses anything but a plain file at the command's path (`symlink_metadata`, before
+  `canonicalize`; a missing path is still an `Io` error), and returns the canonical path it checked;
+  `shipped_lasting_cli` and the SKILL.md word use that path in a release build (fix-up 1, closing the Verifier's race
+  between the two lookups). `.ai/SECURITY.md` says both.
+- **Who built it:** Codex, from the brief and fix-up 1; V1 re-ran the socket tests her sandbox refuses.
+- **Verified:** red first (the link assertion failed before the change; fix-up 1's test failed to compile against
+  `lasting` returning `()`). Green: `cargo test -p voice-core cli_command` 22 passed, `cargo test -p voice-api radio`
+  24 passed, fmt, clippy on both crates. Mutations by `mutate-check.sh`, all killed: the check dropped, a folder let
+  through, a link let through, `lasting` returning the given path, the word built from the given path.
+- **Security review (sub-agent):** no HIGH or MEDIUM. LOW: the race between the type check and `canonicalize` (closed
+  by fix-up 1); the new test is macOS-only, like its neighbours.
+- **Verifier (Fable, first pass, at `8f4e22e`):** PASS. Should-fix, the two-lookup race (she measured 361 hits in
+  200,000 tries against a flipper): fixed in fix-up 1 (34 added lines in files she saw). Notes: the brief says Radio
+  refuses a linked handler, but `validate_handler` canonicalizes first and records the target, so the real exposure
+  was the `radio` run and the SKILL.md word; a dangling `voice` link is now `CLI_PLACE` instead of an `Io` error.
+  Out of scope, noted: `builder/api/src/history.rs` uses `shipped_cli()` with no lasting check (the reader program).
+- **Not verified:** the release-build path end to end (tests run a debug build, which skips the rule; the rule's
+  functions are tested directly). The full gate runs at the land.
+
 ## VF23: the lasting-place rule refuses a group-writable folder, as Radio does (2026-11-17, lane: V1)
 
 - **Status: built, not landed.** Branch `lane-v1/VF23` (pushed): `53c8be8` brief, `c5b5679` code, `7b4e257` fix-up 1
