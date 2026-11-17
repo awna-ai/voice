@@ -683,7 +683,7 @@ class Compartments(unittest.TestCase):
                 self.config["hub"]["routes"][name] = "client"
             with self.subTest(name=name):
                 target = "~/.hub/projects/" + name + "/queue.md"
-                self.assertEqual(self.c.hub_compartment(self.config, "work", [self.write_tool(target)]), "work")
+                self.assertEqual(self.c.hub_compartment(self.config, ENCODED_HOME + "--hub", "work", [self.write_tool(target)]), "work")
                 self.assertEqual(self.c.path_compartment(self.config, target, TEST_HOME), "work")
                 self.assertEqual(self.c.folder_compartment(self.config, self.c.encode("~/.hub/projects") + "-" + name), "work")
         for route, expected in ((None, "p:garden"), ("p:garden-site", "p:garden-site")):
@@ -691,13 +691,13 @@ class Compartments(unittest.TestCase):
                 self.config["hub"]["routes"]["GARDEN"] = route
             with self.subTest(route=route):
                 target = "~/.hub/projects/garden/queue.md"
-                self.assertEqual(self.c.hub_compartment(self.config, "work", [self.write_tool(target)]), expected)
+                self.assertEqual(self.c.hub_compartment(self.config, ENCODED_HOME + "--hub", "work", [self.write_tool(target)]), expected)
                 self.assertEqual(self.c.path_compartment(self.config, target, TEST_HOME), expected)
                 self.assertEqual(self.c.folder_compartment(self.config, self.c.encode("~/.hub/projects/garden")), expected)
         # Existence in a different hub does not make this hub's project real.
         target = "~/.other-hub/projects/garden/queue.md"
         self.config["hub"]["routes"].pop("GARDEN")
-        self.assertEqual(self.c.hub_compartment(self.config, "work", [self.write_tool(target)]), "work")
+        self.assertEqual(self.c.hub_compartment(self.config, ENCODED_HOME + "--hub", "work", [self.write_tool(target)]), "work")
         self.assertEqual(self.c.path_compartment(self.config, target, TEST_HOME), "work")
 
     def test_hub_projects_never_probe_a_fenced_directory(self):
@@ -709,7 +709,7 @@ class Compartments(unittest.TestCase):
             self.assertFalse(self.c.under(Path(path), target), "probed fenced project")
             return isdir(path)
         with patch.object(self.c.os.path, "isdir", side_effect=guarded):
-            self.assertEqual(self.c.hub_compartment(self.config, "work", [self.write_tool(target / "queue.md")]), "work")
+            self.assertEqual(self.c.hub_compartment(self.config, ENCODED_HOME + "--hub", "work", [self.write_tool(target / "queue.md")]), "work")
             self.assertEqual(self.c.path_compartment(self.config, target / "queue.md", TEST_HOME), "fenced")
             self.assertEqual(self.c.folder_compartment(self.config, self.c.encode(target)), "fenced")
 
@@ -733,18 +733,18 @@ class Compartments(unittest.TestCase):
             self.assertEqual(member.compartments, self.config)
         self.assertEqual(self.c.load_member(self.c.read_member(self.member)).compartments, self.config)
 
-    def test_hub_routing_from_each_owner(self):
+    def test_hub_routing_from_each_folder(self):
         self.config["compartments"]["client"]["folders"].append("~/.client-hub")
         self.config["hub"]["paths"].append("~/.client-hub/projects")
         record = {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "input": {"file_path": "~/.other-hub/projects/client-stack/x.md"}}]}}
-        self.assertEqual(self.c.hub_compartment(self.config, "work", [record]), "client")
-        self.assertEqual(self.c.hub_compartment(self.config, "client", [record]), "client")
+        self.assertEqual(self.c.hub_compartment(self.config, self.c.encode("~/.hub"), "work", [record]), "client")
+        self.assertEqual(self.c.hub_compartment(self.config, self.c.encode("~/.client-hub"), "client", [record]), "client")
         self.config["hub"]["routes"]["work-stack"] = "work"
         record["message"]["content"][0]["input"]["other"] = "~/.client-hub/projects/work-stack/x.md"
-        self.assertEqual(self.c.hub_compartment(self.config, "work", [record]), "client")
-        self.assertEqual(self.c.hub_compartment(self.config, "client", [record]), "work")
-        self.assertEqual(self.c.hub_compartment(self.config, "p:outside", [record]), "p:outside")
+        self.assertEqual(self.c.hub_compartment(self.config, self.c.encode("~/.hub"), "work", [record]), "client")
+        self.assertEqual(self.c.hub_compartment(self.config, self.c.encode("~/.client-hub"), "client", [record]), "work")
+        self.assertEqual(self.c.hub_compartment(self.config, self.c.encode("~/outside"), "p:outside", [record]), "p:outside")
 
     def test_where_similar_and_record(self):
         rows = [{"id": str(i), "kind": "message", "timestamp": "2026-09-01T00:00:00Z",
@@ -798,6 +798,80 @@ class Compartments(unittest.TestCase):
         proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("compartment", json.loads(self.h.read("out.jsonl")))
+
+    def test_hub_routing_only_from_hub_folders(self):
+        record = self.write_tool("~/.hub/projects/client-stack/x.md")
+        for folder, compartment, expected in (
+                ("~/projects/work", "work", "work"),
+                ("~/projects/work--claude-worktrees-x", "work", "work"),
+                ("~/.hub", "work", "client"),
+                ("~/.hub--claude-worktrees-x", "work", "client"),
+                ("~/.other-hub", "work", "client"),
+                ("~/.hub/projects/client-stack", "client", "client"),
+                ("~/projects/elsewhere", "p:elsewhere", "p:elsewhere")):
+            with self.subTest(folder=folder):
+                self.assertEqual(self.c.hub_compartment(self.config, self.c.encode(folder), compartment, [record]), expected)
+        self.assertEqual(self.c.hub_compartment(self.config, self.c.encode("~/.HUB").upper(), "work", [record]), "client")
+
+    def test_mine_keeps_non_hub_session_compartment(self):
+        for folder, session in ((ENCODED_HOME + "-projects-work", "work"), (ENCODED_HOME + "--hub", "hub")):
+            self.h.session(folder, session, self.write_tool("~/.hub/projects/client-stack/x.md"),
+                           said("2026-09-01T00:00:00Z", "keep every review queue verdict for later scoring"))
+        proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = [json.loads(line) for line in self.h.read("mined.jsonl").splitlines()]
+        self.assertEqual({r["project"]: r["compartment"] for r in rows}, {"work": "work", ".hub": "client"})
+        self.assertEqual(len({r["id"] for r in rows}), len(rows))
+
+    def test_harvest_skips_repeated_user_uuid(self):
+        m = self.c.load_member(self.c.read_member(self.member))
+        record = said("2026-09-01T00:00:00Z", "keep every review queue verdict for later scoring", uuid="u1")
+        folder = self.c.encode("~/projects/work")
+        self.h.session(folder, "resumed", record, reply("2026-09-02T00:00:00Z", "Review it again?"), record)
+        path = self.h.projects / folder / "resumed.jsonl"
+        self.assertEqual(len(self.c.harvest(m, path, "work")), 1)
+        proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = [json.loads(line) for line in self.h.read("mined.jsonl").splitlines()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len({r["id"] for r in rows}), len(rows))
+
+    def test_mine_deduplicates_ids_with_distinct_or_missing_uuids(self):
+        m = self.c.load_member(self.c.read_member(self.member))
+        for uuids in (("u1", "u2"), (None, None)):
+            with self.subTest(uuids=uuids):
+                records = [said("2026-09-01T00:00:00Z", "keep every review queue verdict for later scoring",
+                                **({"uuid": uuid} if uuid else {})) for uuid in uuids]
+                folder = self.c.encode("~/projects/work")
+                self.h.session(folder, "resumed", *records)
+                path = self.h.projects / folder / "resumed.jsonl"
+                self.assertEqual(len(self.c.harvest(m, path, "work")), 2)
+                proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                rows = [json.loads(line) for line in self.h.read("mined.jsonl").splitlines()]
+                self.assertEqual(len({r["id"] for r in rows}), len(rows))
+                self.assertEqual(len(rows), 1)
+                self.assertIn(", 1 duplicate records", proc.stdout)
+
+    def test_mine_prefers_record_cwd_folder_for_duplicate_ids(self):
+        for cwd, expected in (("~/projects/b--claude-worktrees-x", "b"),
+                              ("~/projects/B--claude-worktrees-X", "b"),
+                              ("~/projects/b", "a"), (None, "a"), ("~/projects/a", "a")):
+            with self.subTest(cwd=cwd):
+                record = said("2026-09-01T00:00:00Z", "keep every review queue verdict for later scoring")
+                record.pop("cwd")
+                if cwd is not None:
+                    record["cwd"] = str(TEST_HOME / cwd[2:])
+                for folder in ("~/projects/a", "~/projects/b--claude-worktrees-x"):
+                    self.h.session(self.c.encode(folder), "resumed", record)
+                proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                rows = [json.loads(line) for line in self.h.read("mined.jsonl").splitlines()]
+                self.assertEqual(len({r["id"] for r in rows}), len(rows))
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["project"], expected)
+                self.assertEqual(set(rows[0]), {"id", "kind", "timestamp", "project", "text", "context", "compartment", "split"})
+                self.assertIn(", 1 duplicate records", proc.stdout)
 
     def test_fenced_scans_and_hub_sessions(self):
         if os.geteuid() == 0:
@@ -1021,7 +1095,7 @@ class Compartments(unittest.TestCase):
         m = self.c.load_member(self.c.read_member(self.member))
         record = {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "input": {"~/.hub/projects/client-stack/x.md": "nothing"}}]}}
-        self.assertEqual(self.c.hub_compartment(m.compartments, "work", [record]), "work")
+        self.assertEqual(self.c.hub_compartment(m.compartments, ENCODED_HOME + "--hub", "work", [record]), "work")
 
     def save_config(self):
         self.h.write("compartments.json", self.config)
@@ -1090,7 +1164,7 @@ class Compartments(unittest.TestCase):
                     text = 'cd "' + hub.upper().replace("$HOME", "$HOME") + "/CLIENT-STACK" + suffix
                     record = {"type": "assistant", "message": {"content": [
                         {"type": "tool_use", "input": {"command": text}}]}}
-                    self.assertEqual(self.c.hub_compartment(self.config, "work", [record]), "client")
+                    self.assertEqual(self.c.hub_compartment(self.config, ENCODED_HOME + "--hub", "work", [record]), "client")
 
     def test_hub_unicode_prefix_and_route_casefold(self):
         self.config["hub"]["paths"] = ["~/Café/hub"]
@@ -1098,7 +1172,7 @@ class Compartments(unittest.TestCase):
         self.config["hub"]["routes"]["Straße"] = "client"
         record = {"type": "assistant", "message": {"content": [
             {"type": "tool_use", "input": {"command": "ls ~/Cafe\u0301/HUB/STRASSE && x"}}]}}
-        self.assertEqual(self.c.hub_compartment(self.config, "work", [record]), "client")
+        self.assertEqual(self.c.hub_compartment(self.config, self.c.encode("~/Café"), "work", [record]), "client")
 
     def test_hub_routing_megabyte_strings_are_linear(self):
         mention = "~/.hub/projects/client-stack/queue.md "
@@ -1112,7 +1186,7 @@ class Compartments(unittest.TestCase):
                 with self.subTest(expected=expected):
                     signal.setitimer(signal.ITIMER_REAL, 2)
                     start = time.perf_counter()
-                    actual = self.c.hub_compartment(self.config, "work", [self.write_tool(value)])
+                    actual = self.c.hub_compartment(self.config, ENCODED_HOME + "--hub", "work", [self.write_tool(value)])
                     elapsed = time.perf_counter() - start
                     signal.setitimer(signal.ITIMER_REAL, 0)
                     self.assertEqual(actual, expected)
@@ -1482,7 +1556,7 @@ class Compartments(unittest.TestCase):
         try:
             signal.setitimer(signal.ITIMER_REAL, 4)
             start = time.perf_counter()
-            actual = self.c.hub_compartment(m.compartments, "work", [self.write_tool(value)])
+            actual = self.c.hub_compartment(m.compartments, ENCODED_HOME + "--hub", "work", [self.write_tool(value)])
             elapsed = time.perf_counter() - start
             self.assertEqual(actual, "work")
             self.assertLess(elapsed, 4)

@@ -725,17 +725,26 @@ def read_session(path):
 
 
 def harvest(m, path, project, records=None):
-    harvested, context = [], ""
+    return [record for record, _ in _harvest(m, path, project, records)]
+
+
+def _harvest(m, path, project, records=None):
+    seen, context = set(), ""
     for r in read_session(path) if records is None else records:
         if r.get("type") == "assistant":
             context = assistant_text(r).strip() or context
         if r.get("type") != "user" or not r.get("timestamp"):
             continue
-        harvested += questions_in(m, r, path.stem, project)
+        if r.get("uuid") is not None and r["uuid"] in seen:
+            continue
+        harvested = questions_in(m, r, path.stem, project)
         text = typed_text(m, r)
         if text is not None:
             harvested.append(message_record(path.stem, r["timestamp"], project, text, context))
-    return harvested
+        if harvested and r.get("uuid") is not None:
+            seen.add(r["uuid"])
+        for record in harvested:
+            yield record, r.get("cwd")
 
 
 def message_record(session, when, project, text, context):
@@ -831,12 +840,13 @@ def transcript_compartment(m, folder):
     return name
 
 
-def hub_compartment(c, compartment, records):
+def hub_compartment(c, folder_name, compartment, records):
     hub = c.get("hub")
     if not hub:
         return compartment
-    owners = {path_compartment(c, Path(path).expanduser().parent, os.getcwd()) for path in hub["paths"]}
-    if compartment not in owners:
+    name = fold(re.sub(r"--claude-worktrees-.*", "", folder_name, flags=re.I))
+    parents = [fold(encode(Path(path).expanduser().parent)) for path in hub["paths"]]
+    if not any(name == parent or name.startswith(parent + "-") for parent in parents):
         return compartment
     home = str(Path.home())
     forms = {}
@@ -930,7 +940,7 @@ def queue_compartment(m, queues, path):
 
 def cmd_mine(m, args):
     root = transcript_root(m, args.projects)
-    kept, excluded, dropped, fenced = [], 0, Counter(), 0
+    kept, excluded, dropped, fenced, duplicates = {}, 0, Counter(), 0, 0
     for folder in sorted(root.iterdir()):
         compartment = transcript_compartment(m, folder)
         if compartment == "fenced":
@@ -946,16 +956,21 @@ def cmd_mine(m, args):
             if m.compartments is not None and path_compartment(m.compartments, path, os.getcwd()) == "fenced":
                 continue
             records = read_session(path)
-            session_compartment = hub_compartment(m.compartments, compartment, records) if m.compartments is not None else None
-            for h in harvest(m, path, project, records):
+            session_compartment = hub_compartment(m.compartments, folder.name, compartment, records) if m.compartments is not None else None
+            for h, cwd in _harvest(m, path, project, records):
                 if m.compartments is not None:
                     h["compartment"] = session_compartment
                 reason = privacy(m, h)
                 if reason:
                     dropped[reason] += 1
                 else:
-                    kept.append(h)
-    kept.sort(key=lambda r: (r["timestamp"], r["id"]))
+                    matches = isinstance(cwd, str) and bool(cwd) and fold(encode(cwd)) == fold(folder.name)
+                    if h["id"] in kept:
+                        duplicates += 1
+                        if not matches or kept[h["id"]][1]:
+                            continue
+                    kept[h["id"]] = (h, matches)
+    kept = sorted((record for record, _ in kept.values()), key=lambda r: (r["timestamp"], r["id"]))
     cutoff = mark_split(kept, args.holdout, args.cutoff)
     write_jsonl(args.out, kept)
     questions = [r for r in kept if r["kind"] == "question"]
@@ -964,7 +979,8 @@ def cmd_mine(m, args):
     print(f"mined {len(questions)} questions ({held} held out) and {len(kept) - len(questions)} messages, "
           f"{span}; held out from {cutoff or 'nothing'}")
     print(f"dropped {excluded} excluded folders, {dropped['personal']} personal records, "
-          f"{dropped['secret']} secret records" + (f", {fenced} fenced folders" if m.compartments is not None else ""))
+          f"{dropped['secret']} secret records" + (f", {fenced} fenced folders" if m.compartments is not None else "") +
+          (f", {duplicates} duplicate records" if duplicates else ""))
     return 0
 
 
