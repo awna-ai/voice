@@ -39,8 +39,10 @@ What already exists (don't rebuild it):
 3. **One pending send.** Before sending, copy it to `<state>/pending-send.jsonl` (0600, replacing any older pending
    copy); remove that file only after Radio answers the send with its size. A failed send keeps it, so a later run
    (PB8.9g's helper) knows a send is owed.
-4. **The file's name** is `history-<unix seconds>-<16 lowercase hex from getrandom or the existing random source in
-   the crate>.jsonl` (Radio's name rule: `A-Z a-z 0-9 . _ -`, at most 128 bytes, no leading dot).
+4. **The file's name** is `history-<unix nanoseconds>-<this process's id>.jsonl`, both in decimal (unique, not
+   secret: no random source needed; Radio's name rule is `A-Z a-z 0-9 . _ -`, at most 128 bytes, no leading dot).
+   The build computer takes only names matching `^history-[0-9]{1,20}-[0-9]{1,10}\.jsonl$`. Radio's refusal `a file
+   with that name is already there` maps to `BUSY_BUILDER`.
 5. **The peer** is the delivery's authenticated `key` (hex), never its name: the build computer's file is
    `decisions-from-<first 16 hex of key>.jsonl`. A computer's display name for status is the delivery's `computer`
    field, shown only through `{{ }}`-safe text later; store it as given, but never use it in a path.
@@ -140,7 +142,7 @@ never-shrink merge, the symlink refusal, the size cap, the filters re-run, the p
 - No real person's name, handle or text; invented records only.
 - Never log, print or show a record, a delivered file's contents, a raw path inside `deliveries/`, or a key beyond
   what decision 5 puts in a file name.
-- No new dependency unless the crate has no random source at all (then say so and stop).
+- No new dependency.
 - Never write outside the assistant's state folder; never follow a link in `deliveries/`.
 
 ## Gate
