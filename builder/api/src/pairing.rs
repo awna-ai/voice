@@ -35,6 +35,13 @@ pub fn link_address(home: &Path) -> Result<dto::LinkAddress> {
         .map(addresses)
         .map_err(radio_error)
 }
+fn started_address(home: &Path, radio: &Radio) -> Result<dto::LinkAddress> {
+    ready(home, radio)?;
+    radio
+        .link_address_list()
+        .map(addresses)
+        .map_err(radio_error)
+}
 pub fn set_link_address(home: &Path, address: &str) -> Result<dto::LinkAddress> {
     set_address_in(home, &Radio::for_home(home), address)
 }
@@ -274,7 +281,8 @@ fn named(mut address: dto::LinkAddress) -> dto::LinkAddress {
 }
 
 pub fn radio_link_address() -> Result<dto::LinkAddress> {
-    link_address(&crate::assistants::home(text::NO_HOME)?).map(named)
+    let home = crate::assistants::home(text::NO_HOME)?;
+    started_address(&home, &Radio::for_home(&home)).map(named)
 }
 pub fn radio_set_link_address(r: dto::RadioAddressRequest) -> Result<dto::LinkAddress> {
     set_link_address(&crate::assistants::home(text::NO_HOME)?, &r.address).map(named)

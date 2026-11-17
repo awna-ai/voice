@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useBackend } from '../backend'
 import { failureMessage } from '../failure'
-import { recoverySentence } from '../radio-words'
+import { recoveryPath, recoverySentence } from '../radio-words'
 import type { Assistant } from '../types/generated/Assistant'
 import type { Invite } from '../types/generated/Invite'
 import type { Joined } from '../types/generated/Joined'
@@ -13,7 +13,7 @@ const props = defineProps<{ assistant: Assistant }>()
 const backend = useBackend()
 const options = ref<SaveOptions>()
 const loading = ref(true)
-const action = ref<'' | 'address' | 'saveAddress' | 'invite' | 'join'>('')
+const action = ref<'' | 'address' | 'saveAddress' | 'invite' | 'join' | 'copy'>('')
 const busy = computed(() => loading.value || !!action.value)
 const error = ref('')
 const copied = ref(false)
@@ -24,6 +24,7 @@ const computerName = ref('')
 const nameTyped = ref(false)
 const code = ref('')
 const invitation = ref<Invite>()
+const recoveryFile = ref<string | null>(null)
 const joined = ref<Joined>()
 const builder = computed(() => options.value?.memberComputer === null)
 const hasAddress = computed(() => !!address.value?.addresses.length)
@@ -74,6 +75,8 @@ async function saveAddress() {
   clearMessages()
   try {
     keepAddress(await backend.radioSetLinkAddress({ address: addressField.value.trim() }))
+    invitation.value = undefined
+    copied.value = false
   } catch (failure) {
     error.value = failureMessage(failure, "Voice couldn't save that address. Try again.")
   } finally { action.value = '' }
@@ -84,19 +87,23 @@ async function makeCode() {
   clearMessages()
   try {
     invitation.value = await backend.radioInvite({ slug: props.assistant.slug })
+    if (invitation.value.recoveryFile !== null) recoveryFile.value = invitation.value.recoveryFile
   } catch (failure) {
     error.value = failureMessage(failure, "Voice couldn't make a join code. Try again.")
+    const path = recoveryPath(error.value)
+    if (path !== null) recoveryFile.value = path
   } finally { action.value = '' }
 }
 async function copy() {
   if (busy.value || !invitation.value) return
+  action.value = 'copy'
   clearMessages()
   try {
     await navigator.clipboard.writeText(invitation.value.code)
     copied.value = true
   } catch {
     error.value = "Voice couldn't copy the code. Select it and copy it yourself."
-  }
+  } finally { action.value = '' }
 }
 async function join() {
   if (busy.value || !hasAddress.value || !computerName.value.trim() || !code.value.trim() || builder.value) return
@@ -121,8 +128,8 @@ async function join() {
         <button type="button" class="btn btn-primary" :disabled="busy" @click="load">Try again</button>
       </template>
       <template v-else>
-        <p v-if="builder">Link another computer to this one, so {{ assistant.name }} can learn from what you do there too. Both computers need to be on your VPN, and the other one needs {{ assistant.name }} first: there, choose Make a new assistant, then Open one you saved on GitHub.</p>
-        <p v-else>Link this computer to the one that builds {{ assistant.name }}, so {{ assistant.name }} can learn from what you do here too. Both computers need to be on your VPN.</p>
+        <p v-if="builder">Link another computer to this one. For now this only links them: {{ assistant.name }} doesn't learn from the other computer yet. Both computers need to be on your VPN, and the other one needs {{ assistant.name }} first: there, choose Make a new assistant, then Open one you saved on GitHub.</p>
+        <p v-else>Link this computer to the one that builds {{ assistant.name }}. For now this only links them: {{ assistant.name }} doesn't learn from this computer yet. Both computers need to be on your VPN.</p>
         <div v-if="error" class="alert alert-warning" role="alert">{{ error }}</div>
         <button v-if="!address" type="button" class="btn btn-outline-primary" :disabled="busy" @click="readAddress">{{ action === 'address' ? 'Checking…' : builder ? 'Add another computer' : 'Link this computer' }}</button>
         <template v-else>
@@ -138,16 +145,16 @@ async function join() {
             <button type="button" class="btn btn-primary" :disabled="busy || !addressField.trim()" @click="saveAddress">{{ action === 'saveAddress' ? 'Saving…' : 'Save address' }}</button>
           </div>
           <template v-if="builder">
-            <div class="btn-list">
-              <button v-if="hasAddress" type="button" class="btn btn-primary" :disabled="busy" @click="makeCode">{{ action === 'invite' ? 'Making it…' : invitation ? 'Make a new code' : 'Make a join code' }}</button>
+            <div v-if="hasAddress" class="btn-list">
+              <button type="button" class="btn btn-primary" :disabled="busy" @click="makeCode">{{ action === 'invite' ? 'Making it…' : invitation ? 'Make a new code' : 'Make a join code' }}</button>
             </div>
             <template v-if="invitation">
-              <label class="form-label" for="join-code-shown">Join code</label>
-              <code id="join-code-shown" class="d-block user-select-all text-break">{{ invitation.code }}</code>
+              <div id="join-code-label" class="form-label">Join code</div>
+              <code id="join-code-shown" aria-labelledby="join-code-label" class="d-block user-select-all text-break">{{ invitation.code }}</code>
               <button type="button" class="btn btn-outline-secondary" :disabled="busy" @click="copy">{{ copied ? 'Copied' : 'Copy' }}</button>
+              <span v-if="copied" class="visually-hidden" role="status">Copied the join code.</span>
               <p>{{ expiry }}</p>
-              <p>On the other computer, open {{ assistant.name }}'s Save step, paste this code under Your other computers, and choose Join.</p>
-              <div v-if="invitation.recoveryFile !== null" class="alert alert-warning" role="alert">{{ recoverySentence(invitation.recoveryFile) }}</div>
+              <p>On the other computer, open {{ assistant.name }}'s Save step, choose Link this computer under Your other computers, paste this code, and choose Join.</p>
             </template>
           </template>
           <template v-else-if="!joined">
@@ -165,6 +172,7 @@ async function join() {
           </template>
           <div v-else class="alert alert-success" role="status">This computer joined as {{ joined.computerName }}.</div>
         </template>
+        <div v-if="recoveryFile !== null" class="alert alert-warning" role="alert">{{ recoverySentence(recoveryFile) }}</div>
       </template>
     </div>
   </section>

@@ -558,3 +558,20 @@ fn invalid_address_and_name_need_no_running_radio() {
     }
     assert_eq!(listing(&home.0), before);
 }
+
+#[test]
+fn started_address_checks_hello_before_listing() {
+    let home = Scratch::new();
+    let fake = FakeRadio::answering(&[link_hello(), addresses()]);
+    let answer = started_address(&home.0, &fake.radio()).unwrap();
+    assert_eq!(answer.port, 7341);
+    assert_eq!(answer.addresses, vec!["10.0.0.5"]);
+    assert_eq!(answer.computer_name, None);
+    assert_eq!(
+        fake.requests(),
+        vec![
+            json!({"op":"hello","v":1}),
+            json!({"op":"link_address_list","v":1}),
+        ]
+    );
+}
