@@ -2,6 +2,46 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VO16.6b1: Voice pins Radio v0.3.0, and the threat model says what that Radio runs (2026-11-17, lane: V1)
+
+- **Status:** built, verified, landing from `lane-v1/VO16.6b1` (pushed): `b53220d` brief, `f88439a` the pin,
+  `fbe87a5` fix-up 1 brief, `d551036` fix-up 1, `c3773d5` fix-up 2 brief, `d79bfa1` fix-up 2, this record.
+- **Why:** VO16.6b (Voice's panels become Radio deliberations) was split at pickup. The pin to Radio v0.3.0, the
+  release that carries deliberations, needs no decision and every later step needs it; the panel half (VO16.6b2)
+  waits on V-Q27 (whether panels need Radio running, and three gaps between Voice's panel runner and Radio's four
+  deliberation ops).
+- **What:** `radio-client` and both `radio-panels` lines move to `tag = "v0.3.0"`; `Cargo.lock` moves only those
+  two packages, both to `09f499a`. `builder/install/radio-release.txt` ships v0.3.0 with the release's two SHA-256s.
+  `radio-panels` is byte-identical between the tags; `radio-client` adds the deliberation types and protocol minor
+  11, so `hello` now refuses a daemon below 1.11 (Voice installs its bundled copy, newer wins, on every start).
+  `TOO_OLD` says the daemon is older than this Voice and points at `voice radio install`. The missing-op test drops a
+  link op by name: `OPS` now ends with `deliberation_result`, so dropping the last op tested nothing.
+- **Fix-up 1 (from the security review and the Verifier):** Radio v0.3.0 is the first release whose daemon runs an
+  app's recorded handler: its `message` op hands up to 8 KiB from an accepted fleet computer to
+  `[voice, "message"]` on stdin. Voice has no `message` command, so `voice` exits 2 with nothing printed or written;
+  a new CLI test pins that, and `.ai/SECURITY.md`'s three Radio rows now say what runs, the new floor and the pin.
+  The slice that first gives `voice` a `message` command owes its input contract. The first brief had kept
+  `SECURITY.md` out of scope; that was the reviewer's mistake.
+- **Independent check of the release (SECURITY.md's pin rule):** rebuilt v0.3.0 from its tag in a throwaway clone
+  with Radio's own `scripts/release.sh` (`git clone ~/projects/radio <tmp>`, then `bash scripts/release.sh v0.3.0` there, no `--publish`; it built at `09f499a`), then extracted only `<name>/radio` from each tarball, the release's (`gh release download v0.3.0`) and the rebuild's, and compared them with `shasum -a 256` and `cmp`: both `radio` binaries are byte-identical to the release's
+  (arm64 `e2730f5a6c423e92326bdb26b01dcd3f1aa93bcb176482e44c1a06d813a17921`, x86_64 `22dfcdf741fc6ff6f7293ca9ad5c801c7f287008e35ee531d492bffb384e1c9b`); the tarballs differ only in packing. `fetch-radio.sh` at the new
+  pin fetched and checked both tarballs; the universal binary carries `0.3.0`, signed ad hoc as `ai.awna.radio`, no
+  quarantine flag.
+- **Who built it:** Codex, from the brief and fix-up 1; V1 re-ran the socket tests her sandbox refuses, and renamed
+  the new test (its first name claimed it saw stdin unread, which it can't observe).
+- **Verified:** red first (the new minor-10 case passed `hello` against the v0.2.0 pin; fix-up 1's test failed with a
+  temporary `message` command). Green: `cargo test -p voice-api` 241 and every voice-panel-runner suite,
+  `-p voice-cli --test radio` 4, `-p voice-api radio::` 27 after fix-up 2, fmt, clippy. Mutations killed: the floor at 8, the floor off by one, the minor check
+  removed, a link op skipped.
+- **Security review (sub-agent, Opus):** MEDIUM, the stale threat model for the handler run (fixed in fix-up 1);
+  LOW, no independent check of the tarballs (done, above); LOW, row 59's tag (fixed).
+- **Verifier (Fable, first pass, at `f88439a`):** PASS WITH FIXES: the same `SECURITY.md` must-fixes and the
+  `TOO_OLD` should-fix, all taken in fix-up 1. **Repeat (Opus, at `d551036`):** PASS WITH FIXES: the must-fixes closed (she ran `voice message` under `env -i` from `/` with a scratch HOME: exit 2, nothing on stdout, HOME empty; two mutations of her own, a printing and a writing `message` command, both killed; the release-side binary hashes matched). Must-fix: this record, which row 57 points to. Should-fixes, both taken in fix-up 2 (about 20 lines in files she saw): a major-2 `hello` now gets `OTHER_MAJOR`, not `TOO_OLD` (red first: the new test failed against fix-up 1's code), and the CLI test asserts exit 2.
+- **Dependency intake:** an upgrade of two pinned git dependencies from our own org's public MIT repo, pinned by
+  commit in the lock, no new transitive package, no build script or proc-macro or `unsafe` added (security review).
+- **Not verified:** Radio's install upgrading a live 0.2.0 daemon to 0.3.0 on a real Mac (contract read, not run);
+  `build-mac-app.sh` end to end (the full gate runs its test).
+
 ## VF22: the universal Mac build works on a case-insensitive disk (2026-11-16, lane: V1)
 
 - **Why:** PB8.9c1's delta Verifier (should-fix 1): `scripts/build-mac-app.sh --universal` wrote the joined `voice`
