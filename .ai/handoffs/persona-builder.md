@@ -19,8 +19,24 @@ One record per slice, newest first. Paraphrase only; no real person.
   architecture fails the build's own check; dropping Radio's licence fails the test. shellcheck clean.
   Security review (sub-agent): PASS, two INFOs; the second taken (the build in the test sees only the stand-ins
   and system tools). Verifier: not required by the card.
-- **Not verified:** a run on a case-sensitive disk; a real cargo and Tauri universal build. Not landed yet: the
-  full `ci-local.sh` didn't fit the run that built it.
+- **Gate fix-up (V1, 2026-11-17, Codex):** PE2.4v rewrote `scripts/ci-local.sh` before this landed, so the rebase
+  dropped the two old lines. The build test is now in `shell_suites` and the shellcheck line, and the touched tier
+  picks it for every file it copies in (`builder/install/*`, `scripts/fetch-radio.sh`, `scripts/build-mac-app.sh`,
+  the test itself); the self-test expects each. The drift guard's shell read finder stops only at a quote or `$`,
+  so `How to install.txt` is read whole (every other test yields the same reads, checked old against new), and the
+  build test names its scratch copy `work`, since the guard reads `$here` and `$repo` as the real repository. A
+  first Codex pass sniffed test text instead and lost `ci_local_test`'s read of `scripts/ci-local.sh`; replaced
+  (fix-up 2). Mutations, all killed: `builder/install/*` or `scripts/build-mac-app.sh` not picking the build test,
+  the finder stopping at spaces. `bash tests/ci_local_test.sh`, the build test and shellcheck pass.
+- **Fix-up 3:** the scratch repository's `git init` and commit ignore a contributor's global hooks, signing and
+  template (`-c` guards, as `ci_local_test.sh` does): under such a config the old test exits 1, the new passes.
+- **Security review of the fix-up (sub-agent):** no HIGH or MEDIUM. LOW: an unclosed quote in a test's text gives
+  a junk read the guard fails on (safe); off a Mac the build test skips. **Verifier (Fable, first pass on this
+  branch, at `2cf5468`):** PASS. Should-fix taken (fix-up 3). Notes left: the skip probe uses `command -v cc` and
+  `lipo`, which exist as shims without the Command Line Tools (`xcrun -f cc` would be truer); the Radio fixtures use
+  the caller's `cc`; the test checks the script, not the real `tauri.conf.json` or Radio pin.
+- **Not verified:** a run on a case-sensitive disk; a real cargo and Tauri universal build. Lands on the full
+  `ci-local.sh` (it changes the gate, so the touched tier falls back to the full gate).
 
 ## VF25: the `voice` Voice hands to Radio is the checked one, never a link (2026-11-17, lane: V1)
 
