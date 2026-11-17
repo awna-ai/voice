@@ -565,13 +565,26 @@ fn status_with_no_computers_says_none_yet() {
 fn install_on_start_never_waits_and_runs_once() {
     let scratch = Scratch::new();
     let (radio, args) = fake_copy(&scratch, "sleep 2; exit 0");
+    // Appending, so a second run would show.
+    fs::write(
+        &radio,
+        fs::read_to_string(&radio)
+            .unwrap()
+            .replace("done > '", "done >> '"),
+    )
+    .unwrap();
     let handler = scratch.0.join("voice");
     let started = Instant::now();
     let kept = handler.clone();
-    let install =
-        in_background(move || install_within(&radio, &kept, Duration::from_secs(60)));
-    assert!(started.elapsed() < Duration::from_secs(1), "the start waited on Radio");
-    assert_eq!(install.join().unwrap().map_err(message), Ok(text::INSTALLED));
+    let install = in_background(move || install_within(&radio, &kept, Duration::from_secs(60)));
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the start waited on Radio"
+    );
+    assert_eq!(
+        install.join().unwrap().map_err(message),
+        Ok(text::INSTALLED)
+    );
     assert_eq!(
         fs::read_to_string(args).unwrap(),
         format!(
@@ -579,5 +592,35 @@ fn install_on_start_never_waits_and_runs_once() {
             env!("CARGO_PKG_VERSION"),
             handler.display()
         )
+    );
+}
+
+#[test]
+fn install_hands_radio_only_home_and_a_fixed_path() {
+    let scratch = Scratch::new();
+    let seen = scratch.0.join("env");
+    let (radio, _) = fake_copy(&scratch, &format!("/usr/bin/env > '{}'", seen.display()));
+    install_within(&radio, Path::new("/tmp/voice"), Duration::from_secs(60)).unwrap();
+    let seen = fs::read_to_string(seen).unwrap();
+    let names: Vec<&str> = seen
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, _)| name)
+        .collect();
+    assert!(
+        seen.lines()
+            .any(|line| line == "PATH=/usr/bin:/bin:/usr/sbin:/sbin"),
+        "{seen}"
+    );
+    // The shell adds its own few; nothing else of Voice's environment, a RADIO_ setting least of all.
+    for name in names {
+        assert!(
+            ["HOME", "PATH", "PWD", "OLDPWD", "SHLVL", "_"].contains(&name),
+            "{name} reached Radio"
+        );
+    }
+    assert!(
+        std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
+        "the test runs with Cargo's environment"
     );
 }

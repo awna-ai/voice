@@ -32,7 +32,7 @@ fake_app() {  # path architecture [radio's architecture]
 </dict></plist>
 PLIST
   printf 'int main(void){return 0;}\n' | cc -arch "$2" -x c - -o "$1/Contents/MacOS/voice-app"
-  # The stand-in voice records each run's arguments in $HOME/voice-ran and exits with $FAKE_VOICE_EXIT.
+  # The stand-in voice records each run's path and arguments in $HOME/voice-ran and exits with $FAKE_VOICE_EXIT.
   cc -arch "$2" -x c - -o "$1/Contents/MacOS/voice" <<'C'
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
   snprintf(path, sizeof path, "%s/voice-ran", home ? home : "/nonexistent");
   FILE *ran = fopen(path, "a");
   if (ran) {
-    for (int i = 1; i < argc; i++) fprintf(ran, "%s\n", argv[i]);
+    for (int i = 0; i < argc; i++) fprintf(ran, "%s\n", argv[i]);
     fputs("--\n", ran);
     fclose(ran);
   }
@@ -95,7 +95,8 @@ check "$scratch/out" "Voice is installed in your Applications folder: $installed
 [ -z "$(find "$home/Applications" -name '.voice-install.*' -print)" ] || fail 'staging folder remains'
 # The installed copy's own voice installs Radio, once.
 ran=$(cat "$home/voice-ran" 2>/dev/null || true)
-[ "$ran" = "$(printf 'radio\ninstall\n--')" ] || fail "Radio was not installed once through the installed voice: ${ran:-it never ran}"
+[ "$ran" = "$(printf '%s\nradio\ninstall\n--' "$installed/Contents/MacOS/voice")" ] || fail "Radio was not installed once through the installed voice: ${ran:-it never ran}"
+check "$scratch/out" 'Setting up Radio, which links your computers. This can take a minute.' 'Radio line not printed first'
 check "$scratch/out" 'the stand-in Radio is installed' "voice's Radio sentence not printed"
 echo 'mac_install_test: installs passed'
 
@@ -105,7 +106,7 @@ FAKE_VOICE_EXIT=1 run --no-open
 [ "$status" = 0 ] || { cat "$scratch/err" >&2; fail 'a failing Radio failed the install'; }
 [ -d "$installed" ] || fail 'a failing Radio left Voice uninstalled'
 ran=$(cat "$home/voice-ran" 2>/dev/null || true)
-[ "$ran" = "$(printf 'radio\ninstall\n--')" ] || fail "Radio was not tried once: ${ran:-it never ran}"
+[ "$ran" = "$(printf '%s\nradio\ninstall\n--' "$installed/Contents/MacOS/voice")" ] || fail "Radio was not tried once: ${ran:-it never ran}"
 check "$scratch/err" 'voice: the stand-in Radio failed' "voice's failure sentence not printed"
 check "$scratch/err" 'Voice is installed and works without Radio. It will try to install Radio again each time you open it.' 'works-without-Radio line missing'
 echo 'mac_install_test: a failing Radio passed'
@@ -139,6 +140,10 @@ for identity in different missing; do
   fi
   if ! grep -Fq "There's already an app called Voice in your Applications folder, and it isn't this one. Move it somewhere else, then run the installer again." "$scratch/err"; then
     echo "FAIL: $identity identifier explanation missing" >&2
+    collision_failed=true
+  fi
+  if [ -e "$home/voice-ran" ]; then
+    echo "FAIL: $identity identifier ran a voice" >&2
     collision_failed=true
   fi
   if ! diff -r "$scratch/before-$identity.app" "$installed"; then

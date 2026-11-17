@@ -91,9 +91,13 @@ pub fn install(home: &Path) -> Result<&'static str> {
 
 /// The install Voice runs once each time it starts, on a thread of its own so the window never waits
 /// on it: a Voice upgraded by drag and drop upgrades its Radio too, and a same-or-newer Radio makes it
-/// a quick check. Voice works without Radio, so the app drops the handle and its result.
+/// a quick check while Radio answers. Voice works without Radio, so the app drops the handle and its
+/// result. A development build installs nothing on start: its `voice` lives in a build folder.
 pub fn install_on_start() -> std::thread::JoinHandle<Result<&'static str>> {
     in_background(|| {
+        if cfg!(debug_assertions) {
+            return Err(Error::Invalid(text::NO_COPY.into()));
+        }
         let home = std::env::var_os("HOME")
             .filter(|home| !home.is_empty())
             .map(PathBuf::from)
@@ -125,6 +129,10 @@ fn install_within(radio: &Path, handler: &Path, wait: Duration) -> Result<&'stat
             "--handler",
         ])
         .arg(handler)
+        // Radio reads its home and a launchctl override from its environment: hand it only the home.
+        .env_clear()
+        .envs(std::env::var_os("HOME").map(|home| ("HOME", home)))
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
