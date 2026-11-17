@@ -2,6 +2,42 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## PB8.9d1: add another computer, the engine, the CLI and the app commands (2026-11-17, lane: V1)
+
+- **Status:** built and verified on `lane-v1/PB8.9d1`: `3d75d4c` brief, `d6ba93a` the change, `9e0b2bd` fix-up 1
+  brief, `1a4e850` fix-up 1, `a0698d0` fix-up 2 (with its brief), `099a446` fix-up 3 (with its brief), this record.
+- **Why split:** PB8.9d (plan step 2.2) was split at pickup, as PB8.9b was: the engine, CLI and app commands here;
+  the screens in PB8.9d2, on top of the five app commands. PB8.9e waits on both.
+- **What it does:** `voice radio address [<ip>]` shows or sets this computer's VPN address (Radio's link address;
+  setting replaces the one of the same family, and an address Radio would refuse is refused before anything is
+  removed). On the computer that builds an assistant, `voice radio invite <slug>` starts Radio if it isn't running,
+  needs an address, registers Voice, sets `~/.claude/state/<slug>/deliveries/` as Voice's delivery folder (Radio
+  makes it, 0700; one assistant per computer), makes the fleet `voice` once (saying where Radio put the recovery
+  key, even when the code then fails), and prints a one-time join code. On a member computer, `voice radio join
+  <slug> --name <name>` reads the code from standard input (echo off at a terminal), checks its shape, joins, and
+  puts the computer's name in Voice's section of Radio's signed record; none of Voice's own files are written
+  before Radio accepts the code, and each of Radio's join refusals has a plain sentence. `voice radio name` names
+  it again. App commands `radio_link_address`, `radio_set_link_address`, `radio_invite`, `radio_join`, `radio_name`.
+- **Decisions made at pickup** (in the brief and `.ai/DECISIONS.md`): the computer's name travels in Voice's Radio
+  section (`resign`), since Radio's own name is the host name and has no rename op; the fleet's name is `voice`; a
+  second assistant can't take deliveries on the same computer (Radio keeps one folder per app); the person types
+  the VPN address (no detection).
+- **Who built it:** Codex, from the brief and three fix-up briefs. Its sandbox can't open sockets or reach the
+  network, so every check below was run here.
+- **Reviews:** Claude's review → fix-up 1 (Radio started before setting an address; refuse what Radio refuses before
+  removing the old address; the missing-home sentence). Security review (Opus): PASS WITH FIXES, three lows → fix-up
+  2 (the threat model's join claim and every join-code copy that isn't zeroed; the name sentence matches its check).
+  Verifier (Fable): PASS WITH FIXES, one must-fix (a refusal after `fleet_init` lost the recovery key's path for
+  good) and three should-fixes → fix-up 3. Repeat Verifier (Opus) on `099a446`: see the next bullet.
+- **Verified:** red first; `cargo test -p voice-api --lib -- pairing radio` 52 passed and `-p voice-cli --test
+  radio` 8 on `099a446`; the whole `voice-api` and `voice-cli` suites passed on `a0698d0`; workspace clippy
+  `-D warnings` and fmt clean; UI vitest 663 passed and `vue-tsc` clean (vitest caught the example name `Office
+  Mac`: Voice's words fit any computer). Seven mutations, all killed: the member-role check, the code-shape check,
+  naming before the join, starting Radio before setting an address, the link-local refusal, the recovery notice
+  after a failure, the not-linked sentence.
+- **Not verified:** a real Radio pairing two computers (the tests use a fake Radio on a scratch socket); that is
+  PB8.9d2's walk and plan Phase 2's own check. No screen uses any of this yet.
+
 ## VO16.6b1: Voice pins Radio v0.3.0, and the threat model says what that Radio runs (2026-11-17, lane: V1)
 
 - **Status:** built, verified, landing from `lane-v1/VO16.6b1` (pushed): `b53220d` brief, `f88439a` the pin,
