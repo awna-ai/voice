@@ -64,8 +64,8 @@ fn invite_orders_requests_and_answers_fields() {
         link_hello(),
         addresses(),
         json!({"ok":true}),
-        fleet_answer(),
         json!({"ok":true}),
+        fleet_answer(),
         code_answer(),
     ]);
     let answer = invite_with(&h.0, "wren", &fake.radio()).unwrap();
@@ -80,8 +80,8 @@ fn invite_orders_requests_and_answers_fields() {
             json!({"op":"hello","v":1}),
             json!({"op":"link_address_list","v":1}),
             json!({"op":"register","v":1,"app":"voice","app_version":env!("CARGO_PKG_VERSION"),"members":[]}),
-            json!({"op":"fleet_init","v":1,"name":"voice"}),
             json!({"op":"delivery_folder_set","v":1,"app":"voice","folder":state.join("deliveries")}),
+            json!({"op":"fleet_init","v":1,"name":"voice"}),
             json!({"op":"code_create","v":1})
         ]
     );
@@ -94,8 +94,8 @@ fn already_in_a_fleet_invites_without_recovery() {
         link_hello(),
         addresses(),
         json!({"ok":true}),
-        json!({"ok":false,"error":"already in a fleet"}),
         json!({"ok":true}),
+        json!({"ok":false,"error":"already in a fleet"}),
         code_answer(),
     ]);
     assert_eq!(
@@ -103,6 +103,26 @@ fn already_in_a_fleet_invites_without_recovery() {
             .unwrap()
             .recovery_file,
         None
+    );
+    assert_eq!(fake.requests().len(), 6);
+}
+#[test]
+fn failed_code_creation_keeps_the_recovery_notice() {
+    let h = Scratch::new();
+    assistant(&h.0, "wren", "Wren", false);
+    let fake = FakeRadio::answering(&[
+        link_hello(),
+        addresses(),
+        json!({"ok":true}),
+        json!({"ok":true}),
+        fleet_answer(),
+        json!({"ok":false,"error":"code refused"}),
+    ]);
+    assert_eq!(
+        invite_with(&h.0, "wren", &fake.radio())
+            .unwrap_err()
+            .message,
+        "Radio said: code refused. Radio saved a recovery key for your computers in /tmp/recovery. Move it into your password manager, then delete that file."
     );
     assert_eq!(fake.requests().len(), 6);
 }
@@ -155,7 +175,6 @@ fn folder_not_made_by_radio_is_explained() {
         link_hello(),
         addresses(),
         json!({"ok":true}),
-        fleet_answer(),
         json!({"ok":false,"error":"the folder already exists; name a new one"}),
     ]);
     assert_eq!(
@@ -164,7 +183,37 @@ fn folder_not_made_by_radio_is_explained() {
             .message,
         "~/.claude/state/wren/deliveries is already there, and Radio didn't make it. Move it somewhere else, then try again."
     );
-    assert_eq!(fake.requests().len(), 5);
+    assert_eq!(fake.requests().len(), 4);
+}
+#[test]
+fn naming_registers_before_resigning_only_the_name() {
+    let home = Scratch::new();
+    let fake = FakeRadio::answering(&[link_hello(), json!({"ok":true}), json!({"ok":true})]);
+    name_in(&home.0, &fake.radio(), "Work laptop").unwrap();
+    assert_eq!(
+        fake.requests(),
+        vec![
+            json!({"op":"hello","v":1}),
+            json!({"op":"register","v":1,"app":"voice","app_version":env!("CARGO_PKG_VERSION"),"members":[]}),
+            json!({"op":"resign","v":1,"app":"voice","section":"{\"computer_name\":\"Work laptop\"}"}),
+        ]
+    );
+}
+#[test]
+fn naming_without_a_fleet_explains_how_to_link() {
+    let home = Scratch::new();
+    let fake = FakeRadio::answering(&[
+        link_hello(),
+        json!({"ok":true}),
+        json!({"ok":false,"error":"not in a fleet"}),
+    ]);
+    assert_eq!(
+        name_in(&home.0, &fake.radio(), "Work laptop")
+            .unwrap_err()
+            .message,
+        "This computer isn't linked to your other computers yet. Join them first, or make a join code here."
+    );
+    assert_eq!(fake.requests().len(), 3);
 }
 #[test]
 fn debug_hides_join_codes() {
@@ -179,7 +228,7 @@ fn debug_hides_join_codes() {
     let request = dto::RadioJoinRequest {
         slug: "wren".into(),
         code: "rj1.fixture".into(),
-        name: "Office Mac".into(),
+        name: "Work laptop".into(),
     };
     assert!(!format!("{request:?}").contains("rj1.fixture"));
 }
@@ -189,19 +238,19 @@ fn join_local_refusals_send_nothing_and_write_nothing() {
         (
             false,
             "rj1.fixture",
-            "Office Mac",
+            "Work laptop",
             "This computer builds Wren. Make a join code here, then paste it on the other computer.",
         ),
         (
             true,
             "rj1.fixture",
             "bad\nname",
-            "Give this computer a name of 1 to 64 characters, such as Office Mac, without symbols like @, #, $ or brackets.",
+            "Give this computer a name of 1 to 64 characters, such as Work laptop, without symbols like @, #, $ or brackets.",
         ),
         (
             true,
             "not a code",
-            "Office Mac",
+            "Work laptop",
             "That isn't a join code. Copy the whole code from the computer that builds your assistant, then try again.",
         ),
     ] {
@@ -258,7 +307,7 @@ fn join_maps_each_phrase_without_resigning_or_writing() {
             json!({"ok":false,"error":phrase}),
         ]);
         assert_eq!(
-            join_with(&h.0, "wren", "rj1.fixture", "Office Mac", &fake.radio())
+            join_with(&h.0, "wren", "rj1.fixture", "Work laptop", &fake.radio())
                 .unwrap_err()
                 .message,
             expected
@@ -281,26 +330,26 @@ fn join_resigns_only_the_name_and_reports_naming_failure() {
             json!({"ok":true,"fleet":fleet()}),
             json!({"ok":naming_ok,"error":"name refused"}),
         ]);
-        let answer = join_with(&h.0, "wren", " rj1.fixture ", "Office Mac", &fake.radio());
+        let answer = join_with(&h.0, "wren", " rj1.fixture ", "Work laptop", &fake.radio());
         if naming_ok {
             assert_eq!(
                 answer.unwrap(),
                 dto::Joined {
                     fleet: "voice".into(),
-                    computer_name: "Office Mac".into()
+                    computer_name: "Work laptop".into()
                 }
             );
         } else {
             assert_eq!(
                 answer.unwrap_err().message,
-                "This computer joined, but Voice couldn't save its name: Radio said: name refused. Try again with: voice radio name \"Office Mac\""
+                "This computer joined, but Voice couldn't save its name: Radio said: name refused. Try again with: voice radio name \"Work laptop\""
             );
         }
         let requests = fake.requests();
         assert_eq!(requests[3], json!({"op":"join","v":1,"code":"rj1.fixture"}));
         assert_eq!(
             requests[4],
-            json!({"op":"resign","v":1,"app":"voice","section":"{\"computer_name\":\"Office Mac\"}"})
+            json!({"op":"resign","v":1,"app":"voice","section":"{\"computer_name\":\"Work laptop\"}"})
         );
     }
 }
@@ -378,11 +427,11 @@ fn radio_entry_points_explain_missing_home() {
         radio_join(dto::RadioJoinRequest {
             slug: "wren".into(),
             code: "rj1.fixture".into(),
-            name: "Office Mac".into(),
+            name: "Work laptop".into(),
         })
         .unwrap_err(),
         radio_name(dto::RadioNameRequest {
-            name: "Office Mac".into(),
+            name: "Work laptop".into(),
         })
         .unwrap_err(),
     ];
@@ -442,19 +491,19 @@ fn local_join_guards_work_without_a_running_radio() {
         (
             false,
             "rj1.fixture",
-            "Office Mac",
+            "Work laptop",
             "This computer builds Wren. Make a join code here, then paste it on the other computer.",
         ),
         (
             true,
             "rj1.fixture",
             "bad\nname",
-            "Give this computer a name of 1 to 64 characters, such as Office Mac, without symbols like @, #, $ or brackets.",
+            "Give this computer a name of 1 to 64 characters, such as Work laptop, without symbols like @, #, $ or brackets.",
         ),
         (
             true,
             "wrong",
-            "Office Mac",
+            "Work laptop",
             "That isn't a join code. Copy the whole code from the computer that builds your assistant, then try again.",
         ),
     ] {
@@ -482,7 +531,7 @@ fn every_bad_code_shape_is_refused_locally_without_writes() {
         format!("rj1.{}", "x".repeat(2045)),
     ] {
         assert_eq!(
-            join(&home.0, "wren", &code, "Office Mac")
+            join(&home.0, "wren", &code, "Work laptop")
                 .unwrap_err()
                 .message,
             radio::text::NOT_A_CODE
@@ -501,7 +550,7 @@ fn invalid_address_and_name_need_no_running_radio() {
             radio::text::NOT_AN_ADDRESS
         );
     }
-    for invalid in ["", "Office\nMac", "@office"] {
+    for invalid in ["", "Work\nlaptop", "@office"] {
         assert_eq!(
             name(&home.0, invalid).unwrap_err().message,
             radio::text::NOT_A_NAME

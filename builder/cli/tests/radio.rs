@@ -176,7 +176,7 @@ fn radio_join_reads_only_stdin_and_prints_a_sentence_without_the_code() {
             .env_clear()
             .env("HOME", &home)
             .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .args(["radio", "join", "wren", "--name", "Office Mac"])
+            .args(["radio", "join", "wren", "--name", "Work laptop"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -210,7 +210,7 @@ fn radio_join_has_no_code_argument() {
     assert!(!help.contains("--code"));
     assert!(!help.contains("<CODE>"));
     let output = Command::new(env!("CARGO_BIN_EXE_voice"))
-        .args(["radio", "join", "wren", "--name", "Office Mac", "--code"])
+        .args(["radio", "join", "wren", "--name", "Work laptop", "--code"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -282,7 +282,7 @@ fn radio_join_restores_terminal_echo_when_interrupted() {
         .env_clear()
         .env("HOME", &home)
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-        .args(["radio", "join", "wren", "--name", "Office Mac"])
+        .args(["radio", "join", "wren", "--name", "Work laptop"])
         .stdin(Stdio::from(slave.try_clone().unwrap()))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

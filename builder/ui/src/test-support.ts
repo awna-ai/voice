@@ -80,7 +80,7 @@ export function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     radioLinkAddress: vi.fn().mockResolvedValue({ port: 7341, addresses: ['10.0.0.5'] }),
     radioSetLinkAddress: vi.fn().mockResolvedValue({ port: 7341, addresses: ['10.0.0.5'] }),
     radioInvite: vi.fn().mockResolvedValue({ code: 'rj1.example', expiresAt: 0, port: 7341, addresses: ['10.0.0.5'], recoveryFile: null }),
-    radioJoin: vi.fn().mockResolvedValue({ fleet: 'voice', computerName: 'Office Mac' }),
+    radioJoin: vi.fn().mockResolvedValue({ fleet: 'voice', computerName: 'Work laptop' }),
     radioName: vi.fn().mockResolvedValue(undefined),
     claudeCodeFolders: vi.fn().mockResolvedValue({ found: false, folders: [] }),
     readClaudeCode: vi.fn().mockResolvedValue({ questions: 0, heldOut: 0, messages: 0, privateLeftOut: 0, unreadable: 0, first: null, last: null }),

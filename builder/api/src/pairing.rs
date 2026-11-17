@@ -145,11 +145,6 @@ fn invite_with(home: &Path, slug: &str, radio: &Radio) -> Result<dto::Invite> {
         }
     }
     let address = register(home, radio)?;
-    let recovery_file = match radio.fleet_init_phrase("voice") {
-        Ok((_, file)) => Some(file),
-        Err(AskError::Refused(phrase)) if phrase == "already in a fleet" => None,
-        Err(error) => return Err(phrase_error(error)),
-    };
     let folder = state.join("deliveries");
     match radio.delivery_folder_set_phrase(&folder) {
         Ok(()) => (),
@@ -164,7 +159,19 @@ fn invite_with(home: &Path, slug: &str, radio: &Radio) -> Result<dto::Invite> {
         }
         Err(error) => return Err(phrase_error(error)),
     }
-    let code = radio.code_create(None, None).map_err(radio_error)?;
+    let recovery_file = match radio.fleet_init_phrase("voice") {
+        Ok((_, file)) => Some(file),
+        Err(AskError::Refused(phrase)) if phrase == "already in a fleet" => None,
+        Err(error) => return Err(phrase_error(error)),
+    };
+    let code = radio.code_create(None, None).map_err(|error| {
+        let mut error = radio_error(error);
+        if let Some(file) = &recovery_file {
+            error.message.push(' ');
+            error.message.push_str(&text::recovery(file));
+        }
+        error
+    })?;
     Ok(dto::Invite {
         code: code.code().into(),
         expires_at: code.expires_at,
@@ -242,10 +249,22 @@ fn resign(radio: &Radio, name: &str) -> Result<()> {
     radio.resign_section(&section).map_err(radio_error)
 }
 pub fn name(home: &Path, name: &str) -> Result<()> {
+    name_in(home, &Radio::for_home(home), name)
+}
+fn name_in(home: &Path, radio: &Radio, name: &str) -> Result<()> {
     valid_name(name)?;
-    let radio = Radio::for_home(home);
-    ready(home, &radio)?;
-    resign(&radio, name)
+    ready(home, radio)?;
+    // VO16.6b2 (panels on Radio) owns this list and must keep calling with every member.
+    radio.register(vec![]).map_err(radio_error)?;
+    let section = serde_json::json!({"computer_name": name}).to_string();
+    radio.resign_section_phrase(&section).map_err(|error| {
+        if let AskError::Refused(phrase) = &error
+            && phrase == "not in a fleet"
+        {
+            return failure(text::NOT_LINKED);
+        }
+        phrase_error(error)
+    })
 }
 
 pub fn radio_link_address() -> Result<dto::LinkAddress> {

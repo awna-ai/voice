@@ -56,13 +56,13 @@ pub mod text {
         "That isn't a VPN address. Type the numbers only, like 10.0.0.5, with no port.";
     pub const NEEDS_ADDRESS: &str =
         "Add this computer's VPN address first, so your other computers can find it.";
-    pub const NOT_A_NAME: &str =
-        "Give this computer a name of 1 to 64 characters, such as Office Mac, without symbols like @, #, $ or brackets.";
+    pub const NOT_A_NAME: &str = "Give this computer a name of 1 to 64 characters, such as Work laptop, without symbols like @, #, $ or brackets.";
     pub const NOT_A_CODE: &str = "That isn't a join code. Copy the whole code from the computer that builds your assistant, then try again.";
     pub const CODE_REFUSED: &str = "The other computer turned that code down. It may be used or out of date: make a new one there, then try again.";
     pub const NOT_REACHED: &str = "Voice couldn't reach the other computer. Check that both are on the VPN and Voice is open there, then try again.";
     pub const CODE_NO_ADDRESS: &str = "That code doesn't say where the other computer is. Add its VPN address there, make a new code, then try again.";
     pub const ALREADY_LINKED: &str = "This computer is already linked to your other computers.";
+    pub const NOT_LINKED: &str = "This computer isn't linked to your other computers yet. Join them first, or make a join code here.";
     pub fn recovery(path: &str) -> String {
         format!(
             "Radio saved a recovery key for your computers in {path}. Move it into your password manager, then delete that file."
@@ -362,7 +362,12 @@ impl Radio {
     }
 
     pub fn resign_section(&self, section: &str) -> Result<()> {
-        self.ask(Request::Resign {
+        self.resign_section_phrase(section)
+            .map_err(AskError::sentence)
+    }
+
+    pub(crate) fn resign_section_phrase(&self, section: &str) -> std::result::Result<(), AskError> {
+        self.ask_phrase(Request::Resign {
             app: APP.into(),
             section: Some(section.into()),
             roles: None,

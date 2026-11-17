@@ -8,8 +8,11 @@
   so Voice refuses an invite while another listed assistant has a `deliveries` entry.
 - Voice initializes the fleet as `voice`; an already linked computer keeps its fleet and
   produces no new recovery file.
+- The delivery folder is set before the fleet is made, so a refusal after the fleet is
+  made can still name the recovery key's file.
 - A computer's name travels in Voice's section of Radio's signed computer record, as the
-  single JSON key `computer_name`. Voice writes that section only after Radio accepts a join;
+  single JSON key `computer_name`. Voice writes that section only once this computer is in a fleet
+  (after a join, or with `voice radio name`);
   if naming fails, `voice radio name` lets the person try again.
 
 ## 2026-11-12: look for an older assistant before making one (PB8.7a)
