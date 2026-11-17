@@ -119,7 +119,8 @@ build() {  # label, then the build's arguments
   local label="$1"
   shift
   status=0
-  PATH="$scratch/bin:$PATH" FAKE_SOURCE="$scratch/main.c" FAKE_TARGET="$scratch/target-$label" FAKE_TAG="$tag" \
+  # Only the stand-ins and the system's own tools, so no real cargo, pnpm or curl can run.
+  PATH="$scratch/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_SOURCE="$scratch/main.c" FAKE_TARGET="$scratch/target-$label" FAKE_TAG="$tag" \
     FAKE_RELEASES="$scratch/releases" bash "$repo/scripts/build-mac-app.sh" "$@" \
     > "$scratch/stdout" 2> "$scratch/err" || status=$?
   [ "$status" = 0 ] || { cat "$scratch/err" >&2; fail "the $label build failed"; }
