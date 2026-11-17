@@ -72,7 +72,11 @@ fn status_reads_both_files_and_pending() {
     let h = Scratch::new();
     let s = assistant(&h.0, true);
     fs::write(s.join("pending-send.jsonl"), b"").unwrap();
-    fs::write(s.join("last-sent.json"), br#"{"at":12,"to":"Studio"}"#).unwrap();
+    fs::write(
+        s.join("last-sent.json"),
+        br#"{"at":12,"to":"Studio","bytes":321}"#,
+    )
+    .unwrap();
     fs::write(
         s.join("deliveries-taken.json"),
         json!({"after":7,"computers":{"a".repeat(64):{"name":"Laptop","at":11,"records":4}}})
@@ -84,7 +88,7 @@ fn status_reads_both_files_and_pending() {
     let sent = answer.last_sent.unwrap();
     assert_eq!(sent.to, "Studio");
     assert_eq!(sent.at, 12.0);
-    assert_eq!(sent.bytes, 0);
+    assert_eq!(sent.bytes, 321);
     assert_eq!(answer.computers[0].name, "Laptop");
     assert_eq!(answer.computers[0].records, 4);
 }
@@ -124,6 +128,7 @@ fn sends_pending_copy_to_accepted_founder_by_id() {
     let bytes = lines(&[record("one", "Prefer a small change.")]);
     fs::write(s.join("decisions-claude-code.jsonl"), &bytes).unwrap();
     fs::write(s.join("pending-send.jsonl"), b"older").unwrap();
+    let expected_pending = fs::canonicalize(s.join("pending-send.jsonl")).unwrap();
     let fake = FakeRadio::answering(&send_answers(
         vec![
             computer("removed", "removed", None),
@@ -153,10 +158,7 @@ fn sends_pending_copy_to_accepted_founder_by_id() {
         ]
     );
     assert_eq!(requests[4]["computer"], "founder");
-    assert_eq!(
-        requests[4]["file"],
-        s.join("pending-send.jsonl").to_str().unwrap()
-    );
+    assert_eq!(requests[4]["file"], expected_pending.to_str().unwrap());
     let name = requests[4]["name"].as_str().unwrap();
     let parts: Vec<_> = name
         .strip_prefix("history-")
@@ -473,6 +475,14 @@ fn failed_send_keeps_the_pending_file_and_success_clears_it() {
     private(&pending);
     let sent = finish_send(&h.0, "wren", "Studio".into(), Ok(8)).unwrap();
     assert_eq!(sent.bytes, 8);
+    assert_eq!(
+        history_status(&h.0, "wren")
+            .unwrap()
+            .last_sent
+            .unwrap()
+            .bytes,
+        8
+    );
     assert!(!pending.exists());
     private(&h.0.join(".claude/state/wren/last-sent.json"));
 }
@@ -632,5 +642,141 @@ fn exported_counts_match_the_json_numbers_the_bridge_receives() {
     assert!(<dto::Sent as ts_rs::TS>::decl(&ts_rs::Config::default()).contains("bytes: number"));
     assert!(
         <dto::SentFrom as ts_rs::TS>::decl(&ts_rs::Config::default()).contains("records: number")
+    );
+}
+
+#[test]
+fn delivery_missing_kind_is_refused_without_changing_peer_history() {
+    let (h, s) = prepare_delivery();
+    let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
+    let old = lines(&[record("old", "Keep the checks.")]);
+    fs::write(&peer, &old).unwrap();
+    let incoming = s.join("deliveries/history-1-1.jsonl");
+    fs::write(
+        &incoming,
+        lines(&[json!({"id":"new","timestamp":"2026-11-17","text":"Keep it small."})]),
+    )
+    .unwrap();
+    let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.refused, 1);
+    assert_eq!(answer.taken, 0);
+    assert_eq!(saved.after, 1);
+    assert_eq!(fs::read(&peer).unwrap(), old);
+    assert!(!incoming.exists());
+    assert!(saved.computers.is_empty());
+}
+
+#[test]
+fn taken_peer_history_passes_the_builds_corpus_merge() {
+    let (h, s) = prepare_delivery();
+    fs::write(
+        s.join("deliveries/history-1-1.jsonl"),
+        lines(&[record("one", "Keep it small.")]),
+    )
+    .unwrap();
+    let (_, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.taken, 1);
+    let bytes = fs::read(s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl")).unwrap();
+    corpus::merge(
+        &filters(&h.0),
+        &[corpus::Input {
+            name: "peer history",
+            mode: corpus::Mode::History,
+            bytes: &bytes,
+        }],
+        &voice_ingest::mine::Split::Holdout(voice_ingest::mine::DEFAULT_HOLDOUT),
+    )
+    .unwrap();
+}
+
+#[test]
+fn fold_sorts_old_records_without_required_keys_without_panicking() {
+    let h = Scratch::new();
+    assistant(&h.0, false);
+    let old = lines(&[
+        json!({"text":"Old incomplete record."}),
+        json!({"timestamp":"2026-11-17","text":"Old record without an id."}),
+        record("old", "Keep this."),
+    ]);
+    let bytes = fold(
+        &filters(&h.0),
+        &old,
+        &lines(&[record("new", "Keep it small.")]),
+    )
+    .unwrap();
+    assert_eq!(corpus::read_records("history", &bytes).unwrap().len(), 4);
+}
+
+#[test]
+fn sent_names_are_screened_on_return_but_stored_as_given() {
+    let h = Scratch::new();
+    let s = assistant(&h.0, true);
+    private::write_private(&h.0, "wren", "pending-send.jsonl", b"history").unwrap();
+    let name = "Work\u{1b}[31m laptop\u{202e}";
+    let sent = finish_send(&h.0, "wren", name.into(), Ok(7)).unwrap();
+    assert_eq!(sent.to, "Work?[31m laptop?");
+    let saved: Value =
+        serde_json::from_slice(&fs::read(s.join("last-sent.json")).unwrap()).unwrap();
+    assert_eq!(saved["to"], name);
+    assert_eq!(
+        history_status(&h.0, "wren").unwrap().last_sent.unwrap().to,
+        "Work?[31m laptop?"
+    );
+}
+
+#[test]
+fn take_and_status_screen_delivered_names_but_keep_the_original_on_disk() {
+    let (h, s) = prepare_delivery();
+    fs::write(
+        s.join("deliveries/history-1-1.jsonl"),
+        lines(&[record("one", "Keep it small.")]),
+    )
+    .unwrap();
+    let mut d = delivery(1, 'a', "history-1-1.jsonl");
+    d["computer"] = json!("Work\u{1b}[31m laptop\u{202e}");
+    let mut answers = setup();
+    answers.extend([
+        json!({"ok":true,"deliveries":[d]}),
+        json!({"ok":true,"deliveries":[]}),
+    ]);
+    let fake = FakeRadio::answering(&answers);
+    let taken = take_with(&h.0, "wren", &fake.radio()).unwrap();
+    assert_eq!(taken.computers[0].name, "Work?[31m laptop?");
+    assert_eq!(
+        history_status(&h.0, "wren").unwrap().computers[0].name,
+        "Work?[31m laptop?"
+    );
+    let saved: Value =
+        serde_json::from_slice(&fs::read(s.join("deliveries-taken.json")).unwrap()).unwrap();
+    assert_eq!(
+        saved["computers"]["a".repeat(64)]["name"],
+        "Work\u{1b}[31m laptop\u{202e}"
+    );
+    fake.requests();
+}
+
+#[test]
+fn status_screens_saved_computer_names() {
+    let h = Scratch::new();
+    let s = assistant(&h.0, false);
+    fs::write(s.join("deliveries-taken.json"), json!({"after":1,"computers":{"a".repeat(64):{"name":"Work\u{1b}[31m laptop\u{202e}","at":1,"records":1}}}).to_string()).unwrap();
+    assert_eq!(
+        history_status(&h.0, "wren").unwrap().computers[0].name,
+        "Work?[31m laptop?"
+    );
+}
+
+#[test]
+fn older_last_sent_without_bytes_reads_as_zero() {
+    let h = Scratch::new();
+    let s = assistant(&h.0, true);
+    fs::write(s.join("last-sent.json"), br#"{"at":12,"to":"Studio"}"#).unwrap();
+    assert_eq!(
+        history_status(&h.0, "wren")
+            .unwrap()
+            .last_sent
+            .unwrap()
+            .bytes,
+        0
     );
 }

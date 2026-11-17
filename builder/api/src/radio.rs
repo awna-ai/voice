@@ -490,7 +490,7 @@ fn hidden(c: char) -> bool {
 }
 
 /// A line for the terminal, with each hidden character from the daemon shown as `?`.
-fn shown(line: String) -> String {
+pub(crate) fn shown(line: String) -> String {
     if line.chars().any(hidden) {
         line.chars()
             .map(|c| if hidden(c) { '?' } else { c })

@@ -504,8 +504,8 @@ fn radio_take_prints_totals_and_computers_without_history_or_keys() {
         &home,
         "take",
         json!([
-            {"id":1,"computer":"Work laptop","key":key,"name":"history-1-1.jsonl","size":100,"at":1800.0},
-            {"id":2,"computer":"Work laptop","key":key,"name":"other.txt","size":10,"at":1800.0}
+            {"id":1,"computer":"Work\u{1b}[31m laptop\u{202e}","key":&key,"name":"history-1-1.jsonl","size":100,"at":1800.0},
+            {"id":2,"computer":"Work\u{1b}[31m laptop\u{202e}","key":&key,"name":"other.txt","size":10,"at":1800.0}
         ]),
     );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
@@ -515,11 +515,11 @@ fn radio_take_prints_totals_and_computers_without_history_or_keys() {
     assert_eq!(lines.len(), 3, "{lines:?}");
     assert_eq!(lines[0], "Took 1 deliveries.");
     assert!(
-        lines[1].starts_with("Work laptop: 1 records, last "),
+        lines[1].starts_with("Work?[31m laptop?: 1 records, last "),
         "{lines:?}"
     );
     let timestamp = lines[1]
-        .strip_prefix("Work laptop: 1 records, last ")
+        .strip_prefix("Work?[31m laptop?: 1 records, last ")
         .unwrap();
     let time_parts: Vec<_> = timestamp.split(':').collect();
     let is_time = time_parts.len() == 2

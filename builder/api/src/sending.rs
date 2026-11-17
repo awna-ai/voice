@@ -2,7 +2,7 @@
 use crate::{
     assistants::failure,
     dto, pairing,
-    radio::{AskError, Radio, text},
+    radio::{AskError, Radio, shown, text},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -29,6 +29,8 @@ struct Received {
 struct LastSent {
     at: f64,
     to: String,
+    #[serde(default)]
+    bytes: u64,
 }
 fn now() -> std::result::Result<std::time::Duration, dto::Failure> {
     SystemTime::now()
@@ -131,9 +133,17 @@ fn finish_send(
         home,
         slug,
         "last-sent.json",
-        &LastSent { at, to: to.clone() },
+        &LastSent {
+            at,
+            to: to.clone(),
+            bytes,
+        },
     )?;
-    Ok(dto::Sent { to, at, bytes })
+    Ok(dto::Sent {
+        to: shown(to),
+        at,
+        bytes,
+    })
 }
 fn history_name(name: &str) -> bool {
     let Some(parts) = name
@@ -176,7 +186,9 @@ fn fold(filters: &Filters, old: &[u8], delivered: &[u8]) -> voice_core::error::R
         if privacy::privacy(filters, &value)?.is_some() {
             continue;
         }
-        if value.get("timestamp").and_then(Value::as_str).is_none() {
+        if value.get("kind").and_then(Value::as_str).is_none()
+            || value.get("timestamp").and_then(Value::as_str).is_none()
+        {
             return Err(voice_core::error::Error::Invalid(
                 "A history record has no date.".into(),
             ));
@@ -187,8 +199,14 @@ fn fold(filters: &Filters, old: &[u8], delivered: &[u8]) -> voice_core::error::R
         kept.push(record);
     }
     kept.sort_by(|a, b| {
-        (a["timestamp"].as_str(), a["id"].as_str())
-            .cmp(&(b["timestamp"].as_str(), b["id"].as_str()))
+        (
+            a.get("timestamp").and_then(Value::as_str),
+            a.get("id").and_then(Value::as_str),
+        )
+            .cmp(&(
+                b.get("timestamp").and_then(Value::as_str),
+                b.get("id").and_then(Value::as_str),
+            ))
     });
     let mut bytes = Vec::new();
     for record in kept {
@@ -230,7 +248,7 @@ fn take_with(home: &Path, slug: &str, radio: &Radio) -> Result<dto::Taken> {
             take_one(home, slug, &filters, &mut saved, &mut answer, &delivery)?;
         }
     }
-    answer.computers = saved.computers.into_values().collect();
+    answer.computers = saved.computers.into_values().map(shown_from).collect();
     Ok(answer)
 }
 fn take_one(
@@ -304,6 +322,10 @@ fn take_one(
     saved.after = after;
     save_json(home, slug, "deliveries-taken.json", saved)
 }
+fn shown_from(mut computer: dto::SentFrom) -> dto::SentFrom {
+    computer.name = shown(computer.name);
+    computer
+}
 pub fn history_status(home: &Path, slug: &str) -> Result<dto::HistoryStatus> {
     pairing::assistant(home, slug)?;
     let last: Option<LastSent> = read_json(home, slug, "last-sent.json")?;
@@ -313,11 +335,11 @@ pub fn history_status(home: &Path, slug: &str) -> Result<dto::HistoryStatus> {
             .map_err(|_| failure(STATUS_FAILED))?
             .is_some(),
         last_sent: last.map(|last| dto::Sent {
-            to: last.to,
+            to: shown(last.to),
             at: last.at,
-            bytes: 0,
+            bytes: last.bytes,
         }),
-        computers: received.computers.into_values().collect(),
+        computers: received.computers.into_values().map(shown_from).collect(),
     })
 }
 pub fn radio_send_history(r: dto::SlugRequest) -> Result<dto::Sent> {

@@ -17,9 +17,8 @@
 7. Page Radio deliveries after the saved cursor, 500 at a time until empty. Open only real files
    without following links, at most 64 MiB. Merge, delete, then save the cursor and computer's
    count. Refused files are deleted and passed; missing files are skipped. Repeating is harmless.
-8. Status lives privately in `last-sent.json` (`at`, `to`) and `deliveries-taken.json` (`after`,
+8. Status lives privately in `last-sent.json` (`at`, `to`, `bytes`) and `deliveries-taken.json` (`after`,
    `computers` keyed by authenticated key, with `name`, `at`, `records`). These are 0600.
-   Historical status has no saved byte count, so `HistoryStatus.lastSent.bytes` is zero.
    Export byte and record counts as TypeScript numbers, matching the JSON bridge.
 9. Forget already removes the entire state folder recursively, including pending copies, both
    status files, received histories and the delivery folder; no new deletion list is needed.
