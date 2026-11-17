@@ -86,7 +86,9 @@ if "$universal"; then
     [ -f "$binary" ] || fail 'the voice command was not built'
     cli_binaries+=("$binary")
   done
-  staging_cli="$staging/voice"
+  # Its own folder: on a case-insensitive disk "$staging/voice" is the "$staging/Voice" package.
+  mkdir "$staging/cli"
+  staging_cli="$staging/cli/voice"
   lipo -create -output "$staging_cli" "${cli_binaries[@]}"
 else
   CARGO_NET_OFFLINE=true cargo "${cli_args[@]}"

@@ -13,8 +13,10 @@ echo 'bash tests/mac_install_test.sh'
 bash tests/mac_install_test.sh
 echo 'bash tests/fetch_radio_test.sh'
 bash tests/fetch_radio_test.sh
-echo 'shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh'
-shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh
+echo 'bash tests/build_mac_app_test.sh'
+bash tests/build_mac_app_test.sh
+echo 'shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/build_mac_app_test.sh'
+shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/build_mac_app_test.sh
 
 if command -v cargo >/dev/null 2>&1; then
   echo 'cargo fmt --check'
