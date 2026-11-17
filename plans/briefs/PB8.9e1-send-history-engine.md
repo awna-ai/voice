@@ -253,3 +253,19 @@ Change only what follows. Same skills, same Never list, test-first, a mutation c
 Not changed, recorded instead: a delivery name outside Radio's character set is counted refused but left in place
 (unreachable with a conforming Radio; no path is built from it), and the state lock is held across Radio's send
 (up to its 150-second wait). Gate as before; don't commit.
+
+## Fix-up 3 (Claude's review of fix-up 2, 2026-11-17)
+
+1. **A delivered question's options must read as `distil` reads them.** `builder/steps/src/distil.rs` reads a
+   question's options through `voice_steps::input::Record::options()` (`builder/steps/src/input.rs`: an array of
+   objects, each with a string `label` and a string `description`) and fails the whole step otherwise. In `fold`,
+   for a delivered `kind: "question"` record, after `corpus::question_shape`, build
+   `voice_steps::input::Record { name: "history", line, map: &record }` and call `.options()`; an error fails the
+   fold as content (refused). No copy of that rule. Test: a delivered question whose `options` is a string, and one
+   whose option has no `description`, are each refused with the peer file unchanged; mutation-check it.
+2. **The CLI fixture is wrong, not the code.** In `builder/cli/tests/radio.rs`
+   `radio_take_prints_totals_and_computers_without_history_or_keys`, the invented message record has no
+   `project`; fold now (rightly) requires `project` and `text` on a message, as `distil` does. Add
+   `"project":"demo"` to it.
+
+Gate as before; don't commit.
