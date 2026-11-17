@@ -102,7 +102,11 @@ class Fenced(Failed):
     pass
 
 
-class CompartmentConfigError(Failed):
+class MemberConfigError(Failed):
+    pass
+
+
+class CompartmentConfigError(MemberConfigError):
     pass
 
 
@@ -190,20 +194,71 @@ def under(path, root):
     return tuple(map(fold, path.parts[:len(root.parts)])) == tuple(map(fold, root.parts))
 
 
-def path_forms(path, cwd):
+def absolute_path(path, cwd):
     path = Path(path).expanduser()
     if not path.is_absolute():
         path = Path(cwd).expanduser() / path
-    return (Path(os.path.abspath(path)), Path(os.path.realpath(path)))
+    return Path(os.path.abspath(path))
+
+
+def matches_fence(path, roots):
+    return any(under(path, root) or fold(encode(root)) in fold(encode(path)) for root in roots)
+
+
+def walk_resolve(path, roots):
+    """Resolve links, checking the next component before any filesystem probe."""
+    prefix = Path(path.anchor)
+    remaining = list(path.parts[1:])
+    hops = 0
+    while remaining:
+        candidate = prefix / remaining.pop(0)
+        if matches_fence(candidate, roots):
+            return candidate, True
+        try:
+            mode = os.lstat(candidate).st_mode
+        except FileNotFoundError:
+            resolved = candidate.joinpath(*remaining)
+            return resolved, matches_fence(resolved, roots)
+        if stat.S_ISLNK(mode):
+            # The candidate was checked before lstat and before readlink.
+            hops += 1
+            if hops > 40:
+                return candidate, True
+            target = absolute_path(os.readlink(candidate), prefix).joinpath(*remaining)
+            if matches_fence(target, roots):
+                return target, True
+            prefix = Path(target.anchor)
+            remaining = list(target.parts[1:])
+        else:
+            prefix = candidate
+    return prefix, matches_fence(prefix, roots)
 
 
 def fenced_forms(c, cwd):
     cached = getattr(c, "_fenced_roots", None)
     if cached is None:
-        cached = tuple(root for path in c["fenced"] for root in path_forms(path, cwd))
+        forms = []
+        for path in c["fenced"]:
+            lexical = absolute_path(path, cwd)
+            # Resolve only the parent: never lstat the fence folder itself.
+            parent, blocked = walk_resolve(lexical.parent, ())
+            forms.extend((lexical, Path(lexical.anchor) if blocked else parent / lexical.name))
+        cached = tuple(forms)
         if isinstance(c, CompartmentMap):
             c._fenced_roots = cached
     return cached
+
+
+def safe_resolve(c, path, cwd):
+    """Return a resolved path and whether resolving it encounters a fence."""
+    lexical = absolute_path(path, cwd)
+    if matches_fence(lexical, (absolute_path(root, cwd) for root in c["fenced"])):
+        return lexical, True
+    return walk_resolve(lexical, fenced_forms(c, cwd))
+
+
+def path_forms(path, cwd, c):
+    return absolute_path(path, cwd), safe_resolve(c, path, cwd)[0]
 
 
 def route_compartment(hub, project):
@@ -215,14 +270,11 @@ def hub_project_compartment(c, hub_path, project):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", project):
         return None
     target = Path(os.path.abspath(Path(hub_path).expanduser() / project))
-    roots = fenced_forms(c, os.getcwd())
-    if any(under(target, root) or fold(encode(root)) in fold(encode(target)) for root in roots):
-        return None
-    real = Path(os.path.realpath(target))
-    if any(under(real, root) or fold(encode(root)) in fold(encode(real)) for root in roots):
+    real, fenced = safe_resolve(c, target, os.getcwd())
+    if fenced:
         return None
     hub = c["hub"]
-    if any(fold(name) == fold(project) for name in hub["routes"]) or os.path.isdir(target):
+    if any(fold(name) == fold(project) for name in hub["routes"]) or os.path.isdir(real):
         return route_compartment(hub, project)
     return None
 
@@ -253,33 +305,27 @@ def folder_compartment(c, folder_name):
 
 
 def path_compartment(c, path, cwd, *, resolve=True):
-    # Check the lexical target before realpath can follow a link out of a fenced tree.
-    absolute = Path(path).expanduser()
-    if not absolute.is_absolute():
-        absolute = Path(cwd).expanduser() / absolute
-    forms = (Path(os.path.abspath(absolute)),)
-    roots = fenced_forms(c, cwd)
-    def fenced():
-        return any(under(form, root) or fold(encode(root)) in fold(encode(form))
-                   for form in forms for root in roots)
-    if fenced():
-        return "fenced"
+    absolute = absolute_path(path, cwd)
     if resolve:
-        forms = path_forms(path, cwd)
-        if fenced():
-            return "fenced"
+        real, fenced = safe_resolve(c, path, cwd)
+        forms = (absolute, real)
+    else:
+        forms = (absolute,)
+        fenced = matches_fence(absolute, fenced_forms(c, cwd))
+    if fenced:
+        return "fenced"
     hub = c.get("hub")
     if hub:
         for hub_path in hub["paths"]:
             for form in forms:
-                hub_roots = path_forms(hub_path, cwd) if resolve else (Path(hub_path).expanduser(),)
+                hub_roots = path_forms(hub_path, cwd, c) if resolve else (Path(hub_path).expanduser(),)
                 for root in hub_roots:
                     if under(form, root) and len(form.parts) > len(root.parts):
                         route = hub_project_compartment(c, hub_path, form.parts[len(root.parts)])
                         if route is not None:
                             return route
     matches = [(len(root.parts), compartment) for compartment, folder in declared_folders(c)
-               for root in (path_forms(folder, cwd) if resolve else (folder,))
+               for root in (path_forms(folder, cwd, c) if resolve else (folder,))
                if any(under(form, root) for form in forms)]
     if matches:
         return max(matches)[1]
@@ -415,6 +461,8 @@ def load_member(config):
 def read_json(path):
     try:
         return json.loads(path.read_text())
+    except (RecursionError, UnicodeDecodeError):
+        raise MemberConfigError(f"member config: {path.name}: cannot read JSON file")
     except ValueError as exc:
         raise Failed(f"member config: {path} is not JSON ({exc})")
 
@@ -723,6 +771,10 @@ def hub_compartment(c, compartment, records):
     # Inspect every slash-delimited project, then compare its preceding hub text
     # with fold on both sides. Keep the original capture for unknown project names.
     pattern = re.compile(r"/([^/\s\"'`;&|)><]+)(?=/|$|[\s\"'`;&|)><])")
+    folded_forms = [(fold(form), path) for form, path in forms.items()]
+    window = 4 * max(map(len, forms)) + 16
+    last_components = {fold(Path(form).name) for form in forms}
+    route_cache = {}
     routes = set()
     for record in records:
         if record.get("type") != "assistant":
@@ -734,11 +786,17 @@ def hub_compartment(c, compartment, records):
             for _, value, is_key in string_paths(block.get("input", {})):
                 if is_key:
                     continue
+                folded_value = fold(value)
+                if not any(component in folded_value for component in last_components):
+                    continue
                 for match in pattern.finditer(value):
-                    prefix = fold(value[:match.start()])
-                    for form, hub_path in forms.items():
-                        if prefix.endswith(fold(form)):
-                            route = hub_project_compartment(c, hub_path, match.group(1))
+                    prefix = fold(value[max(0, match.start() - window):match.start()])
+                    for form, hub_path in folded_forms:
+                        if prefix.endswith(form):
+                            key = (hub_path, match.group(1))
+                            if key not in route_cache:
+                                route_cache[key] = hub_project_compartment(c, *key)
+                            route = route_cache[key]
                             if route is not None:
                                 routes.add(route)
     routes.discard(compartment)
@@ -749,8 +807,10 @@ def overlaps_fenced(m, root):
     if m.compartments is None:
         return False
     c = m.compartments
-    forms = path_forms(root, os.getcwd())
-    return path_compartment(c, root, os.getcwd()) == "fenced" or any(
+    if safe_resolve(c, root, os.getcwd())[1]:
+        return True
+    forms = path_forms(root, os.getcwd(), c)
+    return any(
         under(fenced, form) for fenced in fenced_forms(c, os.getcwd()) for form in forms)
 
 
@@ -775,9 +835,15 @@ def queue_files(m, queues):
 def queue_compartment(m, queues, path):
     if m.compartments is None:
         return {}
-    hub = m.compartments.get("hub")
-    if hub and any(fold(os.path.realpath(Path(queues).expanduser())) == fold(os.path.realpath(Path(root).expanduser()))
-                   for root in hub["paths"]):
+    c = m.compartments
+    if safe_resolve(c, path, os.getcwd())[1]:
+        return {"compartment": "fenced"}
+    hub = c.get("hub")
+    queues_real, fenced = safe_resolve(c, queues, os.getcwd())
+    if fenced:
+        return {"compartment": "fenced"}
+    if hub and any(not blocked and fold(str(queues_real)) == fold(str(real))
+                   for root in hub["paths"] for real, blocked in [safe_resolve(c, root, os.getcwd())]):
         name = route_compartment(hub, path.parent.name)
     else:
         name = path_compartment(m.compartments, path, os.getcwd())
@@ -2193,10 +2259,14 @@ def claude_touched(m, projects):
                 target = (inputs.get("file_path") or inputs.get("notebook_path")) if isinstance(inputs, dict) else None
                 if not isinstance(target, str):
                     continue
-                if m.compartments is not None and path_compartment(
-                        m.compartments, os.path.normpath(target), os.getcwd(), resolve=False) == "fenced":
-                    continue
-                for key in {os.path.normpath(target), os.path.realpath(target)}:
+                if m.compartments is None:
+                    real = os.path.realpath(target)
+                else:
+                    real, fenced = safe_resolve(m.compartments, target, os.getcwd())
+                    if fenced:
+                        continue
+                    real = str(real)
+                for key in {os.path.normpath(target), real}:
                     if touched.get(key) != "wrote":
                         touched[key] = how
     return touched
@@ -2273,7 +2343,8 @@ def cmd_sources_review(m, args):
     skipped, flagged, rows = Counter(), Counter(), []
     for path in folder_files(m, source, root, skipped):
         full = root / path
-        claude = (touched.get(os.path.normpath(str(full))) or touched.get(os.path.realpath(full)) or
+        real = str(safe_resolve(m.compartments, full, os.getcwd())[0]) if m.compartments is not None else os.path.realpath(full)
+        claude = (touched.get(os.path.normpath(str(full))) or touched.get(real) or
                   ("agent" if Path(path).name in AGENT_FILES or AGENT_FOLDERS & set(Path(path).parts) else ""))
         if path not in marks and claude:
             flagged["agent" if claude == "agent" else "claude"] += 1
@@ -2695,7 +2766,7 @@ def main(argv=None, member=None, prog="crew_decisions", description=None):
             parser_for(None, description).print_help()
             return 0
         print(f"{prog}: " + " ".join(str(exc).splitlines()), file=sys.stderr)
-        return 2 if isinstance(exc, CompartmentConfigError) else 1
+        return 2 if isinstance(exc, MemberConfigError) else 1
     args = parser_for(m, description).parse_args(argv)
     for name in ("corpus", "answers", "labels", "predictions"):
         if getattr(args, name, None):

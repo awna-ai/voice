@@ -3,13 +3,17 @@
 
 Every case runs the real CLI over fixture transcripts in a temp dir, so no test reads a real one.
 """
+import io
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -1048,6 +1052,27 @@ class Compartments(unittest.TestCase):
             {"type": "tool_use", "input": {"command": "ls ~/Cafe\u0301/HUB/STRASSE && x"}}]}}
         self.assertEqual(self.c.hub_compartment(self.config, "work", [record]), "client")
 
+    def test_hub_routing_megabyte_strings_are_linear(self):
+        mention = "~/.hub/projects/client-stack/queue.md "
+        values = (("a/" * (1024 * 512), "work"),
+                  ((mention * (1024 * 1024 // len(mention) + 1))[:1024 * 1024], "client"))
+        def deadline(signum, frame):
+            self.fail("hub routing exceeded 2 seconds")
+        old_handler = signal.signal(signal.SIGALRM, deadline)
+        try:
+            for value, expected in values:
+                with self.subTest(expected=expected):
+                    signal.setitimer(signal.ITIMER_REAL, 2)
+                    start = time.perf_counter()
+                    actual = self.c.hub_compartment(self.config, "work", [self.write_tool(value)])
+                    elapsed = time.perf_counter() - start
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                    self.assertEqual(actual, expected)
+                    self.assertLess(elapsed, 2)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, old_handler)
+
     def test_hub_session_folder_longest_route(self):
         self.config["hub"]["routes"]["client"] = "work"
         for suffix, expected in (("client-stack", "client"), ("client-stack--claude-worktrees-one", "client"),
@@ -1078,6 +1103,58 @@ class Compartments(unittest.TestCase):
         self.c.path_compartment(m.compartments, self.h.projects, self.h.root)
         with patch.object(os.path, "realpath", guarded):
             self.assertEqual(self.c.claude_touched(m, self.h.projects), {})
+
+    def test_link_into_fence_never_probes_fence_or_target(self):
+        fenced = self.h.root.resolve() / "fenced"
+        fenced.mkdir()
+        (self.h.root / "lnk").symlink_to(fenced, target_is_directory=True)
+        self.config["fenced"] = [str(fenced)]
+        m = self.save_config()
+        self.h.session("allowed", "s", self.write_tool("~/lnk/c.md"))
+
+        def guard(original):
+            def checked(path, *args, **kwargs):
+                if not isinstance(path, int):
+                    self.assertFalse(self.c.under(Path(path), fenced), "probed fence: " + str(path))
+                return original(path, *args, **kwargs)
+            return checked
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict(os.environ, {"HOME": str(self.h.root)}))
+            for owner, name in ((os, "lstat"), (os, "readlink"), (os, "stat"),
+                                (os.path, "realpath"), (Path, "resolve")):
+                stack.enter_context(patch.object(owner, name, guard(getattr(owner, name))))
+            with patch.object(os, "lstat", side_effect=AssertionError("lexical fence probed")):
+                self.assertEqual(self.c.safe_resolve(m.compartments, fenced / "c.md", self.h.root),
+                                 (fenced / "c.md", True))
+            # No priming: resolving the fence root itself must also avoid probing it.
+            self.assertIn(fenced, self.c.fenced_forms(m.compartments, self.h.root))
+            self.assertEqual(self.c.claude_touched(m, self.h.projects), {})
+            self.assertEqual(self.c.path_compartment(m.compartments, "~/lnk/c.md", self.h.root), "fenced")
+            with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                self.assertEqual(self.c.main(["--member", self.member, "record", "--work", "~/lnk/c.md",
+                    "--kind", "decided", "--category", "scope", "--tier", "high", "--question", "q",
+                    "--ada-pick", "keep"]), 4)
+
+    def test_fence_parent_link_and_link_hop_limit(self):
+        base = self.h.root.resolve()
+        real = base / "real"
+        real.mkdir()
+        alias = base / "alias"
+        alias.symlink_to(real, target_is_directory=True)
+        self.config["fenced"] = [str(alias / "private")]
+        m = self.save_config()
+        with patch.object(os, "lstat", wraps=os.lstat) as calls:
+            self.assertEqual(self.c.path_compartment(m.compartments, real / "private/c.md", self.h.root), "fenced")
+            self.assertFalse(any(self.c.under(Path(call.args[0]), real / "private") or
+                                 self.c.under(Path(call.args[0]), alias / "private")
+                                 for call in calls.call_args_list))
+        for i in range(42):
+            (base / f"link-{i}").symlink_to(f"link-{i + 1}" if i < 41 else "missing")
+        self.assertEqual(self.c.path_compartment(m.compartments, base / "link-0/c.md", self.h.root), "fenced")
+        # Exactly 40 hops are permitted; missing suffixes are appended lexically.
+        self.assertEqual(self.c.safe_resolve(m.compartments, base / "link-2/c.md", self.h.root),
+                         (base / "missing/c.md", False))
 
     def test_explicit_fenced_paths_refused_before_io(self):
         fenced = self.h.root / "fenced"
@@ -1128,6 +1205,20 @@ class Compartments(unittest.TestCase):
                     self.assertEqual(proc.returncode, 2, proc.stderr)
                     self.assertEqual(len(proc.stderr.splitlines()), 1)
 
+    def test_member_and_private_bad_encoding_or_nesting(self):
+        for name in ("member.json", "private.json"):
+            for data in (b"[" * 10000 + b"0" + b"]" * 10000, b"\xff"):
+                with self.subTest(name=name, data=data[:1]):
+                    self.h.member(ADA)
+                    path = self.h.root / name
+                    path.write_bytes(data)
+                    errors = io.StringIO()
+                    with redirect_stderr(errors):
+                        self.assertEqual(self.c.main(["--member", self.member, "where"]), 2)
+                    self.assertEqual(len(errors.getvalue().splitlines()), 1)
+                    self.assertIn("member config:", errors.getvalue())
+                    path.unlink()
+
     def test_touched_no_config_base_parity(self):
         m = self.c.load_member(ADA)
         targets = [self.h.root / "excluded.md", self.h.root / "top.md"]
@@ -1153,11 +1244,13 @@ class Compartments(unittest.TestCase):
 
     def test_fenced_root_forms_cached_per_member(self):
         m = self.save_config()
-        original = self.c.path_forms
-        with patch.object(self.c, "path_forms", wraps=original) as forms:
+        with patch.object(os, "lstat", wraps=os.lstat) as calls:
+            first = self.c.fenced_forms(m.compartments, TEST_HOME)
+            count = calls.call_count
+            self.assertGreater(count, 0)
             for _ in range(3):
-                self.c.path_compartment(m.compartments, "~/projects/work", TEST_HOME)
-            self.assertEqual(sum(call.args[0] == "~/garden-club" for call in forms.call_args_list), 1)
+                self.assertIs(self.c.fenced_forms(m.compartments, TEST_HOME), first)
+            self.assertEqual(calls.call_count, count)
 
 
 if __name__ == "__main__":
