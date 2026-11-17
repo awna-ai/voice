@@ -151,3 +151,39 @@ never-shrink merge, the symlink refusal, the size cap, the filters re-run, the p
 sending pairing radio`, `cargo test -p voice-cli --test radio`, `cargo test -p voice-app --test lockdown`,
 `pnpm -C builder/ui test`, `pnpm -C builder/ui run typecheck`. Your sandbox can't open sockets: run what you can and
 say which you couldn't. Don't commit; Claude reviews and commits.
+
+## Fix-up 1 (Claude's review of the first build, 2026-11-17)
+
+The build is in the branch's last commit. Change only what follows; keep everything else as it is. Same skills,
+same Never list.
+
+1. **`fold` must require what `corpus::merge` requires** (`builder/ingest/src/corpus.rs` `merge`: a string `id`, a
+   string `kind`, a string `timestamp`). Today a delivered record with no `kind` is stored in
+   `decisions-from-<peer>.jsonl`, and the build computer's next `corpus::merge` then fails on that file, so one bad
+   delivery stops every build. In `fold`, a new delivered record (after the filters pass it) with no string `kind`
+   or no string `timestamp` fails the fold, as a missing timestamp already does (the delivery is refused, deleted,
+   the cursor moves, the peer file is unchanged). Tests in `sending/tests.rs`: (a) a delivery holding one record
+   with no `kind` is refused and leaves an existing peer file byte-for-byte unchanged; (b) after a successful take,
+   the peer file passes `corpus::merge` with one `Input { name, mode: Mode::History, bytes }`, the assistant's
+   compiled filters and the split `merge_histories_in` uses (find it in `builder/api/src/history.rs` or wherever
+   `merge_histories_in` lives; use the same value), without error.
+2. **No panic in `fold`'s sort.** Replace `a["timestamp"]` / `a["id"]` with `a.get("timestamp").and_then(Value::as_str)`
+   and the same for `id` (a `Map` index panics on a missing key, and the old peer file is not re-checked).
+3. **Screen another computer's name before it leaves the engine.** `delivery.computer` and the founder's name from
+   `computer_list` are another computer's own text. Make `radio::shown` `pub(crate)` and pass every name the engine
+   returns through it: `Sent.to` in `send_with`, and each `SentFrom.name` in `take_with` and `history_status`
+   (store the name as given in the status files, screen on the way out). Test: a delivery whose `computer` is
+   `"Work\u{1b}[31m laptop\u{202e}"` gives `take_deliveries` and `history_status` a name with `?` in place of the
+   escape and the bidi mark, and the CLI's `take` line shows the same screened name.
+4. **`last-sent.json` keeps the byte count.** Add `bytes: u64` to `LastSent` with `#[serde(default)]` (an older
+   file without it reads as 0); `finish_send` writes it and `history_status` returns it. Update `.ai/DECISIONS.md`
+   item 8: drop the sentence that says `lastSent.bytes` is zero; say `last-sent.json` holds `at`, `to` and `bytes`.
+   Update `status_reads_both_files_and_pending` to check the bytes.
+5. **The two red tests are wrong, not the code:**
+   - `sending::tests::sends_pending_copy_to_accepted_founder_by_id`: `write_private` answers the canonical path
+     (`/private/tmp/…` on macOS). Compare against `fs::canonicalize` of the expected path.
+   - `builder/cli/tests/radio.rs` `radio_take_prints_totals_and_computers_without_history_or_keys`: the invented
+     `key` is 68 hex characters; Radio's key is 64 (`peer_file` rightly refuses it). Make it exactly 64.
+
+Gate as before. Your sandbox can't open sockets, so the fake-Radio tests may fail there with a socket error: say
+which, and Claude runs them outside. Don't commit.
