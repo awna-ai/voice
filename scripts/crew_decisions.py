@@ -940,6 +940,20 @@ def queue_compartment(m, queues, path):
     return {"compartment": name}
 
 
+def record_cwd_drop_reason(m, record):
+    cwd = record.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    cwd_folder = encode(cwd)
+    c = m.compartments
+    if c is not None and (folder_compartment(c, cwd_folder) == "fenced" or
+            matches_fence(Path(os.path.abspath(os.path.expanduser(cwd))), lexical_fences(c, os.getcwd()))):
+        return "fenced"
+    if m.excluded.search(cwd_folder):
+        return "excluded"
+    return None
+
+
 def cmd_mine(m, args):
     root = transcript_root(m, args.projects)
     kept, excluded, dropped, fenced, duplicates = {}, 0, Counter(), 0, 0
@@ -958,18 +972,17 @@ def cmd_mine(m, args):
             if m.compartments is not None and path_compartment(m.compartments, path, os.getcwd()) == "fenced":
                 continue
             records = read_session(path)
+            allowed = []
+            for record in records:
+                reason = record_cwd_drop_reason(m, record)
+                if reason:
+                    dropped[reason] += 1
+                else:
+                    allowed.append(record)
+            records = allowed
             session_compartment = hub_compartment(m.compartments, folder.name, compartment, records) if m.compartments is not None else None
             for h, cwd in _harvest(m, path, project, records):
                 cwd_folder = encode(cwd) if isinstance(cwd, str) and cwd else None
-                if cwd_folder is not None:
-                    c = m.compartments
-                    if c is not None and (folder_compartment(c, cwd_folder) == "fenced" or
-                            matches_fence(Path(os.path.abspath(os.path.expanduser(cwd))), lexical_fences(c, os.getcwd()))):
-                        dropped["fenced"] += 1
-                        continue
-                    if m.excluded.search(cwd_folder):
-                        dropped["excluded"] += 1
-                        continue
                 if m.compartments is not None:
                     h["compartment"] = session_compartment
                 reason = privacy(m, h)

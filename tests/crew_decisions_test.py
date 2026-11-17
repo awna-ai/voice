@@ -932,6 +932,40 @@ class Compartments(unittest.TestCase):
         self.assertEqual(self.h.read("mined.jsonl"), "")
         self.assertIn(", 1 excluded records", proc.stdout)
 
+    def test_mine_filters_transcript_cwds_before_context_and_hub_routing(self):
+        for reason, cwd in (("fenced", "~/garden-club/case"),
+                            ("excluded", "~/excluded-project/case")):
+            with self.subTest(reason=reason):
+                member = self.h.member({**ADA, "compartments": "compartments.json",
+                                       "filters": {**ADA["filters"], "excluded_folders": "excluded-project"}})
+                marker = reason.upper() + "-REPLY-TEXT"
+                assistant = reply("2026-09-01T00:01:00Z", marker)
+                assistant["cwd"] = cwd
+                tool = {"type": "assistant", "cwd": cwd, "message": {"content": [
+                    {"type": "tool_use", "name": "Read",
+                     "input": {"file_path": "~/.hub/projects/client-stack/x.md"}}]}}
+                for folder in ("~/projects/work", "~/.hub"):
+                    self.h.session(self.c.encode(folder), "resumed",
+                                   said("2026-09-01T00:00:00Z", "drop this review queue verdict", cwd=cwd),
+                                   assistant, tool,
+                                   said("2026-09-01T00:02:00Z", "keep every review queue verdict " + folder,
+                                        cwd="~/projects/work"))
+                proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                rows = [json.loads(line) for line in self.h.read("mined.jsonl").splitlines()]
+                self.assertEqual(len(rows), 2)
+                for row in rows:
+                    with self.subTest(project=row["project"], field="context"):
+                        self.assertNotIn(marker, row["context"])
+                    with self.subTest(project=row["project"], field="text"):
+                        self.assertNotIn(marker, row["text"])
+                    with self.subTest(project=row["project"], field="compartment"):
+                        self.assertEqual(row["compartment"], "work")
+                self.assertNotIn(marker, proc.stdout)
+                self.assertIn(", 6 " + reason + " records", proc.stdout)
+                other = "excluded" if reason == "fenced" else "fenced"
+                self.assertNotIn(other + " records", proc.stdout)
+
     def test_fenced_scans_and_hub_sessions(self):
         if os.geteuid() == 0:
             self.skipTest("mode 000 requires an unprivileged user")
