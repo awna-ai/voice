@@ -15,11 +15,11 @@ check() { grep -Fq -- "$2" "$1" 2>/dev/null || { cat "$1" >&2 2>/dev/null || tru
 
 # A copy of the files the build reads, as its own git checkout, so the build runs end to end with
 # stand-ins for cargo, pnpm, rustup and curl and leaves the real checkout alone.
-repo="$scratch/repo"
-mkdir -p "$repo/scripts" "$repo/builder/install" "$repo/builder/app" "$scratch/bin" "$scratch/releases"
-cp "$here/scripts/build-mac-app.sh" "$here/scripts/fetch-radio.sh" "$repo/scripts/"
-cp "$here/builder/install/install.sh" "$here/builder/install/How to install.txt" "$repo/builder/install/"
-printf '{"version": "9.9.9"}\n' > "$repo/builder/app/tauri.conf.json"
+work="$scratch/repo"
+mkdir -p "$work/scripts" "$work/builder/install" "$work/builder/app" "$scratch/bin" "$scratch/releases"
+cp "$here/scripts/build-mac-app.sh" "$here/scripts/fetch-radio.sh" "$work/scripts/"
+cp "$here/builder/install/install.sh" "$here/builder/install/How to install.txt" "$work/builder/install/"
+printf '{"version": "9.9.9"}\n' > "$work/builder/app/tauri.conf.json"
 
 tag=v9.8.7
 for arch in arm64 x86_64; do
@@ -36,9 +36,9 @@ done
   for arch in arm64 x86_64; do
     echo "$arch $(shasum -a 256 "$scratch/releases/radio-$tag-macos-$arch.tar.gz" | cut -d ' ' -f 1)"
   done
-} > "$repo/builder/install/radio-release.txt"
+} > "$work/builder/install/radio-release.txt"
 (
-  cd "$repo"
+  cd "$work"
   git init -q
   git add -A
   git -c user.name=test -c user.email=test@example.invalid commit -q -m 'build test copy'
@@ -121,7 +121,7 @@ build() {  # label, then the build's arguments
   status=0
   # Only the stand-ins and the system's own tools, so no real cargo, pnpm or curl can run.
   PATH="$scratch/bin:/usr/bin:/bin:/usr/sbin:/sbin" FAKE_SOURCE="$scratch/main.c" FAKE_TARGET="$scratch/target-$label" FAKE_TAG="$tag" \
-    FAKE_RELEASES="$scratch/releases" bash "$repo/scripts/build-mac-app.sh" "$@" \
+    FAKE_RELEASES="$scratch/releases" bash "$work/scripts/build-mac-app.sh" "$@" \
     > "$scratch/stdout" 2> "$scratch/err" || status=$?
   [ "$status" = 0 ] || { cat "$scratch/err" >&2; fail "the $label build failed"; }
 }
@@ -144,14 +144,14 @@ shipped() {  # zip, then the architectures each command in Voice.app must hold
 }
 
 build single
-shipped "$repo/dist/voice-9.9.9-mac-$(uname -m).zip" "$(uname -m)"
+shipped "$work/dist/voice-9.9.9-mac-$(uname -m).zip" "$(uname -m)"
 echo 'build_mac_app_test: one architecture passed'
 
 # The universal build joins two voice commands; on a stock Mac's case-insensitive disk the joined
 # file must not share a name with the Voice package folder beside it.
 build universal --universal
-shipped "$repo/dist/voice-9.9.9-mac-universal.zip" arm64 x86_64
+shipped "$work/dist/voice-9.9.9-mac-universal.zip" arm64 x86_64
 echo 'build_mac_app_test: universal passed'
 
-[ -z "$(cd "$repo" && git status --porcelain --untracked-files=no)" ] || fail 'the build changed tracked files'
+[ -z "$(cd "$work" && git status --porcelain --untracked-files=no)" ] || fail 'the build changed tracked files'
 echo 'build_mac_app_test: all passed'

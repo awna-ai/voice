@@ -80,7 +80,7 @@ done
 echo 'ci_local_test: usage passed'
 
 python_suites='crew_decisions crew_sources crew_extra_sources crew_labels crew_hardening crew_documents crew_rounds slack_mine slack_select crew_personas growth_loop_spec claude_sandbox_probe read_fence_probe'
-shellcheck_line='shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/ci_local_test.sh'
+shellcheck_line='shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/build_mac_app_test.sh tests/ci_local_test.sh'
 prefix='VOICE_REQUIRE_PARITY=1 '
 if [ "$(uname -s)" = Darwin ]; then prefix+='VOICE_REQUIRE_SANDBOX=1 '; fi
 cat > "$tmp/trees" <<'GOLDEN'
@@ -96,6 +96,7 @@ GOLDEN
   echo 'bash tests/crew_install_test.sh'
   echo 'bash tests/mac_install_test.sh'
   echo 'bash tests/fetch_radio_test.sh'
+  echo 'bash tests/build_mac_app_test.sh'
   echo 'bash tests/ci_local_test.sh'
   echo "$shellcheck_line"
 } > "$tmp/prefix"
@@ -121,11 +122,12 @@ for step in 'install --frozen-lockfile' typecheck test build; do echo "pnpm -C b
 list --list
 cp "$tmp/out" "$tmp/full"
 list --tier full --list
+grep -Fx 'bash tests/build_mac_app_test.sh' "$tmp/out" >/dev/null || fail 'RED full gate: missing bash tests/build_mac_app_test.sh'
 cmp "$tmp/full" "$tmp/out" || fail 'explicit full differs'
 if [ "$(uname -s)" = Darwin ] && [ -n "$real_cargo" ]; then
   diff -u "$tmp/golden" "$tmp/out" || fail 'full gate order changed'
 else
-  head -n 18 "$tmp/out" > "$tmp/actual-prefix"
+  head -n 19 "$tmp/out" > "$tmp/actual-prefix"
   cmp "$tmp/prefix" "$tmp/actual-prefix" || fail 'full gate prefix changed'
 fi
 echo 'ci_local_test: full golden list passed'
@@ -154,11 +156,11 @@ for path in builder/agent/src/sandbox.rs builder/agent/sandbox/claude-code.sb bo
       expect_step 'python3 tests/read_fence_probe_test.py'
       expect_crate voice-agent ;;
     bootstrap/*) expect_step 'bash tests/crew_install_test.sh'; expect_crate voice-core ;;
-    builder/install/*) expect_step 'bash tests/mac_install_test.sh'; expect_step 'bash tests/fetch_radio_test.sh' ;;
+    builder/install/*) expect_step 'bash tests/mac_install_test.sh'; expect_step 'bash tests/fetch_radio_test.sh'; expect_step 'bash tests/build_mac_app_test.sh' ;;
   esac
   reset
 done
-for path in scripts/slack_select.py scripts/fetch-radio.sh tests/slack_mine_test.py docs/spec/growth-loop.md builder/grow/tests/golden/case.json; do
+for path in scripts/slack_select.py scripts/fetch-radio.sh scripts/build-mac-app.sh tests/build_mac_app_test.sh tests/slack_mine_test.py docs/spec/growth-loop.md builder/grow/tests/golden/case.json; do
   case_name=$path
   change "$path"
   touched
@@ -172,7 +174,10 @@ for path in scripts/slack_select.py scripts/fetch-radio.sh tests/slack_mine_test
       for suite in $python_suites; do expect_step "python3 tests/${suite}_test.py"; done ;;
     scripts/fetch-radio.sh)
       expect_step 'bash tests/fetch_radio_test.sh'
-      expect_step 'bash tests/crew_install_test.sh' ;;
+      expect_step 'bash tests/crew_install_test.sh'
+      expect_step 'bash tests/build_mac_app_test.sh' ;;
+    scripts/build-mac-app.sh|tests/build_mac_app_test.sh)
+      expect_step 'bash tests/build_mac_app_test.sh' ;;
     tests/slack_mine_test.py)
       expect_step 'python3 tests/slack_mine_test.py'
       if grep -Fx 'bash tests/crew_install_test.sh' "$tmp/out" >/dev/null; then
@@ -368,7 +373,7 @@ for source in sorted((root / 'tests').glob('*.py')):
             source.read_text()):
         add(root, target, 'python', reader)
 for source in sorted((root / 'tests').glob('*_test.sh')):
-    for target in re.findall(r'"\$(?:here|repo)/([^"$\s]+)', source.read_text()):
+    for target in re.findall(r'"\$(?:here|repo)/([^"$]+)', source.read_text()):
         add(root, target, 'shell', source.stem)
 for path, kind, reader in sorted(reads):
     print(path + '\t' + kind + '\t' + reader)

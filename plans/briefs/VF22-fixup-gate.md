@@ -52,3 +52,23 @@ Don't run the full `scripts/ci-local.sh`. Don't commit. No other file, no real p
 ## Skills
 
 `~/.codex/skills/tdd-skill/SKILL.md` (Claude: `zizi-skills:tdd-skill`).
+
+## Fix-up 2 (review of the first pass)
+
+The first pass also changed the drift guard's read finder in `tests/ci_local_test.sh` (an `anchors` choice made by
+sniffing the test's text for `repo="$scratch/repo"`, and a regex that needs a closing quote). Replace that with:
+
+1. In `tests/build_mac_app_test.sh`, rename the scratch copy's variable from `repo` to `work` everywhere (the
+   assignment `repo="$scratch/repo"` becomes `work="$scratch/repo"`, and every `$repo` / `"$repo/…"` becomes
+   `$work` / `"$work/…"`). The guard's convention is that `$here` and `$repo` name the real repository; the build
+   test's scratch copy must not use either name. Change nothing else in that file.
+2. In `tests/ci_local_test.sh`, restore the shell read finder to one line with no `anchors` sniff:
+   `for target in re.findall(r'"\$(?:here|repo)/([^"$]+)', source.read_text()):` (the old one stopped at
+   whitespace, which cut `"$here/builder/install/How to install.txt"` short; this stops only at a quote or `$`).
+   Remove the `text =` and `anchors =` lines and the comment above them.
+
+Checked by V1 before this brief: with both changes, every other `tests/*_test.sh` yields exactly the reads the old
+finder did, and the build test yields `scripts/build-mac-app.sh`, `scripts/fetch-radio.sh`,
+`builder/install/install.sh` and `builder/install/How to install.txt`.
+
+Run the same four commands as above and report each exit code. Don't commit.
