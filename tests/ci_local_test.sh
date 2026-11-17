@@ -158,6 +158,26 @@ for path in builder/agent/src/sandbox.rs builder/agent/sandbox/claude-code.sb bo
   esac
   reset
 done
+for path in scripts/slack_select.py scripts/fetch-radio.sh tests/slack_mine_test.py docs/spec/growth-loop.md builder/grow/tests/golden/case.json; do
+  case_name=$path
+  change "$path"
+  touched
+  case "$path" in
+    scripts/slack_select.py)
+      expect_step 'bash tests/crew_install_test.sh'
+      for suite in $python_suites; do expect_step "python3 tests/${suite}_test.py"; done ;;
+    scripts/fetch-radio.sh)
+      expect_step 'bash tests/fetch_radio_test.sh'
+      expect_step 'bash tests/crew_install_test.sh' ;;
+    tests/slack_mine_test.py)
+      if grep -Fx 'bash tests/crew_install_test.sh' "$tmp/out" >/dev/null; then
+        echo "ci_local_test: RED $case_name: unexpected crew installer test" >&2
+        regressions=$((regressions + 1))
+      fi ;;
+    docs/spec/*|builder/grow/tests/golden/*) expect_step 'python3 tests/growth_loop_spec_test.py' ;;
+  esac
+  reset
+done
 case_name='clean tree'
 list --tier touched --base HEAD --list
 expect_step 'bash tests/ci_local_test.sh'
@@ -263,7 +283,7 @@ if /bin/bash -c '[ "${BASH_VERSINFO[0]}" = 3 ]'; then
   echo 'ci_local_test: Bash 3.2 passed'
 fi
 # Scan the caller's sources: the disposable checkout contains inert test stubs.
-python3 -I - "$repo" <<'PY' > "$tmp/reads"
+python3 -I - "$repo" <<'PY' > "$tmp/reads" || fail 'drift guard: unresolved reads (see above)'
 import pathlib
 import re
 import subprocess
@@ -271,28 +291,44 @@ import sys
 root = pathlib.Path(sys.argv[1]).resolve()
 tracked = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z']).decode().split('\0')
 reads = set()
-skipped = 0
+unresolved = set()
+ALLOWED_UNRESOLVED = {
+    # Scratch folders in core's install tests, not repo files.
+    ('rust', 'voice-core', 'crew/ari'),
+    ('rust', 'voice-core', 'crew/mo-lee'),
+    ('rust', 'voice-core', 'crew/panels'),
+    # PROFILE.parent.parent resolves this to the sandbox helper, covered by its own case.
+    ('python', 'claude_sandbox_probe_test', 'src/sandbox.rs'),
+}
 
 def add(base, target, kind, reader):
-    global skipped
     path = (base / target.split('{', 1)[0]).resolve()
-    if root != path and root not in path.parents:
-        skipped += 1
+    if path == root:
+        return
+    if root not in path.parents:
+        unresolved.add((kind, reader, target))
         return
     if kind == 'rust':
         crate = crate_dirs[reader]
         if path == crate or crate in path.parents:
             return
     if not path.exists():
-        skipped += 1
+        unresolved.add((kind, reader, target))
         return
     if path.is_dir():
         prefix = str(path.relative_to(root)) + '/'
-        first = next((p for p in tracked if p.startswith(prefix) and (root / p).is_file()), None)
-        if first is None:
-            skipped += 1
-            return
-        path = root / first
+        # Python folder reads import or run .py files; without tracked Python, they read data.
+        files = [p for p in tracked if p.startswith(prefix) and (root / p).is_file()
+                 and not (root / p).is_symlink()]
+        if kind == 'python':
+            python_files = [p for p in files if p.endswith('.py')]
+            if python_files:
+                files = python_files
+        if not files:
+            unresolved.add((kind, reader, target))
+        for file in files:
+            reads.add((file, kind, reader))
+        return
     reads.add((str(path.relative_to(root)), kind, reader))
 
 crate_dirs = {}
@@ -331,7 +367,14 @@ for source in sorted((root / 'tests').glob('*_test.sh')):
         add(root, target, 'shell', source.stem)
 for path, kind, reader in sorted(reads):
     print(path + '\t' + kind + '\t' + reader)
-print('ci_local_test: cross-crate reads skipped (missing): ' + str(skipped), file=sys.stderr)
+for kind, reader, target in sorted(unresolved):
+    print(f'ci_local_test: unresolved {kind} {reader} {target}', file=sys.stderr)
+stale = ALLOWED_UNRESOLVED - unresolved
+for kind, reader, target in sorted(stale):
+    print(f'ci_local_test: stale allowed unresolved {kind} {reader} {target}', file=sys.stderr)
+if unresolved - ALLOWED_UNRESOLVED or stale:
+    sys.exit(1)
+print(f'ci_local_test: unresolved reads: {len(unresolved)}, all allowed', file=sys.stderr)
 PY
 rust_count=0 python_count=0 shell_count=0 full_count=0
 last_path=

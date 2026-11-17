@@ -182,12 +182,14 @@ map_path() {
     # Rust parity tests and the installer read the shared crew Python tools/fixtures.
     scripts/crew_*.py|tests/crew_*.py)
       pick voice-core; python_picked=" $python_suites "; shell_picked+='crew_install ' ;;
-    # Python suites import one another and the shared scripts.
-    scripts/*.py|tests/*.py) python_picked=" $python_suites " ;;
+    # Python suites read the scripts; the crew installer test copies scripts/.
+    scripts/*.py) python_picked=" $python_suites "; shell_picked+='crew_install ' ;;
+    # Python suites import one another; the crew installer test copies scripts/, not tests/.
+    tests/*.py) python_picked=" $python_suites " ;;
     # Rust install parity and the crew installer test consume the guided bootstrap.
     bootstrap/*) pick voice-core; shell_picked+='crew_install ' ;;
-    # The radio fetch test consumes the downloader.
-    scripts/fetch-radio.sh) shell_picked+='fetch_radio ' ;;
+    # The radio fetch test reads the downloader; the crew installer test copies scripts/.
+    scripts/fetch-radio.sh) shell_picked+='fetch_radio crew_install ' ;;
     # Each shell test exercises itself.
     tests/crew_install_test.sh) shell_picked+='crew_install ' ;;
     tests/mac_install_test.sh) shell_picked+='mac_install ' ;;
