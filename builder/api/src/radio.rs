@@ -57,7 +57,7 @@ pub mod text {
     pub const NEEDS_ADDRESS: &str =
         "Add this computer's VPN address first, so your other computers can find it.";
     pub const NOT_A_NAME: &str =
-        "Give this computer a name of 1 to 64 letters, numbers or spaces, such as Office Mac.";
+        "Give this computer a name of 1 to 64 characters, such as Office Mac, without symbols like @, #, $ or brackets.";
     pub const NOT_A_CODE: &str = "That isn't a join code. Copy the whole code from the computer that builds your assistant, then try again.";
     pub const CODE_REFUSED: &str = "The other computer turned that code down. It may be used or out of date: make a new one there, then try again.";
     pub const NOT_REACHED: &str = "Voice couldn't reach the other computer. Check that both are on the VPN and Voice is open there, then try again.";

@@ -196,7 +196,7 @@ fn join_local_refusals_send_nothing_and_write_nothing() {
             true,
             "rj1.fixture",
             "bad\nname",
-            "Give this computer a name of 1 to 64 letters, numbers or spaces, such as Office Mac.",
+            "Give this computer a name of 1 to 64 characters, such as Office Mac, without symbols like @, #, $ or brackets.",
         ),
         (
             true,
@@ -449,7 +449,7 @@ fn local_join_guards_work_without_a_running_radio() {
             true,
             "rj1.fixture",
             "bad\nname",
-            "Give this computer a name of 1 to 64 letters, numbers or spaces, such as Office Mac.",
+            "Give this computer a name of 1 to 64 characters, such as Office Mac, without symbols like @, #, $ or brackets.",
         ),
         (
             true,
