@@ -4,6 +4,7 @@ use std::io::{IsTerminal, Read, Write};
 use voice_api::{
     dto, pairing,
     radio::{Radio, install, shipped_radio, status_lines, text},
+    sending,
 };
 use voice_core::error::{Error, Result};
 use zeroize::Zeroizing;
@@ -27,6 +28,21 @@ pub enum RadioCommand {
         slug: String,
         #[arg(long)]
         name: String,
+    },
+    /// Send this computer’s read history to the computer that builds your assistant
+    Send {
+        #[arg(value_parser = checked_slug)]
+        slug: String,
+    },
+    /// Take history sent by your other computers
+    Take {
+        #[arg(value_parser = checked_slug)]
+        slug: String,
+    },
+    /// Show history sent and received by this computer
+    History {
+        #[arg(value_parser = checked_slug)]
+        slug: String,
     },
     /// Name this computer
     Name { name: String },
@@ -81,6 +97,21 @@ fn invite_lines(invite: &dto::Invite) -> Vec<String> {
         lines.push(text::recovery(path));
     }
     lines
+}
+
+fn shown_time(at: f64) -> String {
+    local_time(at).unwrap_or_else(|| "unknown time".into())
+}
+
+fn print_computers(computers: &[dto::SentFrom]) {
+    for computer in computers {
+        println!(
+            "{}: {} records, last {}",
+            computer.name,
+            computer.records,
+            shown_time(computer.at)
+        );
+    }
 }
 
 static SAVED_TERMINAL: std::sync::atomic::AtomicPtr<libc::termios> =
@@ -234,6 +265,34 @@ pub fn run(command: RadioCommand) -> Result<std::process::ExitCode> {
             let code = read_code()?;
             let joined = pairing::join(&home, &slug, &code, &name).map_err(failure)?;
             println!("This computer joined as {}.", joined.computer_name);
+        }
+        RadioCommand::Send { slug } => {
+            let sent = sending::send_history(&home, &slug).map_err(failure)?;
+            println!("Sent this computer's history to {}.", sent.to);
+        }
+        RadioCommand::Take { slug } => {
+            let taken = sending::take_deliveries(&home, &slug).map_err(failure)?;
+            println!("Took {} deliveries.", taken.taken);
+            print_computers(&taken.computers);
+            if taken.refused > 0 {
+                println!(
+                    "Left out {} files that weren't Voice's history.",
+                    taken.refused
+                );
+            }
+        }
+        RadioCommand::History { slug } => {
+            let status = sending::history_status(&home, &slug).map_err(failure)?;
+            if status.pending {
+                println!("This computer's history is waiting to be sent.");
+            }
+            if let Some(sent) = &status.last_sent {
+                println!("Last sent to {}, at {}.", sent.to, shown_time(sent.at));
+            }
+            print_computers(&status.computers);
+            if !status.pending && status.last_sent.is_none() && status.computers.is_empty() {
+                println!("No history has been sent or received yet.");
+            }
         }
         RadioCommand::Name { name } => {
             pairing::name(&home, &name).map_err(failure)?;

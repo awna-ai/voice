@@ -1,3 +1,6 @@
+import type { Sent } from '../types/generated/Sent'
+import type { Taken } from '../types/generated/Taken'
+import type { HistoryStatus } from '../types/generated/HistoryStatus'
 import type { LinkAddress } from '../types/generated/LinkAddress'
 import type { Invite } from '../types/generated/Invite'
 import type { Joined } from '../types/generated/Joined'
@@ -128,6 +131,9 @@ export const tauriBackend: Backend = {
   radioInvite: request => invoke<Invite>('radio_invite', { request }),
   radioJoin: request => invoke<Joined>('radio_join', { request }),
   radioName: request => invoke<void>('radio_name', { request }),
+  radioSendHistory: request => invoke<Sent>('radio_send_history', { request }),
+  radioTakeDeliveries: request => invoke<Taken>('radio_take_deliveries', { request }),
+  radioHistoryStatus: request => invoke<HistoryStatus>('radio_history_status', { request }),
   claudeCodeFolders: request => invoke<ClaudeCodeFolders>('claude_code_folders', { request }),
   readClaudeCode: (request, onProgress) => {
     const channel = new Channel<ReadProgress>()

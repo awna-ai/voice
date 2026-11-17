@@ -1,3 +1,6 @@
+import type { Sent } from './types/generated/Sent'
+import type { Taken } from './types/generated/Taken'
+import type { HistoryStatus } from './types/generated/HistoryStatus'
 import type { LinkAddress } from './types/generated/LinkAddress'
 import type { Invite } from './types/generated/Invite'
 import type { Joined } from './types/generated/Joined'
@@ -148,6 +151,9 @@ export interface Backend {
   radioInvite(request: SlugRequest): Promise<Invite>
   radioJoin(request: RadioJoinRequest): Promise<Joined>
   radioName(request: RadioNameRequest): Promise<void>
+  radioSendHistory(request: SlugRequest): Promise<Sent>
+  radioTakeDeliveries(request: SlugRequest): Promise<Taken>
+  radioHistoryStatus(request: SlugRequest): Promise<HistoryStatus>
   claudeCodeFolders(request: SlugRequest): Promise<ClaudeCodeFolders>
   readClaudeCode(request: ReadRequest, onProgress: (progress: ReadProgress) => void): Promise<ReadCounts>
   chooseClaudeaiExport(request: ChooseExportRequest): Promise<ExportStatus | null>

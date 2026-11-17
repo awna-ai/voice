@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-radio-send-history"
+description = "Enables the radio_send_history command without any pre-configured scope."
+commands.allow = ["radio_send_history"]
+
+[[permission]]
+identifier = "deny-radio-send-history"
+description = "Denies the radio_send_history command without any pre-configured scope."
+commands.deny = ["radio_send_history"]

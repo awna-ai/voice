@@ -1,5 +1,36 @@
 # Decisions: voice
 
+## 2026-11-17: sending history to the build computer (PB8.9e1)
+
+1. The build computer is the fleet's one accepted founder (no `invited_by`); send by its id.
+   No founder or multiple founders refuses the send.
+2. Only this computer's already filtered `decisions-claude-code.jsonl` travels.
+3. One private `pending-send.jsonl` replaces any older pending copy before sending. Keep it on
+   failure; remove it only after Radio answers with the sent size.
+4. Names are `history-<Unix nanoseconds>-<process id>.jsonl`, decimal, with no random source.
+   Taking accepts only `^history-[0-9]{1,20}-[0-9]{1,10}\.jsonl$`; a name collision means busy.
+5. Use the authenticated delivery key's first 16 hex characters in `decisions-from-<peer>.jsonl`.
+   Keep the computer's supplied name for status only, never a path.
+6. Preserve every existing record; add new string ids once, re-run the member's filters through
+   `privacy::privacy` (as `corpus::merge` does), and sort by timestamp and id. A shorter read
+   never shrinks the computer's history.
+7. Page Radio deliveries after the saved cursor, 500 at a time until empty. Open only real files
+   without following links, at most 64 MiB. Merge, delete, then save the cursor and computer's
+   count. Refused files are deleted and passed; missing files are skipped. Repeating is harmless.
+8. Status lives privately in `last-sent.json` (`at`, `to`) and `deliveries-taken.json` (`after`,
+   `computers` keyed by authenticated key, with `name`, `at`, `records`). These are 0600.
+   Historical status has no saved byte count, so `HistoryStatus.lastSent.bytes` is zero.
+   Export byte and record counts as TypeScript numbers, matching the JSON bridge.
+9. Forget already removes the entire state folder recursively, including pending copies, both
+   status files, received histories and the delivery folder; no new deletion list is needed.
+10. Raw history stays in the assistant's state folder and travels only from a member computer to
+    the build computer over Radio's link (plan D-1), landing in that computer's state folder.
+    Nothing else of it leaves the computer.
+
+Send and take use the existing assistant state lock to prevent overlapping writes. A local status
+read makes no Radio call. The CLI shows pending sends, the last destination and time, and received
+computer counts; the exact status sentences were not prescribed by the brief.
+
 ## 2026-11-17: adding another computer (PB8.9d1)
 
 - Setting this computer's VPN address replaces the existing address of the same family;

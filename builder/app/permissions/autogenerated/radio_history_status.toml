@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-radio-history-status"
+description = "Enables the radio_history_status command without any pre-configured scope."
+commands.allow = ["radio_history_status"]
+
+[[permission]]
+identifier = "deny-radio-history-status"
+description = "Denies the radio_history_status command without any pre-configured scope."
+commands.deny = ["radio_history_status"]

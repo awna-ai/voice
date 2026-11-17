@@ -1156,3 +1156,41 @@ impl std::fmt::Debug for RadioJoinRequest {
             .finish()
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Sent {
+    pub to: String,
+    pub at: f64,
+    #[ts(type = "number")]
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SentFrom {
+    pub name: String,
+    pub at: f64,
+    #[ts(type = "number")]
+    pub records: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Taken {
+    pub taken: u32,
+    pub refused: u32,
+    pub computers: Vec<SentFrom>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HistoryStatus {
+    pub pending: bool,
+    pub last_sent: Option<Sent>,
+    pub computers: Vec<SentFrom>,
+}

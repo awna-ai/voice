@@ -33,6 +33,12 @@ const LINK_OPS: &[&str] = &[
 ];
 
 pub mod text {
+    pub const CANT_FIND_BUILDER: &str = "Voice can't tell which of your computers builds this assistant. Link this computer again with a new join code from that computer.";
+    pub const NOT_REACHED_BUILDER: &str = "Voice couldn't reach the computer that builds this assistant. Check that both are on the VPN and Voice is open there. This computer sends it again next time.";
+    pub const BUILDER_NOT_READY: &str = "The computer that builds this assistant isn't ready to take history yet. Make a join code there once, then try again.";
+    pub const BUSY_BUILDER: &str =
+        "The computer that builds this assistant is busy. Try again in a moment.";
+
     pub const NO_COPY: &str =
         "Voice can't find its copy of Radio. Install Voice again with install.sh, then try again.";
     pub const COPY_UNSAFE: &str = "Another user could change Voice's copy of Radio, so Voice won't run it. Install Voice again with install.sh, then try again.";
@@ -399,14 +405,25 @@ impl Radio {
 
     /// Sends one file to Voice on another computer of the fleet; answers the bytes sent.
     pub fn send(&self, computer: &str, name: &str, file: &Path) -> Result<u64> {
-        self.ask(Request::Send {
-            app: APP.into(),
-            computer: computer.into(),
-            name: name.into(),
-            file: plain_path(file)?,
-        })?
-        .size
-        .ok_or_else(no_answer)
+        self.send_phrase(computer, name, file)
+            .map_err(AskError::sentence)
+    }
+
+    pub(crate) fn send_phrase(
+        &self,
+        computer: &str,
+        name: &str,
+        file: &Path,
+    ) -> std::result::Result<u64, AskError> {
+        Ok(self
+            .ask_phrase(Request::Send {
+                app: APP.into(),
+                computer: computer.into(),
+                name: name.into(),
+                file: plain_path(file)?,
+            })?
+            .size
+            .ok_or_else(no_answer)?)
     }
 
     /// Names the folder Radio makes for Voice's arrivals on this computer.

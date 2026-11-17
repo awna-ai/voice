@@ -377,6 +377,50 @@ pub fn remove_private(home: &Path, slug: &str, name: &str) -> Result<bool> {
     }
 }
 
+/// Remove one plain entry in a private subfolder without following links, including directory entries.
+pub fn remove_private_entry_at(home: &Path, slug: &str, folder: &str, name: &str) -> Result<bool> {
+    validate_folder_name(name)?;
+    if name.is_empty() {
+        return Err(Error::Invalid("not a file name".into()));
+    }
+    let (directory, path) = match place_directory(home, slug, Some(folder), false) {
+        Ok(found) => found,
+        Err(Error::Io { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    let target = CString::new(name).expect("validated entry name");
+    remove_entry(&directory, &target, &path.join(name))
+}
+
+fn remove_entry(directory: &OwnedFd, target: &CStr, path: &Path) -> Result<bool> {
+    // SAFETY: the descriptor is live, target is one terminated component; unlink follows no link.
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), target.as_ptr(), 0) } == 0 {
+        return Ok(true);
+    }
+    let source = std::io::Error::last_os_error();
+    if source.kind() == std::io::ErrorKind::NotFound {
+        return Ok(false);
+    }
+    if !matches!(source.raw_os_error(), Some(libc::EISDIR | libc::EPERM)) {
+        return Err(io(path, source));
+    }
+    let child = open_directory(directory, target, path, false, DIRECTORY_FLAGS)?;
+    let folder =
+        crate::folder::Folder::from_file(File::from(child.try_clone().map_err(|e| io(path, e))?));
+    for name in folder.names().map_err(|e| io(path, e))? {
+        let part = std::ffi::OsStr::from_bytes(name.to_bytes());
+        remove_entry(&child, &name, &path.join(part))?;
+    }
+    // SAFETY: remove only this directory entry; AT_REMOVEDIR never follows a replaced symlink.
+    if unsafe { libc::unlinkat(directory.as_raw_fd(), target.as_ptr(), libc::AT_REMOVEDIR) } == 0 {
+        Ok(true)
+    } else {
+        Err(io(path, std::io::Error::last_os_error()))
+    }
+}
+
 /// Read a corpus or review file from the private state folder.
 pub fn read_private(home: &Path, slug: &str, name: &str) -> Result<Vec<u8>> {
     read_private_at(home, slug, None, name)

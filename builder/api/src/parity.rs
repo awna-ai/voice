@@ -121,6 +121,18 @@ pub const PARITY: &[Parity] = &[
         cli: &[&["radio", "name"]],
     },
     Parity {
+        app: "radio_send_history",
+        cli: &[&["radio", "send"]],
+    },
+    Parity {
+        app: "radio_take_deliveries",
+        cli: &[&["radio", "take"]],
+    },
+    Parity {
+        app: "radio_history_status",
+        cli: &[&["radio", "history"]],
+    },
+    Parity {
         app: "claude_code_folders",
         cli: &[&["folders"]],
     },
@@ -318,6 +330,9 @@ mod tests {
             ("radio_invite", "invite"),
             ("radio_join", "join"),
             ("radio_name", "name"),
+            ("radio_send_history", "send"),
+            ("radio_take_deliveries", "take"),
+            ("radio_history_status", "history"),
         ] {
             let row = PARITY.iter().find(|row| row.app == app);
             assert!(row.is_some(), "{app} must have CLI parity");

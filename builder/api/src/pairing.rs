@@ -12,14 +12,14 @@ use voice_core::{error::Error, member};
 use voice_save::record::{self, Role, SaveRecord};
 type Result<T> = std::result::Result<T, dto::Failure>;
 
-fn radio_error(error: Error) -> dto::Failure {
+pub(crate) fn radio_error(error: Error) -> dto::Failure {
     // Radio's errors are already fixed sentences, including its screened refusal phrases.
     match error {
         Error::Invalid(sentence) => failure(&sentence),
         _ => failure(text::NO_ANSWER),
     }
 }
-fn phrase_error(error: AskError) -> dto::Failure {
+pub(crate) fn phrase_error(error: AskError) -> dto::Failure {
     radio_error(error.sentence())
 }
 fn addresses(answer: radio::LinkAddresses) -> dto::LinkAddress {
@@ -88,7 +88,10 @@ fn replace_address(radio: &Radio, address: IpAddr) -> Result<dto::LinkAddress> {
         .map(addresses)
         .map_err(radio_error)
 }
-fn assistant(home: &Path, slug: &str) -> Result<(member::Member, PathBuf, Option<SaveRecord>)> {
+pub(crate) fn assistant(
+    home: &Path,
+    slug: &str,
+) -> Result<(member::Member, PathBuf, Option<SaveRecord>)> {
     let assistant = listed(home, slug)?.member;
     let state = member::private_state_dir(&assistant, home)
         .ok_or_else(|| failure(crate::history::ELSEWHERE))?;
@@ -96,7 +99,7 @@ fn assistant(home: &Path, slug: &str) -> Result<(member::Member, PathBuf, Option
         record::read_record(&state).map_err(|_| failure(crate::save::OPEN_SAVED_FAILED))?;
     Ok((assistant, state, record))
 }
-fn ready(home: &Path, radio: &Radio) -> Result<()> {
+pub(crate) fn ready(home: &Path, radio: &Radio) -> Result<()> {
     match radio.hello() {
         Ok(_) => Ok(()),
         Err(Error::Invalid(sentence)) if sentence == text::NOT_RUNNING => {
@@ -106,7 +109,7 @@ fn ready(home: &Path, radio: &Radio) -> Result<()> {
         Err(error) => Err(radio_error(error)),
     }
 }
-fn register(home: &Path, radio: &Radio) -> Result<dto::LinkAddress> {
+pub(crate) fn register(home: &Path, radio: &Radio) -> Result<dto::LinkAddress> {
     ready(home, radio)?;
     let address = radio
         .link_address_list()

@@ -176,6 +176,27 @@ pub fn radio_name(
 }
 
 #[tauri::command(async)]
+pub fn radio_send_history(
+    request: voice_api::dto::SlugRequest,
+) -> Result<voice_api::dto::Sent, voice_api::dto::Failure> {
+    voice_api::radio_send_history(request)
+}
+
+#[tauri::command(async)]
+pub fn radio_take_deliveries(
+    request: voice_api::dto::SlugRequest,
+) -> Result<voice_api::dto::Taken, voice_api::dto::Failure> {
+    voice_api::radio_take_deliveries(request)
+}
+
+#[tauri::command(async)]
+pub fn radio_history_status(
+    request: voice_api::dto::SlugRequest,
+) -> Result<voice_api::dto::HistoryStatus, voice_api::dto::Failure> {
+    voice_api::radio_history_status(request)
+}
+
+#[tauri::command(async)]
 pub fn claude_code_folders(
     request: voice_api::dto::SlugRequest,
 ) -> Result<voice_api::dto::ClaudeCodeFolders, voice_api::dto::Failure> {

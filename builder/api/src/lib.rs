@@ -52,3 +52,6 @@ pub mod pairing;
 pub use pairing::{
     radio_invite, radio_join, radio_link_address, radio_name, radio_set_link_address,
 };
+
+pub mod sending;
+pub use sending::{radio_history_status, radio_send_history, radio_take_deliveries};
