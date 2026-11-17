@@ -39,11 +39,16 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
   score --answers a.jsonl --labels labels.json --predictions p.json [--json]
       Accuracy per confidence tier and per category, against the baseline of always taking
       the recommended option. Every held-out question needs a prediction.
+  where [--cwd DIR] [--json]
+      The cwd compartment, or all without config; fenced folders exit 4.
+  folders [--projects DIR] [--json]
+      Inventory transcript folders without opening fenced folders.
   similar [--corpus decisions.jsonl] (--query TEXT | --stdin) [--k 6] [--json]
+          [--compartment NAME|all|auto] [--cwd DIR]
       Past answers closest to a new question (shared rare words), training split only, so
       a backtest never sees the answers it is scored on.
   record [--log live.jsonl] (--work PATH --kind decided|escalated --category C --tier high|medium|low
-         --question Q --<member>-pick P [--rule R] [--<principal>-answer A] | --stdin)
+         --question Q --<member>-pick P [--rule R] [--<principal>-answer A] | --stdin) [--cwd DIR]
       --stdin reads the texts as one JSON object, so the shell never reads them.
       Appends one live decision: what the member decided alone, or escalated with their lean.
   pending [--projects DIR] [--queues DIR] [--seen FILE] [--since-hours 24] [--exclude ID]
@@ -92,6 +97,156 @@ class Failed(Exception):
     pass
 
 
+class Fenced(Failed):
+    pass
+
+
+class CompartmentConfigError(Failed):
+    pass
+
+
+def encode(path):
+    return re.sub(r"[^A-Za-z0-9]", "-", str(Path(path).expanduser()))
+
+
+def check_compartments(c):
+    def fail(key):
+        raise CompartmentConfigError(f"compartments: invalid {key}")
+
+    def keys(value, allowed, key):
+        if not isinstance(value, dict):
+            fail(key)
+        for unknown in value.keys() - allowed:
+            fail(key + "." + unknown)
+
+    def path(value, key):
+        if not isinstance(value, str) or not value.startswith(("/", "~/")):
+            fail(key)
+
+    keys(c, {"version", "fenced", "compartments", "hub"}, "config")
+    if type(c.get("version")) is not int or c["version"] != 1:
+        fail("version")
+    if not isinstance(c.get("fenced"), list):
+        fail("fenced")
+    for value in c["fenced"]:
+        path(value, "fenced")
+    if not isinstance(c.get("compartments"), dict):
+        fail("compartments")
+    reserved = {"all", "auto", "fenced", "hub-mixed", "excluded"}
+    for name, entry in c["compartments"].items():
+        key = "compartments." + name
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}", name) or name in reserved:
+            fail(key)
+        keys(entry, {"folders"}, key)
+        if not isinstance(entry.get("folders"), list):
+            fail(key + ".folders")
+        for value in entry["folders"]:
+            path(value, key + ".folders")
+    if "hub" in c:
+        hub = c["hub"]
+        keys(hub, {"paths", "routes"}, "hub")
+        if not isinstance(hub.get("paths"), list) or not hub["paths"]:
+            fail("hub.paths")
+        for value in hub["paths"]:
+            path(value, "hub.paths")
+        if not isinstance(hub.get("routes"), dict):
+            fail("hub.routes")
+        for name, target in hub["routes"].items():
+            if not name or "/" in name or name in (".", "..") or not isinstance(target, str) or target not in c["compartments"]:
+                fail("hub.routes." + name)
+    return c
+
+
+def read_compartments(value, base):
+    if not isinstance(value, str) or not value:
+        raise CompartmentConfigError("compartments: expected a file path")
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = base / path
+    try:
+        return check_compartments(json.loads(path.read_text()))
+    except (OSError, ValueError):
+        raise CompartmentConfigError("compartments: cannot read JSON file")
+
+
+def declared_folders(c):
+    return [(name, Path(folder).expanduser()) for name, entry in c["compartments"].items()
+            for folder in entry["folders"]]
+
+
+def under(path, root):
+    return path.parts[:len(root.parts)] == root.parts
+
+
+def path_forms(path, cwd):
+    path = Path(path).expanduser()
+    if not path.is_absolute():
+        path = Path(cwd).expanduser() / path
+    return (Path(os.path.abspath(path)), Path(os.path.realpath(path)))
+
+
+def folder_compartment(c, folder_name):
+    if any(encode(f) in folder_name for f in c["fenced"]):
+        return "fenced"
+    name = re.sub(r"--claude-worktrees-.*", "", folder_name)
+    matches = [(len(encode(folder)), compartment) for compartment, folder in declared_folders(c)
+               if name == encode(folder) or name.startswith(encode(folder) + "-")]
+    return max(matches)[1] if matches else "p:" + project_name(folder_name)
+
+
+def path_compartment(c, path, cwd):
+    forms = path_forms(path, cwd)
+    for fenced in c["fenced"]:
+        roots = path_forms(fenced, cwd)
+        if any(under(form, root) or encode(root) in encode(form) for form in forms for root in roots):
+            return "fenced"
+    hub = c.get("hub")
+    if hub:
+        for hub_path in hub["paths"]:
+            for form in forms:
+                for root in path_forms(hub_path, cwd):
+                    if under(form, root) and len(form.parts) > len(root.parts):
+                        project = form.parts[len(root.parts)]
+                        return hub["routes"].get(project, "p:" + project)
+    matches = [(len(root.parts), compartment) for compartment, folder in declared_folders(c)
+               for root in path_forms(folder, cwd) if any(under(form, root) for form in forms)]
+    if matches:
+        return max(matches)[1]
+    directory = forms[0] if forms[0].is_dir() else forms[0].parent
+    for ancestor in (directory, *directory.parents):
+        if os.path.lexists(ancestor / ".git"):
+            base = str(ancestor).split("/.claude/worktrees/", 1)[0]
+            return "p:" + project_name(encode(base))
+    return "p:" + project_name(encode(directory))
+
+
+def record_compartment(c, record):
+    if "compartment" in record:
+        return record["compartment"]
+    project = record["project"]
+    def matches(folder):
+        prefix = project_name(encode(folder))
+        return project == prefix or project.startswith(prefix + "-")
+    if any(matches(f) for f in c["fenced"]):
+        return "fenced"
+    found = [(len(project_name(encode(folder))), name) for name, folder in declared_folders(c) if matches(folder)]
+    return max(found)[1] if found else "p:" + project
+
+
+def cwd_of(args):
+    return getattr(args, "cwd", None) or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+
+
+def resolve_compartment(m, compartment="auto", cwd=None):
+    if m.compartments is None:
+        return "all" if compartment == "auto" else compartment
+    name = path_compartment(m.compartments, cwd or os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+                            os.getcwd()) if compartment == "auto" else compartment
+    if name == "fenced":
+        raise Fenced("refusing: this folder is fenced")
+    return name
+
+
 @dataclass(frozen=True)
 class Member:
     """One crew member's config, compiled once: the filters, the gate mark and the derived names."""
@@ -111,6 +266,7 @@ class Member:
     codebook: dict
     principal_subject: str
     sources: object
+    compartments: object = None
 
     @property
     def pick_field(self):
@@ -155,6 +311,12 @@ def load_member(config):
     word = re.escape(config["mark_word"])
     # Gate labels use (Recommended), (Recommended · <Name>), or (<Name>).
     mark = re.compile(rf"\s*\(\s*(recommended|{word})(?:\s*[·•/+,&-]\s*(recommended|{word}))?\s*\)", re.I)
+    compartments = None
+    if "compartments" in config:
+        value = config["compartments"]
+        if isinstance(value, str) and not value.startswith(("/", "~/")):
+            raise Failed("compartments: a path given to load_member must be absolute or start with ~/")
+        compartments = read_compartments(value, Path.cwd()) if isinstance(value, str) else check_compartments(value)
     return Member(name=config["name"], slug=config["slug"], principal=config["principal"],
                   principal_slug=config["principal_slug"], state_dir=Path(config["state_dir"]).expanduser(),
                   mark_word=config["mark_word"],
@@ -165,7 +327,8 @@ def load_member(config):
                   queue_answerer=config.get("queue_answerer"),
                   codebook=config.get("codebook") or {},
                   principal_subject=config.get("principal_pronouns", "they/them").split("/")[0],
-                  sources=config.get("sources"))
+                  sources=config.get("sources"),
+                  compartments=compartments)
 
 
 def read_json(path):
@@ -185,6 +348,8 @@ def read_member(path):
         raise Failed(f"member config: {path.name}: sources belong in private.json, never in a committed file")
     private = path.with_name("private.json")
     if not private.is_file():
+        if "compartments" in config:
+            config["compartments"] = read_compartments(config["compartments"], path.parent)
         return config
     extra = read_json(private)
     validate_config(extra, private)
@@ -200,6 +365,8 @@ def read_member(path):
         else:
             filters[key] = value
     merged["filters"] = filters
+    if "compartments" in merged:
+        merged["compartments"] = read_compartments(merged["compartments"], path.parent)
     return merged
 
 
@@ -350,9 +517,9 @@ def read_session(path):
     return records
 
 
-def harvest(m, path, project):
+def harvest(m, path, project, records=None):
     harvested, context = [], ""
-    for r in read_session(path):
+    for r in read_session(path) if records is None else records:
         if r.get("type") == "assistant":
             context = assistant_text(r).strip() or context
         if r.get("type") != "user" or not r.get("timestamp"):
@@ -441,16 +608,115 @@ def read_jsonl(path):
     return [json.loads(line) for line in Path(path).read_text().split("\n") if line.strip()]
 
 
+def transcript_root(m, path):
+    root = Path(path).expanduser()
+    if m.compartments is not None and path_compartment(m.compartments, root, os.getcwd()) == "fenced":
+        raise Fenced("refusing: fenced")
+    return root
+
+
+def transcript_compartment(m, folder):
+    if m.compartments is None:
+        return None
+    name = folder_compartment(m.compartments, folder.name)
+    if name == "fenced" or path_compartment(m.compartments, folder, os.getcwd()) == "fenced":
+        return "fenced"
+    return name
+
+
+def hub_compartment(c, compartment, records):
+    hub = c.get("hub")
+    if not hub:
+        return compartment
+    owners = {path_compartment(c, Path(path).expanduser().parent, os.getcwd()) for path in hub["paths"]}
+    if compartment not in owners:
+        return compartment
+    home = str(Path.home())
+    forms = set()
+    for path in hub["paths"]:
+        absolute = str(Path(path).expanduser())
+        forms.add(absolute)
+        if absolute.startswith(home + "/"):
+            forms.add("~" + absolute[len(home):])
+    pattern = re.compile(r"(?:" + "|".join(re.escape(p) for p in sorted(forms)) + r")/([^/\s\"']+)(?=/|$)")
+    routes = set()
+    for record in records:
+        if record.get("type") != "assistant":
+            continue
+        content = record.get("message", {}).get("content", [])
+        for block in content if isinstance(content, list) else []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            for _, value, is_key in string_paths(block.get("input", {})):
+                if is_key:
+                    continue
+                for project in pattern.findall(value):
+                    routes.add(hub["routes"].get(project, "p:" + project))
+    routes.discard(compartment)
+    return "hub-mixed" if len(routes) > 1 else next(iter(routes), compartment)
+
+
+def overlaps_fenced(m, root):
+    if m.compartments is None:
+        return False
+    c = m.compartments
+    forms = path_forms(root, os.getcwd())
+    return path_compartment(c, root, os.getcwd()) == "fenced" or any(
+        under(fenced, form) for path in c["fenced"] for fenced in path_forms(path, os.getcwd()) for form in forms)
+
+
+def refuse_fenced_root(m, root):
+    if overlaps_fenced(m, root):
+        raise Failed("refusing: folder root overlaps fenced paths")
+
+
+def queue_files(m, queues):
+    root = Path(queues).expanduser()
+    if m.compartments is None:
+        yield from sorted(root.glob("*/queue.md"))
+        return
+    if path_compartment(m.compartments, root, os.getcwd()) == "fenced":
+        return
+    for folder in sorted(root.iterdir()):
+        path = folder / "queue.md"
+        if path_compartment(m.compartments, path, os.getcwd()) != "fenced" and path.is_file():
+            yield path
+
+
+def queue_compartment(m, queues, path):
+    if m.compartments is None:
+        return {}
+    hub = m.compartments.get("hub")
+    if hub and any(os.path.realpath(Path(queues).expanduser()) == os.path.realpath(Path(root).expanduser())
+                   for root in hub["paths"]):
+        name = hub["routes"].get(path.parent.name, "p:" + path.parent.name)
+    else:
+        name = path_compartment(m.compartments, path, os.getcwd())
+    return {"compartment": name}
+
+
 def cmd_mine(m, args):
-    root = Path(args.projects).expanduser()
-    kept, excluded, dropped = [], 0, Counter()
-    for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+    root = transcript_root(m, args.projects)
+    kept, excluded, dropped, fenced = [], 0, Counter(), 0
+    for folder in sorted(root.iterdir()):
+        compartment = transcript_compartment(m, folder)
+        if compartment == "fenced":
+            fenced += 1
+            continue
+        if not folder.is_dir():
+            continue
         if m.excluded.search(folder.name):
             excluded += 1
             continue
         project = project_name(folder.name)
         for path in sorted(folder.glob("*.jsonl")):
-            for h in harvest(m, path, project):
+            if m.compartments is not None and path_compartment(m.compartments, path, os.getcwd()) == "fenced":
+                continue
+            records = read_session(path)
+            session_compartment = hub_compartment(m.compartments, compartment, records) if m.compartments is not None else None
+            for h in harvest(m, path, project, records):
+                if m.compartments is not None:
+                    h["compartment"] = session_compartment
                 reason = privacy(m, h)
                 if reason:
                     dropped[reason] += 1
@@ -465,7 +731,7 @@ def cmd_mine(m, args):
     print(f"mined {len(questions)} questions ({held} held out) and {len(kept) - len(questions)} messages, "
           f"{span}; held out from {cutoff or 'nothing'}")
     print(f"dropped {excluded} excluded folders, {dropped['personal']} personal records, "
-          f"{dropped['secret']} secret records")
+          f"{dropped['secret']} secret records" + (f", {fenced} fenced folders" if m.compartments is not None else ""))
     return 0
 
 
@@ -687,9 +953,21 @@ def stdin_object(usage_error, required, optional=()):
     return values
 
 
+def cmd_where(m, args):
+    name = path_compartment(m.compartments, cwd_of(args), os.getcwd()) if m.compartments is not None else "all"
+    print(json.dumps({"compartment": name, "fenced": name == "fenced"}) if args.json else name)
+    return 4 if name == "fenced" else 0
+
+
 def cmd_similar(m, args):
+    compartment = resolve_compartment(m, args.compartment, cwd_of(args))
     query = stdin_object(args.usage_error, ("query",))["query"] if args.stdin else args.query
-    hits = similar(m, read_jsonl(args.corpus or m.state("decisions.jsonl")), query, args.k)
+    corpus = read_jsonl(args.corpus or m.state("decisions.jsonl"))
+    if m.compartments is not None:
+        corpus = [r for r in corpus if record_compartment(m.compartments, r) != "fenced" and
+                  (compartment == "all" or (compartment != "hub-mixed" and
+                   record_compartment(m.compartments, r) == compartment))]
+    hits = similar(m, corpus, query, args.k)
     if args.json:
         print(json.dumps(hits, indent=2, ensure_ascii=False))
         return 0
@@ -704,6 +982,8 @@ def cmd_similar(m, args):
 
 
 def cmd_record(m, args):
+    if m.compartments is not None and path_compartment(m.compartments, cwd_of(args), os.getcwd()) == "fenced":
+        raise Fenced("refusing: fenced")
     if args.stdin:
         text_dests = [dest for dest, _ in args.record_required] + ["rule", "principal_answer"]
         if any(getattr(args, dest) is not None for dest in text_dests):
@@ -721,9 +1001,16 @@ def cmd_record(m, args):
         values = {"work": args.work, "kind": args.kind, "category": args.category, "tier": args.tier,
                   "question": args.question, "pick": args.member_pick, "rule": args.rule,
                   "answer": args.principal_answer}
+    compartment = None
+    if m.compartments is not None:
+        compartment = path_compartment(m.compartments, values["work"], cwd_of(args))
+        if compartment == "fenced":
+            raise Fenced("refusing: fenced")
     line = {"timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "work": values["work"],
             "kind": values["kind"], "category": values["category"], "tier": values["tier"], "question": values["question"],
             m.pick_field: values["pick"], "rule": values.get("rule"), m.answer_field: values.get("answer")}
+    if m.compartments is not None:
+        line["compartment"] = compartment
     log = Path(args.log or m.state("live.jsonl")).expanduser()
     previous = log.read_text() if log.exists() else ""
     private_write(log, previous + json.dumps(line, ensure_ascii=False) + "\n")
@@ -818,7 +1105,7 @@ def open_control_qs(m, queues):
     """Questions waiting in a queue file: keys whose newest header is a question.
     Read the last 512 KiB (QUEUE_TAIL_BYTES)."""
     found = []
-    for path in sorted(Path(queues).glob("*/queue.md")):
+    for path in queue_files(m, queues):
         data = path.read_bytes()
         tail = data[-QUEUE_TAIL_BYTES:]
         first = data[:len(data) - len(tail)].count(b"\n") + 1
@@ -837,7 +1124,7 @@ def open_control_qs(m, queues):
                 options = [match.group(1) for row in (body["body"] or "").splitlines()
                            if (match := re.match(r"^\s*[a-z]\)\s+(.*)$", row))]
                 found.append({"kind": "control-q", "project": path.parent.name, "key": key, "line": n,
-                              "question": line, "options": options, **body})
+                              "question": line, "options": options, **body, **queue_compartment(m, queues, path)})
     return found
 
 
@@ -849,7 +1136,7 @@ def answered_escalations(m, queues):
     found = []
     if not m.queue_answerer:
         return found
-    for path in sorted(Path(queues).glob("*/queue.md")):
+    for path in queue_files(m, queues):
         data = path.read_bytes()
         tail = data[-QUEUE_TAIL_BYTES:]
         first = data[:len(data) - len(tail)].count(b"\n") + 1
@@ -875,7 +1162,7 @@ def answered_escalations(m, queues):
                     continue
                 answers[key] = {"kind": "control-a", "project": path.parent.name, "key": key,
                                 "line": n, "answer": line.strip(), "session": sessions[key],
-                                **control_body(m, lines, n - first)}
+                                **control_body(m, lines, n - first), **queue_compartment(m, queues, path)}
         found.extend(answers.values())
     return found
 
@@ -884,11 +1171,16 @@ def cmd_pending(m, args):
     seen_path = Path(args.seen or m.state("autonomous/seen.json")).expanduser()
     seen = set(json.loads(seen_path.read_text())) if seen_path.exists() else set()
     cutoff = datetime.now(timezone.utc).timestamp() - args.since_hours * 3600
-    items, projects = [], Path(args.projects).expanduser()
+    items, projects = [], transcript_root(m, args.projects)
     for folder in sorted(projects.iterdir()) if projects.is_dir() else []:
+        compartment = transcript_compartment(m, folder)
+        if compartment == "fenced":
+            continue
         if not folder.is_dir() or m.excluded.search(folder.name):
             continue
         for path in sorted(folder.glob("*.jsonl")):
+            if m.compartments is not None and path_compartment(m.compartments, path, os.getcwd()) == "fenced":
+                continue
             if path.stem in args.exclude or path.stat().st_mtime < cutoff:
                 continue
             records = read_session(path)
@@ -897,9 +1189,11 @@ def cmd_pending(m, args):
                 if m.personal.search(text) or m.secret.search(text):
                     continue
                 items.append({**a, "session": path.stem, "project": project_name(folder.name),
-                              "id": f"{path.stem}:{a['tool_id']}"})
+                              "id": f"{path.stem}:{a['tool_id']}",
+                              **({"compartment": compartment} if m.compartments is not None else {})})
     queues = args.queues or m.queues
-    if queues and Path(queues).expanduser().is_dir():
+    if queues and (m.compartments is None or
+                   path_compartment(m.compartments, queues, os.getcwd()) != "fenced") and Path(queues).expanduser().is_dir():
         items += [{**q, "id": f"{q['project']}:{q['key']}:{q['line']}"}
                   for q in open_control_qs(m, Path(queues).expanduser())]
         items += [{**a, "id": f"{a['project']}:{a['key']}:A:{a['line']}"}
@@ -1185,6 +1479,7 @@ def document_roots(m, args):
     roots = []
     if args.dir:
         root = Path(args.dir).expanduser()
+        refuse_fenced_root(m, root)
         if root.is_symlink() or not root.is_dir():
             raise Failed("documents: dir must be a directory, not a symlink")
         roots.append((root, "", None))
@@ -1200,7 +1495,7 @@ def document_roots(m, args):
             if rows is None:
                 print(f"{name}: no review yet (sources review --name {name})")
                 continue
-            root = folder_root(source)
+            root = folder_root(m, source)
             covered = set(folder_files(m, source, root, Counter()))
         except OSError as exc:
             raise Failed(f"{name}: cannot read the source ({exc.strerror or 'unreadable'})")
@@ -1427,16 +1722,31 @@ def cmd_merge(m, args):
 
 
 def cmd_folders(m, args):
-    root = Path(args.projects).expanduser()
-    totals = {"mined": [0, 0], "excluded": [0, 0]}
-    for folder in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: (project_name(p.name), p.name)):
-        state = "excluded" if m.excluded.search(folder.name) else "mined"
-        sessions = len(list(folder.glob("*.jsonl")))
+    root = transcript_root(m, args.projects)
+    totals = {"mined": [0, 0], "excluded": [0, 0], "fenced": [0, 0]}
+    rows = []
+    for folder in sorted(root.iterdir(), key=lambda p: (project_name(p.name), p.name)):
+        compartment = transcript_compartment(m, folder)
+        if compartment == "fenced":
+            state, sessions = "fenced", None
+        else:
+            if not folder.is_dir():
+                continue
+            state = "excluded" if m.excluded.search(folder.name) else "mined"
+            sessions = len(list(folder.glob("*.jsonl")))
         totals[state][0] += 1
-        totals[state][1] += sessions
-        print(f"{state}\t{sessions}\t{project_name(folder.name)}\t{folder.name}")
+        totals[state][1] += sessions or 0
+        rows.append({"folder": folder.name, "project": project_name(folder.name), "state": state,
+                     "compartment": compartment, "sessions": sessions})
+    if getattr(args, "json", False):
+        print(json.dumps(rows, ensure_ascii=False))
+        return 0
+    for row in rows:
+        count = "-" if row["sessions"] is None else row["sessions"]
+        print(f"{row['state']}\t{count}\t{row['project']}\t{row['folder']}")
     print(f"{totals['mined'][0]} mined folders ({totals['mined'][1]} sessions), "
-          f"{totals['excluded'][0]} excluded ({totals['excluded'][1]} sessions)")
+          f"{totals['excluded'][0]} excluded ({totals['excluded'][1]} sessions)" +
+          (f", {totals['fenced'][0]} fenced" if m.compartments is not None else ""))
     return 0
 
 
@@ -1760,38 +2070,44 @@ def cmd_sources_mine(m, args):
     return 0
 
 
-def claude_touched(projects):
+def claude_touched(m, projects):
     """Each file a Claude Code session on this Mac wrote or edited, by path ("wrote" wins). Only the
     tool calls' file paths are read, never what was written."""
     touched = {}
-    root = Path(projects).expanduser()
+    root = transcript_root(m, projects)
     if not root.is_dir():
         print("no Claude Code transcripts there: no file starts as not mine for being Claude's")
         return touched
-    for path in sorted(root.rglob("*.jsonl")):
-        try:
-            if path.is_symlink():
-                continue
-            records = read_session(path)
-        except OSError:
+    for folder in sorted(root.iterdir()):
+        if transcript_compartment(m, folder) == "fenced" or overlaps_fenced(m, folder):
             continue
-        for record in records:
-            message = record.get("message") if isinstance(record, dict) and record.get("type") == "assistant" else None
-            content = message.get("content") if isinstance(message, dict) else None
-            for block in content if isinstance(content, list) else []:
-                how = WRITE_TOOLS.get(block.get("name")) if isinstance(block, dict) else None
-                inputs = block.get("input") if how and block.get("type") == "tool_use" else None
-                target = (inputs.get("file_path") or inputs.get("notebook_path")) if isinstance(inputs, dict) else None
-                if not isinstance(target, str):
+        if folder.is_symlink() or not folder.is_dir() or m.excluded.search(folder.name):
+            continue
+        for path in sorted(folder.rglob("*.jsonl")):
+            try:
+                if path.is_symlink():
                     continue
-                for key in {os.path.normpath(target), os.path.realpath(target)}:
-                    if touched.get(key) != "wrote":
-                        touched[key] = how
+                records = read_session(path)
+            except OSError:
+                continue
+            for record in records:
+                message = record.get("message") if isinstance(record, dict) and record.get("type") == "assistant" else None
+                content = message.get("content") if isinstance(message, dict) else None
+                for block in content if isinstance(content, list) else []:
+                    how = WRITE_TOOLS.get(block.get("name")) if isinstance(block, dict) else None
+                    inputs = block.get("input") if how and block.get("type") == "tool_use" else None
+                    target = (inputs.get("file_path") or inputs.get("notebook_path")) if isinstance(inputs, dict) else None
+                    if not isinstance(target, str):
+                        continue
+                    for key in {os.path.normpath(target), os.path.realpath(target)}:
+                        if touched.get(key) != "wrote":
+                            touched[key] = how
     return touched
 
 
-def folder_root(source):
+def folder_root(m, source):
     root = Path(source["path"]).expanduser()
+    refuse_fenced_root(m, root)
     if root.is_symlink() or not root.is_dir():
         raise Failed(f"{source['name']}: the folder must be a folder, not a link")
     return root
@@ -1799,6 +2115,7 @@ def folder_root(source):
 
 def folder_files(m, source, root, skipped):
     """The relative paths the source covers, as the review lists them."""
+    refuse_fenced_root(m, root)
     include = [crew_documents.glob_matcher(p) for p in source.get("include", [])]
     exclude = [crew_documents.glob_matcher(p) for p in source.get("exclude", [])]
     # Strict: a subfolder the walk cannot open must stop a review, not drop its rows and marks.
@@ -1850,12 +2167,12 @@ def file_kind(path):
 
 def cmd_sources_review(m, args):
     source = named_source(m, args.name, "folder")
-    root, review = folder_root(source), review_file(m, source)
+    root, review = folder_root(m, source), review_file(m, source)
     if not os.access(root, os.R_OK | os.X_OK):
         # The walk would skip what it cannot open, and the rewrite would lose every mark.
         raise Failed(f"{source['name']}: cannot read the folder")
     marks = {r["path"]: r["mine"] for r in read_file_review(review) or []}
-    touched = claude_touched(args.projects)
+    touched = claude_touched(m, args.projects)
     skipped, flagged, rows = Counter(), Counter(), []
     for path in folder_files(m, source, root, skipped):
         full = root / path
@@ -2105,7 +2422,7 @@ def cmd_privacy_check(m, args):
     return 1 if hits else 0
 
 
-COMMANDS = {"sources": cmd_sources, "mine": cmd_mine, "tally": cmd_tally, "split": cmd_split, "score": cmd_score,
+COMMANDS = {"where": cmd_where, "sources": cmd_sources, "mine": cmd_mine, "tally": cmd_tally, "split": cmd_split, "score": cmd_score,
             "similar": cmd_similar, "record": cmd_record, "pending": cmd_pending, "claudeai": cmd_claudeai,
             "documents": cmd_documents, "round": cmd_round, "merge": cmd_merge, "folders": cmd_folders,
             "chunk": cmd_chunk, "check-labels": cmd_check_labels, "distil-in": cmd_distil_in,
@@ -2116,6 +2433,9 @@ def parser_for(m, description):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--member", help="the member config (default: $CREW_MEMBER)")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("where")
+    p.add_argument("--cwd")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("mine")
     p.add_argument("--projects", default="~/.claude/projects")
     p.add_argument("--out", required=True)
@@ -2135,6 +2455,8 @@ def parser_for(m, description):
     p.add_argument("--predictions", required=True)
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("similar")
+    p.add_argument("--compartment", default="auto")
+    p.add_argument("--cwd")
     p.add_argument("--corpus", help="default: <state_dir>/decisions.jsonl")
     texts = p.add_mutually_exclusive_group(required=True)
     texts.add_argument("--query")
@@ -2143,6 +2465,7 @@ def parser_for(m, description):
     p.add_argument("--k", type=int, default=6)
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("record")
+    p.add_argument("--cwd")
     p.add_argument("--log", help="default: <state_dir>/live.jsonl")
     required = [("work", "--work"), ("kind", "--kind"), ("category", "--category"), ("tier", "--tier"),
                 ("question", "--question"), ("member_pick", f"--{m.slug}-pick" if m else "--member-pick")]
@@ -2222,6 +2545,7 @@ def parser_for(m, description):
     p.add_argument("--heldout", action="store_true")
     p.add_argument("--out")
     p = sub.add_parser("folders")
+    p.add_argument("--json", action="store_true")
     p.add_argument("--projects", default="~/.claude/projects")
     p = sub.add_parser("chunk")
     p.add_argument("--corpus", required=True)
@@ -2268,13 +2592,16 @@ def main(argv=None, member=None, prog="crew_decisions", description=None):
             parser_for(None, description).print_help()
             return 0
         print(f"{prog}: " + " ".join(str(exc).splitlines()), file=sys.stderr)
-        return 1
+        return 2 if isinstance(exc, CompartmentConfigError) else 1
     args = parser_for(m, description).parse_args(argv)
     for name in ("corpus", "answers", "labels", "predictions"):
         if getattr(args, name, None):
             setattr(args, name, str(Path(getattr(args, name)).expanduser()))
     try:
         return COMMANDS[args.cmd](m, args)
+    except Fenced as exc:
+        print(f"{prog}: {exc}", file=sys.stderr)
+        return 4
     except (Failed, OSError, ValueError, KeyError, RecursionError) as exc:
         print(f"{prog}: " + " ".join(str(exc).splitlines()), file=sys.stderr)
         return 1
