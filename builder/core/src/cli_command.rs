@@ -106,11 +106,13 @@ fn lasting(path: &Path, roots: &[&Path]) -> Result<()> {
                 path: folder.to_path_buf(),
                 source,
             })?;
-            let safe = if index == 0 {
-                command_safe(metadata.uid(), metadata.mode(), euid)
-            } else {
-                folder_safe(metadata.uid(), metadata.gid(), metadata.mode(), euid)
-            };
+            let safe = place_safe(
+                index == 0,
+                metadata.uid(),
+                metadata.gid(),
+                metadata.mode(),
+                euid,
+            );
             if !safe {
                 return Err(Error::Invalid(CLI_PLACE.into()));
             }
@@ -134,6 +136,17 @@ fn folder_safe(owner: u32, group: u32, mode: u32, euid: u32) -> bool {
         && mode & 0o002 == 0
 }
 
+/// One path on the way up from the command: the command itself gets the command's rule, every folder above it
+/// the folder rule.
+#[cfg(unix)]
+fn place_safe(is_command: bool, owner: u32, group: u32, mode: u32, euid: u32) -> bool {
+    if is_command {
+        command_safe(owner, mode, euid)
+    } else {
+        folder_safe(owner, group, mode, euid)
+    }
+}
+
 fn on_a_passing_disk(canonical: &Path) -> bool {
     canonical.starts_with("/Volumes")
         || canonical
@@ -146,6 +159,28 @@ mod tests {
     use super::*;
     use crate::test_support::Scratch;
     use std::fs;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_command_gets_the_command_rule_and_folders_the_folder_rule() {
+        let euid = 501;
+        assert!(
+            !place_safe(true, 501, 80, 0o775, euid),
+            "command (501, 80, 0o775)"
+        );
+        assert!(
+            place_safe(false, 501, 80, 0o775, euid),
+            "folder (501, 80, 0o775)"
+        );
+        assert!(
+            place_safe(true, 501, 20, 0o755, euid),
+            "command (501, 20, 0o755)"
+        );
+        assert!(
+            !place_safe(false, 501, 20, 0o775, euid),
+            "folder (501, 20, 0o775)"
+        );
+    }
 
     #[cfg(unix)]
     #[test]
