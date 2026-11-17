@@ -15,7 +15,7 @@ One record per slice, newest first. Paraphrase only; no real person.
   `cargo fmt --check`, the six `cargo tree` feature checks and the generated-types check. The read-fence wiring test
   reads the suite order from `--list` instead of the script's text.
 - **Commits:** the brief (`plans/briefs/PE2.4v-touched-tier.md`), the self-test, the script, fix-up 1
-  (`plans/briefs/PE2.4v-fixup-1.md`), this record.
+  (`plans/briefs/PE2.4v-fixup-1.md`), fix-up 2 (`plans/briefs/PE2.4v-fixup-2.md`, `5310eeb`), this record.
 - **Who built it:** Codex, from the two briefs; V1 reviewed, committed (Codex's sandbox can't write the worktree's
   git index) and ran the proofs.
 - **Verified:** red first (the old script ignores `--tier` and `--list`; with `python3` stubbed it stopped at the usage
@@ -26,16 +26,29 @@ One record per slice, newest first. Paraphrase only; no real person.
   target).
   **Timing (one real change, VO16.6a's code diff: voice-api, voice-app, voice-cli and the Mac installer):** the
   touched tier picked those three crates and `mac_install_test.sh`, 15 steps; its first `cargo test` (voice-api and
-  voice-cli with `claude-subscription`) took about 22 min at load1 about 20 on a warm target. The whole run had not
-  ended when this run closed (log `~/.local/state/flightdeck-lane-v/pe24v-time-V1.log`). The full gate on the same
-  load: 3 h 04 min (VF22's land, which runs every step whatever the change).
+  voice-cli with `claude-subscription`) took about 22 min at load1 about 20 on a warm target. The whole run never
+  finished: it stopped when that run ended, 56 min in and still in cargo, so there is no end-to-end figure. The full
+  gate on the same load: 3 h 04 min (VF22's land, which runs every step whatever the change).
 - **Reviews:** the security review sub-task found no injection path and two MEDIUM table gaps; the Verifier (Fable)
   failed `25f5245` on the same two, the Radio pin, and the self-test not running in the touched tier, plus three
   should-fixes. Fix-up 1 answers all of them. The repeat Verifier (Opus) passed `1d36b35`, with two
   should-fixes owed to the drift guard: fail on a read it can't resolve (beyond a fixed allowlist), and probe every
   tracked file of a folder read rather than the first.
-- **Not verified:** the full gate on this branch (it is a code change to the gate, so it lands on the full gate, and how
-  that fits a run is V-Q26). Feature unification differs on purpose: `cargo test -p <subset>` builds what those crates
+- **Fix-up 2 (2026-11-17, run `010510-r1`):** both should-fixes. An unresolved read fails the self-test unless it is
+  one of four on a fixed list (three scratch folders in core's install tests, one read through another base); a
+  stale entry fails too. A folder read is probed file by file (Python readers: the `.py` files, or every file of a
+  folder with none). That exposed a real gap: the crew installer test copies all of `scripts/`, so a change to a
+  non-crew `scripts/*.py` or to `fetch-radio.sh` didn't list it; both now do. Codex built it from the brief and one
+  follow-up (the Python filter first hid two data-folder reads behind allowlist entries; now they resolve).
+  Self-test green (unresolved 4, all allowed; reads checked rust 112, python 74, shell 37, full 104), shellcheck clean.
+  Two mutations red, restored with `cmp`: `map_path` back at `c8d8d93` (the new `scripts/` cases red), one allowlist
+  entry removed (the guard failed naming it). Security review sub-task: no HIGH or MEDIUM, two LOW
+  (a mixed Python folder probes only its `.py` files; a tab or newline in a tracked name would fail the self-test
+  loudly, never pass it). Repeat Verifier (Opus, 61 added lines is past the 60-line carry) **PASS** at `5310eeb`, two
+  should-fixes, both in fix-up 2b (`268883b`, test only, 5 lines): the new cases also fail on a fall to the full gate,
+  and the `slack_mine` case expects its own suite. A mutation (the `scripts/*.py` rule deleted) turned it red.
+- **Not verified:** the full gate on this branch before its land (it is a code change to the gate, so it lands on the
+  full gate; by V-Q26's answer the land is started detached and may outlive the run). Feature unification differs on purpose: `cargo test -p <subset>` builds what those crates
   need, not the whole workspace's union (the Verifier judged it acceptable until PE3.3v's full run on `main`).
 
 ## VF24: the sandbox's terminal test waits long enough on a busy computer (2026-11-17, lane: V1)
