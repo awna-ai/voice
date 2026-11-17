@@ -1,3 +1,6 @@
+import type { LinkAddress } from '../types/generated/LinkAddress'
+import type { Invite } from '../types/generated/Invite'
+import type { Joined } from '../types/generated/Joined'
 import type { SavedOnGithub } from '../types/generated/SavedOnGithub'
 import type { OpenSavedRequest } from '../types/generated/OpenSavedRequest'
 import type { OpenedSaved } from '../types/generated/OpenedSaved'
@@ -120,6 +123,11 @@ export const tauriBackend: Backend = {
   savedOnGithub: () => invoke<SavedOnGithub>('saved_on_github'),
   openSaved: request => invoke<OpenedSaved>('open_saved', { request }),
   takeNewest: request => invoke<TookNewest>('take_newest', { request }),
+  radioLinkAddress: () => invoke<LinkAddress>('radio_link_address'),
+  radioSetLinkAddress: request => invoke<LinkAddress>('radio_set_link_address', { request }),
+  radioInvite: request => invoke<Invite>('radio_invite', { request }),
+  radioJoin: request => invoke<Joined>('radio_join', { request }),
+  radioName: request => invoke<void>('radio_name', { request }),
   claudeCodeFolders: request => invoke<ClaudeCodeFolders>('claude_code_folders', { request }),
   readClaudeCode: (request, onProgress) => {
     const channel = new Channel<ReadProgress>()

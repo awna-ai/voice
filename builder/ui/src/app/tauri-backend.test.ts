@@ -27,6 +27,7 @@ it.each([
   ['githubSignInCancel', 'github_sign_in_cancel'],
   ['githubSignOut', 'github_sign_out'],
   ['savedOnGithub', 'saved_on_github'],
+  ['radioLinkAddress', 'radio_link_address'],
 ] as const)('maps %s to its command', async (method, command) => {
   vi.mocked(invoke).mockClear().mockResolvedValue('answer')
   expect(tauriBackend[method]).toBeTypeOf('function')
@@ -48,6 +49,10 @@ it.each([
   ['savePush', 'save_push', { slug: 'example' }],
   ['openSaved', 'open_saved', { owner: 'example-owner', repo: 'ari-assistant', slug: 'ari' }],
   ['takeNewest', 'take_newest', { slug: 'ari' }],
+  ['radioSetLinkAddress', 'radio_set_link_address', { address: '10.0.0.5' }],
+  ['radioInvite', 'radio_invite', { slug: 'wren' }],
+  ['radioJoin', 'radio_join', { slug: 'wren', code: 'rj1.example', name: 'Office Mac' }],
+  ['radioName', 'radio_name', { name: 'Office Mac' }],
   ['claudeCodeStatus', 'claude_code_status', { slug: 'ari' }],
   ['turnOn', 'turn_on', { slug: 'ari' }],
   ['turnOff', 'turn_off', { slug: 'ari' }],

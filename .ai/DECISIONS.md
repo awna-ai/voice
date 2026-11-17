@@ -1,5 +1,17 @@
 # Decisions: voice
 
+## 2026-11-17: adding another computer (PB8.9d1)
+
+- Setting this computer's VPN address replaces the existing address of the same family;
+  setting the same address again leaves it in place.
+- One assistant per computer takes deliveries: Radio keeps one delivery folder per app,
+  so Voice refuses an invite while another listed assistant has a `deliveries` entry.
+- Voice initializes the fleet as `voice`; an already linked computer keeps its fleet and
+  produces no new recovery file.
+- A computer's name travels in Voice's section of Radio's signed computer record, as the
+  single JSON key `computer_name`. Voice writes that section only after Radio accepts a join;
+  if naming fails, `voice radio name` lets the person try again.
+
 ## 2026-11-12: look for an older assistant before making one (PB8.7a)
 
 Making an assistant now looks for an older one with the same slug and refuses to reuse it:

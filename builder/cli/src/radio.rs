@@ -1,7 +1,12 @@
-//! The Radio that links your computers: `voice radio status` and `voice radio install`.
+//! The Radio that links your computers.
 use clap::Subcommand;
-use voice_api::radio::{Radio, install, shipped_radio, status_lines};
-use voice_core::error::Result;
+use std::io::{IsTerminal, Read, Write};
+use voice_api::{
+    dto, pairing,
+    radio::{Radio, install, shipped_radio, status_lines, text},
+};
+use voice_core::error::{Error, Result};
+use zeroize::Zeroizing;
 
 #[derive(Subcommand)]
 pub enum RadioCommand {
@@ -9,25 +14,221 @@ pub enum RadioCommand {
     Status,
     /// Install or update Radio from Voice's own copy
     Install,
+    /// Show or set this computer's VPN address
+    Address { ip: Option<String> },
+    /// Make a join code for another computer
+    Invite {
+        #[arg(value_parser = checked_slug)]
+        slug: String,
+    },
+    /// Join your other computers using a code read from standard input
+    Join {
+        #[arg(value_parser = checked_slug)]
+        slug: String,
+        #[arg(long)]
+        name: String,
+    },
+    /// Name this computer
+    Name { name: String },
+}
+
+fn checked_slug(slug: &str) -> std::result::Result<String, String> {
+    if voice_core::crew::slugify(slug).as_deref() == Some(slug) {
+        Ok(slug.into())
+    } else {
+        Err("Use the assistant's folder name, such as wren.".into())
+    }
+}
+
+fn failure(error: dto::Failure) -> Error {
+    Error::Invalid(error.message)
+}
+
+fn address_line(addresses: &[String], port: u16) -> String {
+    if addresses.is_empty() {
+        "This computer has no VPN address yet.".into()
+    } else {
+        format!(
+            "This computer's VPN address: {} (port {port}).",
+            addresses.join(", ")
+        )
+    }
+}
+
+fn local_time(expires_at: f64) -> Result<String> {
+    let timestamp = expires_at as libc::time_t;
+    let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // SAFETY: both pointers refer to live storage; localtime_r initializes local on success.
+    if unsafe { libc::localtime_r(&timestamp, local.as_mut_ptr()) }.is_null() {
+        return Err(Error::Invalid(
+            "Voice couldn't read the join code's expiry time.".into(),
+        ));
+    }
+    // SAFETY: localtime_r succeeded and initialized every field.
+    let local = unsafe { local.assume_init() };
+    Ok(format!("{:02}:{:02}", local.tm_hour, local.tm_min))
+}
+
+static SAVED_TERMINAL: std::sync::atomic::AtomicPtr<libc::termios> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+const TERMINAL_SIGNALS: [libc::c_int; 4] =
+    [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
+
+extern "C" fn interrupted(signal: libc::c_int) {
+    let saved = SAVED_TERMINAL.load(std::sync::atomic::Ordering::SeqCst);
+    if !saved.is_null() {
+        // SAFETY: the guard owns this stable allocation while its handlers are installed.
+        // Only async-signal-safe libc calls run here; the handler never returns.
+        unsafe {
+            libc::tcsetattr(0, libc::TCSANOW, saved);
+        }
+    }
+    // SAFETY: _exit terminates without running non-signal-safe cleanup or logging.
+    unsafe {
+        libc::_exit(128 + signal);
+    }
+}
+
+struct EchoGuard {
+    saved: Box<libc::termios>,
+    handlers: Vec<(libc::c_int, libc::sigaction)>,
+}
+impl EchoGuard {
+    fn hide() -> std::io::Result<Self> {
+        let mut saved = std::mem::MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: saved points to valid storage initialized by tcgetattr on success.
+        if unsafe { libc::tcgetattr(0, saved.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut guard = Self {
+            // SAFETY: tcgetattr succeeded and initialized saved.
+            saved: Box::new(unsafe { saved.assume_init() }),
+            handlers: Vec::with_capacity(TERMINAL_SIGNALS.len()),
+        };
+        SAVED_TERMINAL.store(&mut *guard.saved, std::sync::atomic::Ordering::SeqCst);
+        // SAFETY: zero initializes sigaction's flags and optional fields; its mask and
+        // handler are set below before installing it.
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        action.sa_sigaction = interrupted as *const () as libc::sighandler_t;
+        // SAFETY: action's mask is live storage; each signal is a valid constant.
+        unsafe {
+            libc::sigemptyset(&mut action.sa_mask);
+            for signal in TERMINAL_SIGNALS {
+                libc::sigaddset(&mut action.sa_mask, signal);
+            }
+        }
+        for signal in TERMINAL_SIGNALS {
+            let mut previous = std::mem::MaybeUninit::<libc::sigaction>::uninit();
+            // SAFETY: both action pointers are valid; sigaction initializes previous on success.
+            if unsafe { libc::sigaction(signal, &action, previous.as_mut_ptr()) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // SAFETY: sigaction succeeded and initialized previous.
+            guard
+                .handlers
+                .push((signal, unsafe { previous.assume_init() }));
+        }
+        let mut hidden = *guard.saved;
+        hidden.c_lflag &= !libc::ECHO;
+        // SAFETY: hidden holds valid settings with ECHO cleared; guard already restores them.
+        if unsafe { libc::tcsetattr(0, libc::TCSANOW, &hidden) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(guard)
+    }
+}
+impl Drop for EchoGuard {
+    fn drop(&mut self) {
+        // SAFETY: these settings came from stdin, which stays open during the read.
+        unsafe {
+            libc::tcsetattr(0, libc::TCSANOW, &*self.saved);
+        }
+        // This guard runs on the CLI's main thread before pairing starts. A handler on
+        // this thread either exits with the live allocation or sees the cleared pointer.
+        SAVED_TERMINAL.store(std::ptr::null_mut(), std::sync::atomic::Ordering::SeqCst);
+        for (signal, previous) in &self.handlers {
+            // SAFETY: previous is the unchanged action returned when this handler was installed.
+            unsafe {
+                libc::sigaction(*signal, previous, std::ptr::null_mut());
+            }
+        }
+        eprintln!();
+    }
+}
+
+fn read_code() -> Result<Zeroizing<String>> {
+    let read_failed = || Error::Invalid("Voice couldn't read the join code. Try again.".into());
+    let _echo = if std::io::stdin().is_terminal() {
+        let guard = EchoGuard::hide().map_err(|_| read_failed())?;
+        eprintln!("Paste the join code, then press Return:");
+        std::io::stderr().flush().map_err(|_| read_failed())?;
+        Some(guard)
+    } else {
+        None
+    };
+    use std::os::fd::BorrowedFd;
+    // SAFETY: stdin stays open while its descriptor is borrowed and duplicated.
+    let fd = unsafe { BorrowedFd::borrow_raw(0) }
+        .try_clone_to_owned()
+        .map_err(|_| read_failed())?;
+    let mut stdin = std::fs::File::from(fd).take(4096);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(4096));
+    let mut byte = Zeroizing::new([0u8; 1]);
+    loop {
+        match stdin.read(byte.as_mut()) {
+            Ok(0) => break,
+            Ok(_) if byte[0] == b'\n' => break,
+            Ok(_) => bytes.push(byte[0]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return Err(read_failed()),
+        }
+    }
+    let code = std::str::from_utf8(&bytes).map_err(|_| Error::Invalid(text::NOT_A_CODE.into()))?;
+    Ok(Zeroizing::new(code.into()))
 }
 
 pub fn run(command: RadioCommand) -> Result<std::process::ExitCode> {
+    let home = crate::home()?;
     match command {
         RadioCommand::Status => {
-            let home = crate::home()?;
             let (lines, answers) = status_lines(shipped_radio(&home), &Radio::for_home(&home));
             for line in lines {
                 println!("{line}");
             }
-            Ok(if answers {
+            return Ok(if answers {
                 std::process::ExitCode::SUCCESS
             } else {
                 std::process::ExitCode::FAILURE
-            })
+            });
         }
-        RadioCommand::Install => {
-            println!("{}", install(&crate::home()?)?);
-            Ok(std::process::ExitCode::SUCCESS)
+        RadioCommand::Install => println!("{}", install(&home)?),
+        RadioCommand::Address { ip } => {
+            let address = match ip {
+                Some(ip) => pairing::set_link_address(&home, &ip),
+                None => pairing::link_address(&home),
+            }
+            .map_err(failure)?;
+            println!("{}", address_line(&address.addresses, address.port));
+        }
+        RadioCommand::Invite { slug } => {
+            let invite = pairing::invite(&home, &slug).map_err(failure)?;
+            let until = local_time(invite.expires_at)?;
+            println!("{}", address_line(&invite.addresses, invite.port));
+            println!("Join code: {}", invite.code);
+            println!("It works once, until {until}.");
+            if let Some(path) = invite.recovery_file {
+                println!("{}", text::recovery(&path));
+            }
+        }
+        RadioCommand::Join { slug, name } => {
+            let code = read_code()?;
+            let joined = pairing::join(&home, &slug, &code, &name).map_err(failure)?;
+            println!("This computer joined as {}.", joined.computer_name);
+        }
+        RadioCommand::Name { name } => {
+            pairing::name(&home, &name).map_err(failure)?;
+            println!("This computer is now called {name}.");
         }
     }
+    Ok(std::process::ExitCode::SUCCESS)
 }

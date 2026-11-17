@@ -1082,3 +1082,75 @@ pub struct BringInRequest {
     pub assistant: NewAssistantRequest,
     pub files: Vec<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LinkAddress {
+    pub port: u16,
+    pub addresses: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Invite {
+    pub code: String,
+    pub expires_at: f64,
+    pub port: u16,
+    pub addresses: Vec<String>,
+    pub recovery_file: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Joined {
+    pub fleet: String,
+    pub computer_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct RadioAddressRequest {
+    pub address: String,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct RadioJoinRequest {
+    pub slug: String,
+    pub code: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[ts(export)]
+pub struct RadioNameRequest {
+    pub name: String,
+}
+
+impl std::fmt::Debug for Invite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Invite")
+            .field("code", &"<hidden>")
+            .field("expires_at", &self.expires_at)
+            .field("port", &self.port)
+            .field("addresses", &self.addresses)
+            .field("recovery_file", &self.recovery_file)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for RadioJoinRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RadioJoinRequest")
+            .field("code", &"<hidden>")
+            .field("slug", &self.slug)
+            .field("name", &self.name)
+            .finish()
+    }
+}

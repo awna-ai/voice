@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-radio-join"
+description = "Enables the radio_join command without any pre-configured scope."
+commands.allow = ["radio_join"]
+
+[[permission]]
+identifier = "deny-radio-join"
+description = "Denies the radio_join command without any pre-configured scope."
+commands.deny = ["radio_join"]

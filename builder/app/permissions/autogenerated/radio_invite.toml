@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-radio-invite"
+description = "Enables the radio_invite command without any pre-configured scope."
+commands.allow = ["radio_invite"]
+
+[[permission]]
+identifier = "deny-radio-invite"
+description = "Denies the radio_invite command without any pre-configured scope."
+commands.deny = ["radio_invite"]

@@ -47,3 +47,8 @@ pub mod radio;
 
 pub mod permissions;
 pub use permissions::*;
+
+pub mod pairing;
+pub use pairing::{
+    radio_invite, radio_join, radio_link_address, radio_name, radio_set_link_address,
+};

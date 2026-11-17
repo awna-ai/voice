@@ -22,6 +22,7 @@ const LINK_OPS: &[&str] = &[
     "fleet_init",
     "code_create",
     "join",
+    "resign",
     "link_address_add",
     "link_address_list",
     "link_address_remove",
@@ -50,6 +51,22 @@ pub mod text {
     pub const OTHER_MAJOR: &str =
         "The Radio on this computer speaks a version this Voice doesn't. Install the newest Voice.";
     pub const NOT_TEXT: &str = "Voice can't hand Radio a file whose path isn't plain text.";
+    pub const NOT_AN_ADDRESS: &str =
+        "That isn't a VPN address. Type the numbers only, like 10.0.0.5, with no port.";
+    pub const NEEDS_ADDRESS: &str =
+        "Add this computer's VPN address first, so your other computers can find it.";
+    pub const NOT_A_NAME: &str =
+        "Give this computer a name of 1 to 64 letters, numbers or spaces, such as Office Mac.";
+    pub const NOT_A_CODE: &str = "That isn't a join code. Copy the whole code from the computer that builds your assistant, then try again.";
+    pub const CODE_REFUSED: &str = "The other computer turned that code down. It may be used or out of date: make a new one there, then try again.";
+    pub const NOT_REACHED: &str = "Voice couldn't reach the other computer. Check that both are on the VPN and Voice is open there, then try again.";
+    pub const CODE_NO_ADDRESS: &str = "That code doesn't say where the other computer is. Add its VPN address there, make a new code, then try again.";
+    pub const ALREADY_LINKED: &str = "This computer is already linked to your other computers.";
+    pub fn recovery(path: &str) -> String {
+        format!(
+            "Radio saved a recovery key for your computers in {path}. Move it into your password manager, then delete that file."
+        )
+    }
 }
 
 /// The copy of Radio beside Voice.app's `voice` command (PB8.9c1 puts it there). A release build
@@ -219,6 +236,25 @@ pub struct Radio {
     socket: PathBuf,
 }
 
+// Raw refusal phrases stay inside the engine; only the existing refusal rule renders them.
+pub(crate) enum AskError {
+    Refused(String),
+    Other(Error),
+}
+impl AskError {
+    pub(crate) fn sentence(self) -> Error {
+        match self {
+            Self::Refused(phrase) => Error::Invalid(refusal(Some(&phrase))),
+            Self::Other(error) => error,
+        }
+    }
+}
+impl From<Error> for AskError {
+    fn from(error: Error) -> Self {
+        Self::Other(error)
+    }
+}
+
 impl Radio {
     pub fn at(socket: PathBuf) -> Self {
         Self { socket }
@@ -230,6 +266,10 @@ impl Radio {
     }
 
     fn ask(&self, request: Request) -> Result<Response> {
+        self.ask_phrase(request).map_err(AskError::sentence)
+    }
+
+    fn ask_phrase(&self, request: Request) -> std::result::Result<Response, AskError> {
         let response = radio_client::request(&self.socket, &request).map_err(|phrase| {
             Error::Invalid(
                 if phrase == radio_client::NOT_RUNNING {
@@ -243,9 +283,9 @@ impl Radio {
         if response.ok {
             Ok(response)
         } else if response.error.as_deref() == Some("unsupported_version") {
-            Err(Error::Invalid(text::OTHER_MAJOR.into()))
+            Err(AskError::Other(Error::Invalid(text::OTHER_MAJOR.into())))
         } else {
-            Err(Error::Invalid(refusal(response.error.as_deref())))
+            Err(AskError::Refused(response.error.unwrap_or_default()))
         }
     }
 
@@ -282,7 +322,14 @@ impl Radio {
 
     /// Makes a fleet with this computer as its founder; also answers the recovery key's file.
     pub fn fleet_init(&self, name: &str) -> Result<(Fleet, String)> {
-        let response = self.ask(Request::FleetInit { name: name.into() })?;
+        self.fleet_init_phrase(name).map_err(AskError::sentence)
+    }
+
+    pub(crate) fn fleet_init_phrase(
+        &self,
+        name: &str,
+    ) -> std::result::Result<(Fleet, String), AskError> {
+        let response = self.ask_phrase(Request::FleetInit { name: name.into() })?;
         Ok((
             response.fleet.ok_or_else(no_answer)?,
             response.recovery_file.ok_or_else(no_answer)?,
@@ -303,9 +350,23 @@ impl Radio {
 
     /// Joins the fleet of the computer that made `code`. The code travels only through the socket.
     pub fn join(&self, code: &str) -> Result<Fleet> {
-        self.ask(Request::Join { code: code.into() })?
+        self.join_phrase(code).map_err(AskError::sentence)
+    }
+
+    pub(crate) fn join_phrase(&self, code: &str) -> std::result::Result<Fleet, AskError> {
+        Ok(self
+            .ask_phrase(Request::Join { code: code.into() })?
             .fleet
-            .ok_or_else(no_answer)
+            .ok_or_else(no_answer)?)
+    }
+
+    pub fn resign_section(&self, section: &str) -> Result<()> {
+        self.ask(Request::Resign {
+            app: APP.into(),
+            section: Some(section.into()),
+            roles: None,
+        })
+        .map(drop)
     }
 
     pub fn link_address_add(&self, address: &str) -> Result<LinkAddresses> {
@@ -344,7 +405,15 @@ impl Radio {
 
     /// Names the folder Radio makes for Voice's arrivals on this computer.
     pub fn delivery_folder_set(&self, folder: &Path) -> Result<()> {
-        self.ask(Request::DeliveryFolderSet {
+        self.delivery_folder_set_phrase(folder)
+            .map_err(AskError::sentence)
+    }
+
+    pub(crate) fn delivery_folder_set_phrase(
+        &self,
+        folder: &Path,
+    ) -> std::result::Result<(), AskError> {
+        self.ask_phrase(Request::DeliveryFolderSet {
             app: APP.into(),
             folder: plain_path(folder)?,
         })
@@ -462,3 +531,6 @@ pub fn status_lines(copy: Result<PathBuf>, radio: &Radio) -> (Vec<String>, bool)
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) mod test_support;

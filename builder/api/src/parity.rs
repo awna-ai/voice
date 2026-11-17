@@ -101,6 +101,26 @@ pub const PARITY: &[Parity] = &[
         cli: &[&["open", "--update"]],
     },
     Parity {
+        app: "radio_link_address",
+        cli: &[&["radio", "address"]],
+    },
+    Parity {
+        app: "radio_set_link_address",
+        cli: &[&["radio", "address"]],
+    },
+    Parity {
+        app: "radio_invite",
+        cli: &[&["radio", "invite"]],
+    },
+    Parity {
+        app: "radio_join",
+        cli: &[&["radio", "join"]],
+    },
+    Parity {
+        app: "radio_name",
+        cli: &[&["radio", "name"]],
+    },
+    Parity {
         app: "claude_code_folders",
         cli: &[&["folders"]],
     },
@@ -285,3 +305,23 @@ pub const PARITY: &[Parity] = &[
         cli: &[&["ask"]],
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::PARITY;
+
+    #[test]
+    fn radio_pairing_commands_have_cli_parity() {
+        for (app, cli) in [
+            ("radio_link_address", "address"),
+            ("radio_set_link_address", "address"),
+            ("radio_invite", "invite"),
+            ("radio_join", "join"),
+            ("radio_name", "name"),
+        ] {
+            let row = PARITY.iter().find(|row| row.app == app);
+            assert!(row.is_some(), "{app} must have CLI parity");
+            assert_eq!(row.unwrap().cli, &[&["radio", cli][..]]);
+        }
+    }
+}

@@ -143,6 +143,39 @@ pub fn take_newest(
 }
 
 #[tauri::command(async)]
+pub fn radio_link_address() -> Result<voice_api::dto::LinkAddress, voice_api::dto::Failure> {
+    voice_api::radio_link_address()
+}
+
+#[tauri::command(async)]
+pub fn radio_set_link_address(
+    request: voice_api::dto::RadioAddressRequest,
+) -> Result<voice_api::dto::LinkAddress, voice_api::dto::Failure> {
+    voice_api::radio_set_link_address(request)
+}
+
+#[tauri::command(async)]
+pub fn radio_invite(
+    request: voice_api::dto::SlugRequest,
+) -> Result<voice_api::dto::Invite, voice_api::dto::Failure> {
+    voice_api::radio_invite(request)
+}
+
+#[tauri::command(async)]
+pub fn radio_join(
+    request: voice_api::dto::RadioJoinRequest,
+) -> Result<voice_api::dto::Joined, voice_api::dto::Failure> {
+    voice_api::radio_join(request)
+}
+
+#[tauri::command(async)]
+pub fn radio_name(
+    request: voice_api::dto::RadioNameRequest,
+) -> Result<(), voice_api::dto::Failure> {
+    voice_api::radio_name(request)
+}
+
+#[tauri::command(async)]
 pub fn claude_code_folders(
     request: voice_api::dto::SlugRequest,
 ) -> Result<voice_api::dto::ClaudeCodeFolders, voice_api::dto::Failure> {

@@ -1,3 +1,9 @@
+import type { LinkAddress } from './types/generated/LinkAddress'
+import type { Invite } from './types/generated/Invite'
+import type { Joined } from './types/generated/Joined'
+import type { RadioAddressRequest } from './types/generated/RadioAddressRequest'
+import type { RadioJoinRequest } from './types/generated/RadioJoinRequest'
+import type { RadioNameRequest } from './types/generated/RadioNameRequest'
 import type { SavedOnGithub } from './types/generated/SavedOnGithub'
 import type { OpenSavedRequest } from './types/generated/OpenSavedRequest'
 import type { OpenedSaved } from './types/generated/OpenedSaved'
@@ -137,6 +143,11 @@ export interface Backend {
   savedOnGithub(): Promise<SavedOnGithub>
   openSaved(request: OpenSavedRequest): Promise<OpenedSaved>
   takeNewest(request: SlugRequest): Promise<TookNewest>
+  radioLinkAddress(): Promise<LinkAddress>
+  radioSetLinkAddress(request: RadioAddressRequest): Promise<LinkAddress>
+  radioInvite(request: SlugRequest): Promise<Invite>
+  radioJoin(request: RadioJoinRequest): Promise<Joined>
+  radioName(request: RadioNameRequest): Promise<void>
   claudeCodeFolders(request: SlugRequest): Promise<ClaudeCodeFolders>
   readClaudeCode(request: ReadRequest, onProgress: (progress: ReadProgress) => void): Promise<ReadCounts>
   chooseClaudeaiExport(request: ChooseExportRequest): Promise<ExportStatus | null>
