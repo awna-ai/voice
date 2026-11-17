@@ -242,23 +242,6 @@ fn answer_fields(pick: &str) -> [&str; 8] {
         "multiSelect",
     ]
 }
-/// Check every field a question needs if it is later held out by the build.
-pub fn question_shape(
-    member: &Member,
-    name: &str,
-    line: usize,
-    record: &Map<String, Value>,
-) -> Result<()> {
-    for key in QUESTION_FIELDS
-        .into_iter()
-        .chain(answer_fields(&member.pick_field()))
-    {
-        if !record.contains_key(key) {
-            return Err(shape(name, line, key));
-        }
-    }
-    Ok(())
-}
 pub fn split(member: &Member, name: &str, bytes: &[u8]) -> Result<Heldout> {
     let mut heldout = Heldout {
         questions: vec![],

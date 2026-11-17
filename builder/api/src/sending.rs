@@ -212,7 +212,7 @@ fn fold(
         .iter()
         .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_owned))
         .collect();
-    for (line, record) in corpus::read_records("history", delivered)? {
+    for (_, record) in corpus::read_records("history", delivered)? {
         let Some(id) = record.get("id").and_then(Value::as_str) else {
             continue;
         };
@@ -223,28 +223,10 @@ fn fold(
         if privacy::privacy(filters, &value)?.is_some() {
             continue;
         }
-        if value.get("kind").and_then(Value::as_str).is_none()
-            || value.get("timestamp").and_then(Value::as_str).is_none()
-        {
-            return Err(FoldError::Content);
-        }
         let Value::Object(record) = value else {
             unreachable!()
         };
-        if record.get("kind").and_then(Value::as_str) == Some("question") {
-            corpus::question_shape(member, "history", line, &record)?;
-            voice_steps::input::Record {
-                name: "history",
-                line,
-                map: &record,
-            }
-            .options()?;
-        } else if ["project", "text"]
-            .iter()
-            .any(|key| record.get(*key).and_then(Value::as_str).is_none())
-        {
-            return Err(FoldError::Content);
-        }
+        voice_ingest::mine::check_record(member, &record)?;
         kept.push(record);
     }
     kept.sort_by(|a, b| {
@@ -410,29 +392,18 @@ fn take_one(
     *saved = updated;
     Ok(())
 }
-// Match only the private reader's three content refusals. Ownership and I/O faults retry.
+// Inspect the entry after a failed read; error prose is not a file-type contract.
 fn delivery_content_error(
     home: &Path,
     slug: &str,
     name: &str,
     error: &voice_core::error::Error,
 ) -> Result<bool> {
-    let voice_core::error::Error::Invalid(message) = error else {
-        return Ok(false);
-    };
-    let path = std::fs::canonicalize(home)
-        .map_err(|_| failure(TAKE_FAILED))?
-        .join(".claude/state")
-        .join(slug)
-        .join("deliveries")
-        .join(name);
-    Ok(message
-        == &format!(
-            "{} is a link: Voice reads only real files, never links. Move it away and try again",
-            path.display()
-        )
-        || message == &format!("{} is not a file", path.display())
-        || message == &format!("{name} is too big to read (over {} KiB)", FILE_LIMIT / 1024))
+    let entry = private::private_entry_at(home, slug, Some("deliveries"), name)
+        .map_err(|_| failure(TAKE_FAILED))?;
+    let denied = matches!(error, voice_core::error::Error::Io { source, .. }
+        if source.raw_os_error() == Some(libc::EACCES));
+    Ok(entry.is_some_and(|entry| !entry.regular || entry.size > FILE_LIMIT || denied))
 }
 fn shown_from(mut computer: dto::SentFrom) -> dto::SentFrom {
     computer.name = shown(computer.name);

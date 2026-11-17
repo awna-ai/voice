@@ -700,6 +700,45 @@ pub fn read_private_owned_optional_at_max(
     read_private_bytes(&mut file, &path, name, Some(max)).map(Some)
 }
 
+/// Metadata for one entry, inspected relative to the checked folder without following links.
+pub struct PrivateEntry {
+    pub regular: bool,
+    pub size: u64,
+}
+
+pub fn private_entry_at(
+    home: &Path,
+    slug: &str,
+    folder: Option<&str>,
+    name: &str,
+) -> Result<Option<PrivateEntry>> {
+    validate_private_name(name)?;
+    let (directory, path) = place_directory(home, slug, folder, false)?;
+    let target = CString::new(name).expect("validated file name");
+    // SAFETY: stat is plain data, overwritten by fstatat before inspection.
+    let mut status: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: directory is live, target terminated, and status is a valid output pointer.
+    if unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            target.as_ptr(),
+            &mut status,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } < 0
+    {
+        let source = std::io::Error::last_os_error();
+        if source.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(io(&path.join(name), source));
+    }
+    Ok(Some(PrivateEntry {
+        regular: status.st_mode & libc::S_IFMT == libc::S_IFREG,
+        size: status.st_size as u64,
+    }))
+}
+
 fn read_private_optional_at_limit(
     home: &Path,
     slug: &str,

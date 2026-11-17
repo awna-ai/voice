@@ -527,15 +527,108 @@ pub(crate) fn own_message(filters: &Filters, text: String) -> Option<String> {
         Some(text)
     }
 }
+const SPLITS: [&str; 2] = ["train", "heldout"];
+
+pub const OUTCOMES: [&str; 4] = ["own_words", "no_rec", "took_rec", "other_option"];
+
+/// Check the exact shape emitted by the Claude Code history writer.
+pub fn check_record(member: &Member, record: &Map<String, Value>) -> Result<()> {
+    let invalid = || Error::Invalid("a history record has an unexpected shape".into());
+    let kind = record
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(invalid)?;
+    let strings: &[&str] = match kind {
+        "message" => &["id", "timestamp", "project", "text", "context"],
+        "question" => &[
+            "id",
+            "timestamp",
+            "project",
+            "header",
+            "question",
+            "own_words",
+            "notes",
+        ],
+        _ => return Err(invalid()),
+    };
+    let pick_field = member.pick_field();
+    if record.keys().any(|key| {
+        !strings.contains(&key.as_str())
+            && !["kind", "split"].contains(&key.as_str())
+            && !(kind == "question"
+                && (["multiSelect", "options", "recommended", "picks", "outcome"]
+                    .contains(&key.as_str())
+                    || key == &pick_field))
+    }) {
+        return Err(invalid());
+    }
+    if record
+        .get("split")
+        .is_some_and(|value| !value.as_str().is_some_and(|split| SPLITS.contains(&split)))
+    {
+        return Err(invalid());
+    }
+    if strings
+        .iter()
+        .any(|key| !record.get(*key).is_some_and(Value::is_string))
+    {
+        return Err(invalid());
+    }
+    if kind == "question" {
+        if !record.get("multiSelect").is_some_and(Value::is_boolean) {
+            return Err(invalid());
+        }
+        for key in ["recommended", &pick_field] {
+            if !record
+                .get(key)
+                .is_some_and(|v| v.is_string() || v.is_null())
+            {
+                return Err(invalid());
+            }
+        }
+        if !record
+            .get("picks")
+            .and_then(Value::as_array)
+            .is_some_and(|items| items.iter().all(Value::is_string))
+        {
+            return Err(invalid());
+        }
+        if !record
+            .get("options")
+            .and_then(Value::as_array)
+            .is_some_and(|items| {
+                items.iter().all(|item| {
+                    item.as_object().is_some_and(|option| {
+                        option.len() == 2
+                            && ["label", "description"]
+                                .iter()
+                                .all(|key| option.get(*key).is_some_and(Value::is_string))
+                    })
+                })
+            })
+        {
+            return Err(invalid());
+        }
+        if !record
+            .get("outcome")
+            .and_then(Value::as_str)
+            .is_some_and(|s| OUTCOMES.contains(&s))
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 /// The Python's `outcome`: own words win, then whether the recommendation was picked.
 pub fn outcome(picks: &[String], own: &str, recommended: Option<&str>) -> &'static str {
     if !own.is_empty() {
-        "own_words"
+        OUTCOMES[0]
     } else {
         match recommended {
-            None => "no_rec",
-            Some(r) if picks.iter().any(|p| p == r) => "took_rec",
-            Some(_) => "other_option",
+            None => OUTCOMES[1],
+            Some(r) if picks.iter().any(|p| p == r) => OUTCOMES[2],
+            Some(_) => OUTCOMES[3],
         }
     }
 }
@@ -583,7 +676,7 @@ pub(crate) fn mark_split(records: &mut [Map<String, Value>], split: &Split) -> O
             .is_some_and(|c| r["timestamp"].as_str().unwrap() >= c.as_str());
         r.insert(
             "split".into(),
-            Value::from(if held { "heldout" } else { "train" }),
+            Value::from(if held { SPLITS[1] } else { SPLITS[0] }),
         );
     }
     cutoff
@@ -845,6 +938,162 @@ mod tests {
         io::Read,
         os::unix::fs::{OpenOptionsExt, symlink},
     };
+
+    #[test]
+    fn mined_fixture_records_pass_check_record() {
+        let member =
+            voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();
+        let filters = Filters::compile(&member.filters).unwrap();
+        let mut kinds = std::collections::HashSet::new();
+        let mut splits = std::collections::HashSet::new();
+        for case in [
+            "ada_fixture",
+            "five_questions",
+            "another_member",
+            "multi_select",
+            "list_answers",
+            "single_select",
+            "notes",
+            "tolerant_questions",
+            "typed_text",
+            "context",
+            "bytes",
+            "timestamps",
+            "folder_names",
+            "dotted_home",
+            "duplicates",
+            "empty",
+            "no_sessions",
+            "private_overlay",
+        ] {
+            let scratch = common::Scratch::new("writer-schema");
+            let projects = scratch.0.join("projects");
+            common::checked(
+                std::process::Command::new("python3")
+                    .arg("-I")
+                    .arg(repo().join("tests/crew_mine_fixtures.py"))
+                    .arg(case)
+                    .arg(&projects),
+            );
+            let mined = mine(
+                &member,
+                &filters,
+                &projects,
+                &scratch.0,
+                &Split::Holdout(DEFAULT_HOLDOUT),
+            )
+            .unwrap();
+            for record in mined.records {
+                kinds.insert(record["kind"].as_str().unwrap().to_owned());
+                splits.insert(record["split"].as_str().unwrap().to_owned());
+                check_record(&member, &record).unwrap();
+            }
+        }
+        assert_eq!(
+            splits,
+            std::collections::HashSet::from(["train".into(), "heldout".into()])
+        );
+        assert_eq!(
+            kinds,
+            std::collections::HashSet::from(["message".into(), "question".into()])
+        );
+    }
+
+    #[test]
+    fn check_record_requires_every_writer_field_and_type() {
+        let member =
+            voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();
+        let message = message_record("session", "now", "demo", "keep it small", "");
+        let mut question =
+            serde_json::json!({"id":"q", "kind":"question", "timestamp":"now", "project":"demo",
+            "header":"Pick", "question":"Which?", "multiSelect":false,
+            "options":[{"label":"A", "description":"a"}], "recommended":null,
+            "picks":["A"], "own_words":"", "notes":"", "outcome":"no_rec"})
+            .as_object()
+            .unwrap()
+            .clone();
+        question.insert(member.pick_field(), Value::Null);
+        for good in [&message, &question] {
+            check_record(&member, good).unwrap();
+            for split in ["train", "heldout"] {
+                let mut marked = good.clone();
+                marked.insert("split".into(), Value::from(split));
+                check_record(&member, &marked).unwrap();
+            }
+            for split in [
+                Value::Null,
+                serde_json::json!(1),
+                serde_json::json!(true),
+                serde_json::json!([]),
+                serde_json::json!({}),
+                serde_json::json!("anything"),
+            ] {
+                let mut bad = good.clone();
+                bad.insert("split".into(), split);
+                assert!(check_record(&member, &bad).is_err(), "invalid split");
+            }
+            for extra in ["extra", "notes", "text", "other_pick"] {
+                if good.contains_key(extra) {
+                    continue;
+                }
+                let mut bad = good.clone();
+                bad.insert(extra.into(), Value::from("unexpected"));
+                assert!(check_record(&member, &bad).is_err(), "extra {extra}");
+            }
+            for key in good.keys() {
+                let mut missing = good.clone();
+                missing.remove(key);
+                assert!(check_record(&member, &missing).is_err(), "missing {key}");
+                for wrong in [
+                    Value::Null,
+                    serde_json::json!(1),
+                    serde_json::json!(true),
+                    serde_json::json!([]),
+                    serde_json::json!({}),
+                ] {
+                    let allowed =
+                        matches!(key.as_str(), "recommended") || key == &member.pick_field();
+                    if (allowed && wrong.is_null())
+                        || (key == "multiSelect" && wrong.is_boolean())
+                        || (["picks", "options"].contains(&key.as_str()) && wrong.is_array())
+                    {
+                        continue;
+                    }
+                    let mut bad = good.clone();
+                    bad.insert(key.clone(), wrong);
+                    assert!(check_record(&member, &bad).is_err(), "wrong type for {key}");
+                }
+            }
+        }
+        for (key, wrong) in [
+            ("kind", serde_json::json!("note")),
+            ("outcome", serde_json::json!("anything")),
+            ("picks", serde_json::json!([1])),
+            ("options", serde_json::json!([1])),
+            ("options", serde_json::json!([{"label":"A"}])),
+            ("options", serde_json::json!([{"description":"a"}])),
+            (
+                "options",
+                serde_json::json!([{"label":1,"description":"a"}]),
+            ),
+            (
+                "options",
+                serde_json::json!([{"label":"A","description":1}]),
+            ),
+            (
+                "options",
+                serde_json::json!([{"label":"A","description":"a","extra":"x"}]),
+            ),
+        ] {
+            let mut bad = question.clone();
+            bad.insert(key.into(), wrong);
+            assert!(check_record(&member, &bad).is_err(), "invalid {key}");
+        }
+        for outcome in ["own_words", "no_rec", "took_rec", "other_option"] {
+            question.insert("outcome".into(), Value::from(outcome));
+            check_record(&member, &question).unwrap();
+        }
+    }
 
     #[test]
     fn a_project_folder_swapped_for_a_link_after_listing_is_refused() {

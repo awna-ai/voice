@@ -25,7 +25,7 @@ fn assistant(home: &Path, member: bool) -> PathBuf {
     state
 }
 fn record(id: &str, text: &str) -> Value {
-    json!({"id":id,"timestamp":"2026-11-17","kind":"message","project":"demo","text":text})
+    json!({"id":id,"timestamp":"2026-11-17","kind":"message","project":"demo","text":text,"context":""})
 }
 fn lines(records: &[Value]) -> Vec<u8> {
     records
@@ -1113,4 +1113,167 @@ fn cleanup_fault_rolls_back_cursor_and_keeps_delivery() {
     assert!(incoming.exists());
     assert_eq!(saved.after, 0);
     assert_eq!(fs::read(s.join("deliveries-taken.json")).unwrap(), cursor);
+}
+
+#[test]
+fn mode_zero_delivery_is_refused_deleted_and_passed() {
+    let (h, s) = prepare_delivery();
+    let path = s.join("deliveries/history-1-1.jsonl");
+    fs::write(&path, lines(&[record("new", "Keep it small.")])).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.refused, 1);
+    assert_eq!(answer.taken, 0);
+    assert_eq!(saved.after, 1);
+    assert!(!path.exists());
+}
+
+#[test]
+fn socket_delivery_is_refused_deleted_and_passed() {
+    let (h, s) = prepare_delivery();
+    let path = s.join("deliveries/history-1-1.jsonl");
+    let _socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.refused, 1);
+    assert_eq!(answer.taken, 0);
+    assert_eq!(saved.after, 1);
+    assert!(!path.exists());
+}
+
+#[test]
+fn delivery_read_classification_uses_entry_metadata_and_errno() {
+    let (h, s) = prepare_delivery();
+    let name = "history-1-1.jsonl";
+    let path = s.join("deliveries").join(name);
+    fs::write(&path, b"invented").unwrap();
+    for (errno, content) in [
+        (libc::EACCES, true),
+        (libc::EMFILE, false),
+        (libc::EIO, false),
+    ] {
+        let error = voice_core::error::Error::Io {
+            path: path.clone(),
+            source: std::io::Error::from_raw_os_error(errno),
+        };
+        assert_eq!(
+            delivery_content_error(&h.0, "wren", name, &error).unwrap(),
+            content
+        );
+    }
+    fs::remove_file(&path).unwrap();
+    std::os::unix::fs::symlink(h.0.join("absent"), &path).unwrap();
+    let error = voice_core::error::Error::Invalid("unrelated words".into());
+    assert!(delivery_content_error(&h.0, "wren", name, &error).unwrap());
+    fs::set_permissions(s.join("deliveries"), fs::Permissions::from_mode(0o770)).unwrap();
+    assert_eq!(
+        delivery_content_error(&h.0, "wren", name, &error)
+            .unwrap_err()
+            .message,
+        TAKE_FAILED
+    );
+}
+
+#[test]
+fn delivered_records_require_the_writers_exact_schema() {
+    let (h, _) = prepare_delivery();
+    let member = member(&h.0);
+    let mut question = complete_question();
+    question
+        .as_object_mut()
+        .unwrap()
+        .insert(member.pick_field(), json!("A"));
+    let message = record("new", "Keep it small.");
+    let mut invalid = Vec::new();
+    for good in [&message, &question] {
+        for key in good.as_object().unwrap().keys() {
+            // Missing fields and wrong types are separate schema rules.
+            let mut missing = good.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            // The existing id rule skips records with no string id.
+            if key != "id" {
+                invalid.push(missing);
+            }
+            let mut wrong = good.clone();
+            wrong[key] = json!(1);
+            if key != "id" {
+                invalid.push(wrong);
+            }
+        }
+        for key in ["extra", "notes", "text", "other_pick"] {
+            if good.get(key).is_some() {
+                continue;
+            }
+            let mut extra = good.clone();
+            extra[key] = json!("unexpected");
+            invalid.push(extra);
+        }
+        for split in [
+            json!("anything"),
+            Value::Null,
+            json!(1),
+            json!(true),
+            json!([]),
+            json!({}),
+        ] {
+            let mut bad = good.clone();
+            bad["split"] = split;
+            invalid.push(bad);
+        }
+    }
+    for (base, key, value) in [
+        (&question, "outcome", json!("anything")),
+        (&message, "notes", json!(5)),
+        (&message, "kind", json!("note")),
+        (&question, "picks", json!([1])),
+        (&question, "options", json!([{"label":"A"}])),
+        (&question, "options", json!([{"label":1,"description":"a"}])),
+        (&question, "options", json!([{"label":"A","description":1}])),
+        (
+            &question,
+            "options",
+            json!([{"label":"A","description":"a","extra":"x"}]),
+        ),
+        (&question, "options", json!([1])),
+    ] {
+        let mut bad = base.clone();
+        bad[key] = value;
+        invalid.push(bad);
+    }
+    for bad in invalid {
+        let (h, s) = prepare_delivery();
+        let peer = s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl");
+        let old = lines(&[record("old", "Keep it small.")]);
+        fs::write(&peer, &old).unwrap();
+        let path = s.join("deliveries/history-1-1.jsonl");
+        fs::write(&path, lines(std::slice::from_ref(&bad))).unwrap();
+        let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+        assert_eq!(answer.refused, 1, "schema case: {bad}");
+        assert_eq!(answer.taken, 0);
+        assert_eq!(fs::read(peer).unwrap(), old);
+        assert!(!path.exists());
+        assert_eq!(saved.after, 1);
+    }
+}
+
+#[test]
+fn delivered_records_accept_optional_reader_split() {
+    let (h, _) = prepare_delivery();
+    let member = member(&h.0);
+    let mut question = complete_question();
+    question
+        .as_object_mut()
+        .unwrap()
+        .insert(member.pick_field(), json!("A"));
+    for good in [record("new", "Keep it small."), question] {
+        for split in [None, Some("train"), Some("heldout")] {
+            let mut marked = good.clone();
+            if let Some(split) = split {
+                marked["split"] = json!(split);
+            }
+            let (bytes, count) =
+                fold(&member, &filters(&h.0), &[], &lines(&[marked]), PEER_LIMIT).unwrap();
+            assert_eq!(count, 1);
+            assert!(!bytes.is_empty());
+        }
+    }
 }
