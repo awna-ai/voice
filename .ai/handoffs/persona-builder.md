@@ -2,6 +2,41 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF23: the lasting-place rule refuses a group-writable folder, as Radio does (2026-11-17, lane: V1)
+
+- **Status: built, not landed.** Branch `lane-v1/VF23` (pushed): `53c8be8` brief, `c5b5679` code, `7b4e257` fix-up 1
+  brief, `201afad` fix-up 1, this record. **Owed:** the full `ci-local.sh` land (V-Q26 A), after PE2.4v's land frees
+  the lock.
+- **Why:** filed from VO16.6a's security review (low). `builder/core/src/cli_command.rs` `lasting` passed a command or
+  folder writable by its group, whatever the group, and every local Mac account is in `staff`. Radio's own handler
+  check (`crates/radio/src/install.rs`, `handler_folder_safe` and `validate_handler`) refuses that.
+- **What:** `command_safe` (the command may not be writable by group or others, `0o022`), `folder_safe` (a folder may
+  be group-writable only when its group is wheel (0) or admin (80), as `/Applications` is; never world-writable,
+  sticky or not, stricter than Radio) and `place_safe` (which rule a path gets), all pure; `lasting` uses `place_safe`
+  per path. `.ai/SECURITY.md` drops the "a folder writable by its group is allowed" limit and says the rule in its
+  paragraph and the Radio row.
+- **Who built it:** Codex, from the two briefs. Her sandbox can't bind sockets, so V1 re-ran the radio tests.
+- **Verified:** red first (Codex: 4 assertion failures before the change; fix-up 1's test failed on its assertion
+  with a stub). Green: `cargo test -p voice-core cli_command` 20 passed, `cargo test -p voice-api radio` 24 passed,
+  `cargo fmt --check`, clippy on `voice-core` and `voice-api`. Mutations, each by `mutate-check.sh` (copy, `cmp`):
+  the folder group rule dropped, staff trusted, admin not trusted, the command allowed group write, the folder gid
+  ignored, the command given the folder rule, the command given either rule: all killed. Live: a throwaway test
+  against the real paths on this Mac (removed, file restored and `cmp`-checked): the installed
+  `~/Applications/Voice.app` command and two third-party apps under `/Applications` (`root:admin 0775`) still pass.
+- **Security review (sub-agent):** no HIGH or MEDIUM. LOW: an account with umask 002 gets a staff-writable
+  `~/Applications` from `install.sh`, which is now refused, and running `install.sh` again doesn't fix the mode (Radio
+  refuses it too; macOS defaults to 022); another admin account can still replace Voice in `/Applications` (Radio
+  allows it too); ACLs aren't read (neither side reads them, as before).
+- **Verifier (Fable, first pass, at `c5b5679`):** PASS. Should-fix 1, the command-versus-folder wiring unpinned (my
+  "command checked as an admin folder" mutation had hard-coded gid 80): fixed in fix-up 1 (45 added lines in files
+  she saw). Should-fix 2: VO16.6a (`lane-v1/VO16.6a`, unlanded) rewrites the same Radio row of `.ai/SECURITY.md`,
+  saying a group-writable folder passes and "VF23 tightens this"; **whichever of the two lands second keeps VF23's
+  wording and drops that sentence.** Note 4, a linked `voice` beside the app escaping the folder check (defence in
+  depth): filed as VF25 `1Rc8LTXq`. Note 3 (the sticky exception) folded into fix-up 1.
+- **Not verified:** the literal `index == 0` in `lasting` (the first path is the command) survives a mutation to
+  `false`: pinning it on disk needs a command whose group is admin, which a portable test can't make. It is
+  `ancestors()`' own contract (the path itself comes first). The full gate runs at the land.
+
 ## PE2.4v: the gate's touched tier, the changed crates and what depends on them (2026-11-17, lane: V1)
 
 - **Why:** every land ran the whole `scripts/ci-local.sh`, about 3 hours on today's loaded Mac (VF22's land, 3 h 04 min),
