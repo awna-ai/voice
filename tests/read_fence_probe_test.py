@@ -678,8 +678,15 @@ class FakeTests(unittest.TestCase):
 
 class WiringTests(unittest.TestCase):
     def test_ci_runs_probe_after_sandbox_probe(self):
-        self.assertRegex((REPO / 'scripts/ci-local.sh').read_text(),
-                         r'for t in [^;]*claude_sandbox_probe read_fence_probe; do')
+        result = subprocess.run(['bash', str(REPO / 'scripts/ci-local.sh'), '--list'],
+                                cwd=REPO, capture_output=True, text=True, check=True,
+                                timeout=120)
+        lines = result.stdout.splitlines()
+        read_fence = 'python3 tests/read_fence_probe_test.py'
+        sandbox_probe = 'python3 tests/claude_sandbox_probe_test.py'
+        self.assertIn(read_fence, lines)
+        self.assertIn(sandbox_probe, lines)
+        self.assertGreater(lines.index(read_fence), lines.index(sandbox_probe))
 
 
 if __name__ == '__main__':

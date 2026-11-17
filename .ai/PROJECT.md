@@ -9,6 +9,7 @@ member and no real person's data.
 | --- | --- | --- |
 | `crew/_template/` | Member template, filled by `bootstrap/install.sh --name <Name>` | `tests/crew_install_test.sh` |
 | `bootstrap/` | The guided build (`PROMPT.md`) and its installer | `tests/crew_install_test.sh` |
+| `scripts/ci-local.sh` | The gate: `--tier full` (default) runs everything; `--tier touched` runs the changed crates and their dependents plus the repo-wide scans, and falls back to full for anything it can't map; `--list` prints the steps | `tests/ci_local_test.sh` |
 | `scripts/crew_decisions.py` | Mine, split, tally, label, score, record, privacy-check | `tests/crew_*_test.py` |
 | `scripts/crew_documents.py` | Read text, Word and PDF inputs for the lens | `tests/crew_documents_test.py` |
 | `scripts/crew_mail.py`, `crew_decisions.py sources` | Extra sources listed in `private.json`, each read only with a consent date: sent mail from an mbox, the live log, project folders reviewed file by file for the lens | `tests/crew_extra_sources_test.py` |
@@ -32,7 +33,7 @@ member and no real person's data.
 | `builder/app/` | The Voice app's window, its locked-down bridge, and `rfd` as the native file window | `builder/app/tests/lockdown.rs` |
 | `builder/ui/` | The app's screens as a package another app can mount, the Ask screen (`Ask.vue`: one question to one assistant, the permissions ticked this time, where it may go, the answer) among them | `pnpm -C builder/ui test` |
 
-All of it runs with `bash scripts/ci-local.sh` (Python 3.9+ standard library and shellcheck). The
+All of it runs with `bash scripts/ci-local.sh` (Python 3.9+ standard library and shellcheck). `--tier touched` runs only what a change touches. The
 Rust checks (fmt, clippy, tests) need stable Rust and are skipped when `cargo` is missing. The
 screens need Node and pnpm; their checks are skipped with a printed line when pnpm is missing. The
 Windows and Linux checks of `builder/keystore` need those targets (`rustup target add
