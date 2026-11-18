@@ -17,8 +17,7 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       of the reply it answered. Drops excluded folders, and records on a personal topic or holding a
       secret. The newest share of questions, and every message from that point on, is split
       "heldout" for the backtest.
-      compartments.<name>.filters replaces excluded_folders/personal for mine only; other commands
-      keep the member filters, and secrets and fences always apply.
+      compartments.<name>.filters applies to mine, merge and folders; private filters, secrets and fences still apply.
   documents [--dir FOLDER] [--sources] --out-dir DIR [--size 6000] [--pdftotext PATH]
       Read the principal's documents into filtered private lens inputs and an inventory; with
       --sources, also each consented folder source's files marked y in its review.
@@ -432,8 +431,26 @@ def folder_compartment(c, folder_name):
                         return route
             if fold(name) == fold(prefix):
                 break
-    matches = [(len(fold(encode(folder))), compartment) for compartment, folder in declared_folders(c)
-               if fold(name) == fold(encode(folder)) or fold(name).startswith(fold(encode(folder)) + "-")]
+    matches, siblings = [], {}
+    name = fold(name)
+    for compartment, folder in declared_folders(c):
+        prefix = fold(encode(folder))
+        if name == prefix:
+            matches.append((len(prefix), compartment))
+        elif name.startswith(prefix + "-"):
+            parent = folder.parent
+            if parent not in siblings:
+                siblings[parent] = []
+                try:
+                    with os.scandir(parent) as entries:
+                        siblings[parent] = [fold(encode(entry.path)) for entry in entries
+                                            if entry.is_dir(follow_symlinks=False)]
+                except OSError:
+                    pass
+            if any(len(sibling) > len(prefix) and (name == sibling or name.startswith(sibling + "-"))
+                   for sibling in siblings[parent]):
+                continue
+            matches.append((len(prefix), compartment))
     return max(matches)[1] if matches else "p:" + project_name(folder_name)
 
 
@@ -642,7 +659,15 @@ def read_member(path):
             filters[key] = value
     merged["filters"] = filters
     if "compartments" in merged:
-        merged["compartments"] = read_compartments(merged["compartments"], path.parent)
+        compartments = read_compartments(merged["compartments"], path.parent)
+        private_filters = extra.get("filters") or {}
+        for name, entry in compartments["compartments"].items():
+            for key, override in entry.get("filters", {}).items():
+                if key in private_filters:
+                    pattern = f"(?:{override})|(?:{private_filters[key]})"
+                    entry["filters"][key] = pattern
+                    compartments.filters[name][key] = compile_pattern("filters." + key, pattern)
+        merged["compartments"] = compartments
     return merged
 
 
@@ -2242,7 +2267,9 @@ def cmd_merge(m, args):
                 duplicates += 1
                 continue
             seen.add(r["id"])
-            reason = privacy(m, r)
+            personal = (mining_filter(m, r["compartment"], "personal")
+                        if m.compartments is not None and isinstance(r.get("compartment"), str) else m.personal)
+            reason = privacy(m, r, personal=personal)
             if reason:
                 dropped[reason] += 1
                 continue
@@ -2275,7 +2302,7 @@ def cmd_folders(m, args):
         else:
             if not folder.is_dir():
                 continue
-            state = "excluded" if m.excluded.search(folder.name) else "mined"
+            state = "excluded" if mining_filter(m, compartment, "excluded_folders").search(folder.name) else "mined"
             sessions = len(list(folder.glob("*.jsonl")))
         totals[state][0] += 1
         totals[state][1] += sessions or 0

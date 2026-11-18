@@ -667,11 +667,11 @@ class Compartments(unittest.TestCase):
                 excluded = 3 if "excluded_folders" in overrides else 2
                 self.assertIn(f", {excluded} excluded records", proc.stdout)
                 self.assertFalse(any("garden" in r["text"] for r in rows if r["compartment"] == "work"))
-                # Merge retains member filters even for tagged records.
+                # Merge retains the compartment filters for tagged records.
                 proc = self.h.crew(member, "merge", "--in", "out.jsonl", "--out", "merged.jsonl")
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 merged = [json.loads(line) for line in self.h.read("merged.jsonl").splitlines()]
-                self.assertEqual(merged, [r for r in rows if r["compartment"] == "work"])
+                self.assertEqual(merged, rows)
 
     def test_mine_hub_routing_does_not_borrow_compartment_filters(self):
         member = self.garden_filters({"excluded_folders": "(?!)", "personal": "(?!)"})
@@ -2415,6 +2415,143 @@ class Core(unittest.TestCase):
             confirm.assert_not_called()
         self.assertEqual(out.getvalue(), "")
         self.assertFalse(self.overlay.exists())
+
+
+class CompartmentFilterCommands(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.dir.cleanup)
+        self.config = {"version": 1, "fenced": [], "compartments": {
+            "noor": {"folders": ["~/p/noor"], "filters": {
+                "personal": "zzoverride", "excluded_folders": "zzexcluded"}},
+            "fleet": {"folders": ["~/p/fleet"]}}}
+        self.h.write("compartments.json", self.config)
+        self.member = self.h.member({**ADA, "compartments": "compartments.json", "filters": {
+            **ADA["filters"], "personal": "noor|zzmember", "excluded_folders": "noor|fleet"}})
+        sys.path.insert(0, str(SCRIPTS))
+        import crew_decisions
+        self.c = crew_decisions
+
+    def rows(self, name):
+        return [json.loads(line) for line in self.h.read(name).splitlines()]
+
+    def ok(self, *args):
+        proc = self.h.crew(self.member, *args)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc
+
+    def merge_records(self, records, out="merged.jsonl"):
+        (self.h.root / "input.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+        return self.ok("merge", "--in", "input.jsonl", "--out", out)
+
+    def record(self, name, text, **extra):
+        return {"id": name, "kind": "message", "timestamp": "2026-09-01T00:00:00Z",
+                "project": "p-noor", "text": text, **extra}
+
+    def test_merge_uses_record_compartment_and_always_drops_secrets(self):
+        records = [self.record("own", "noor review", compartment="noor"),
+                   self.record("unscoped", "noor review"),
+                   self.record("other", "noor review", compartment="fleet"),
+                   self.record("unknown", "noor review", compartment="unknown"),
+                   self.record("invalid", "noor review", compartment=[]),
+                   self.record("override", "zzoverride", compartment="noor")]
+        records += [self.record("secret-" + str(i), "account 123456789", **extra)
+                    for i, extra in enumerate(({}, {"compartment": "noor"}, {"compartment": "fleet"}))]
+        proc = self.merge_records(records)
+        self.assertEqual([r["id"] for r in self.rows("merged.jsonl")], ["own"])
+        self.assertIn("dropped 5 personal records, 3 secret records", proc.stdout)
+        config = json.loads(Path(self.member).read_text())
+        del config["compartments"]
+        self.h.write("member.json", config)
+        self.merge_records(records[:1], out="legacy.jsonl")
+        self.assertEqual(self.rows("legacy.jsonl"), [])
+
+    def test_private_personal_addition_reaches_mine_override(self):
+        self.h.session(self.c.encode("~/p/noor"), "own",
+                       said("2026-09-01T00:00:00Z", "noor zzprivate", cwd="~/p/noor"),
+                       said("2026-09-01T00:01:00Z", "noor zzoverride", cwd="~/p/noor"),
+                       said("2026-09-01T00:02:00Z", "noor keep this queue", cwd="~/p/noor"))
+        self.ok("mine", "--projects", str(self.h.projects), "--out", "baseline.jsonl")
+        self.assertEqual([r["text"] for r in self.rows("baseline.jsonl")],
+                         ["noor zzprivate", "noor keep this queue"])
+        self.h.write("private.json", {"filters": {"personal": "zzprivate"}})
+        self.ok("mine", "--projects", str(self.h.projects), "--out", "private.jsonl")
+        self.assertEqual([r["text"] for r in self.rows("private.jsonl")], ["noor keep this queue"])
+
+    def test_private_personal_addition_reaches_merge_override(self):
+        records = [self.record("private", "noor zzprivate", compartment="noor"),
+                   self.record("override", "zzoverride", compartment="noor"),
+                   self.record("safe", "noor keep this queue", compartment="noor")]
+        self.merge_records(records, out="baseline.jsonl")
+        self.assertEqual([r["id"] for r in self.rows("baseline.jsonl")], ["private", "safe"])
+        self.h.write("private.json", {"filters": {"personal": "zzprivate"}})
+        self.merge_records(records)
+        self.assertEqual([r["id"] for r in self.rows("merged.jsonl")], ["safe"])
+
+    def test_private_excluded_addition_reaches_mine_override(self):
+        for suffix in ("", "/zzprivate", "/zzexcluded"):
+            self.h.session(self.c.encode("~/p/noor" + suffix), "own" + suffix.replace("/", "-"),
+                           said("2026-09-01T00:00:00Z", "noor keep this queue", cwd="~/p/noor"))
+        self.ok("mine", "--projects", str(self.h.projects), "--out", "baseline.jsonl")
+        self.assertEqual([r["project"] for r in self.rows("baseline.jsonl")], ["p-noor", "p-noor-zzprivate"])
+        self.h.write("private.json", {"filters": {"excluded_folders": "zzprivate"}})
+        self.ok("mine", "--projects", str(self.h.projects), "--out", "private.jsonl")
+        self.assertEqual([r["project"] for r in self.rows("private.jsonl")], ["p-noor"])
+
+    def test_folder_compartment_distinguishes_siblings_from_descendants(self):
+        home = self.h.root / "home"
+        root = home / "p/noor"
+        (root / "sub").mkdir(parents=True)
+        (home / "p/noor-x").mkdir()
+        (home / "p/noor-note").touch()
+        (home / "p/noor-link").symlink_to(root / "sub", target_is_directory=True)
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            compartments = self.c.read_compartments("compartments.json", self.h.root)
+            for suffix, expected in (("", "noor"), ("/sub", "noor"), ("-x", "p:p-noor-x"),
+                                     ("-x/sub", "p:p-noor-x-sub"), ("-note", "noor"),
+                                     ("-link", "noor"), ("/.claude/worktrees/a", "noor"),
+                                     ("-x/.claude/worktrees/a", "p:p-noor-x")):
+                with self.subTest(suffix=suffix):
+                    self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(str(root) + suffix)),
+                                     expected)
+            compartments["compartments"]["fleet"]["folders"] = ["~/p"]
+            self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(home / "p/noor-x")), "fleet")
+
+    def test_folder_compartment_skips_unreadable_parent(self):
+        with patch.object(os, "scandir", side_effect=PermissionError):
+            compartments = self.c.read_compartments("compartments.json", self.h.root)
+            self.assertEqual(self.c.folder_compartment(compartments, self.c.encode("~/p/noor/sub")), "noor")
+
+    def test_folders_text_and_json_use_the_same_exclusion_as_mine(self):
+        noor = self.c.encode("~/p/noor")
+        fleet = self.c.encode("~/p/fleet")
+        self.h.session(noor, "own", said("2026-09-01T00:00:00Z", "noor keep this queue", cwd="~/p/noor"))
+        self.h.session(fleet, "other", said("2026-09-01T00:00:00Z", "keep this queue", cwd="~/p/fleet"))
+        self.ok("mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+        self.assertEqual([r["compartment"] for r in self.rows("mined.jsonl")], ["noor"])
+        for private, noor_state in ((False, "mined"), (True, "excluded")):
+            with self.subTest(private=private):
+                if private:
+                    self.h.write("private.json", {"filters": {"excluded_folders": "noor"}})
+                text = self.ok("folders", "--projects", str(self.h.projects)).stdout
+                self.assertIn(f"{noor_state}\t1\tp-noor\t{noor}\n", text)
+                self.assertIn(f"excluded\t1\tp-fleet\t{fleet}\n", text)
+                rows = json.loads(self.ok("folders", "--projects", str(self.h.projects), "--json").stdout)
+                self.assertEqual({r["compartment"]: r["state"] for r in rows},
+                                 {"noor": noor_state, "fleet": "excluded"})
+
+    def test_round_keeps_member_filter_with_compartment_override_loaded(self):
+        self.h.write("questions.json", {"questions": [
+            {"n": n, "question": "Which review order?", "options": [{"label": "Oldest"}, {"label": "Newest"}]}
+            for n in (1, 2)]})
+        self.h.write("answers.json", {"answered": "2026-09-01", "answers": {
+            "1": {"own_words": "noor review"}, "2": {"own_words": "keep one queue"}}})
+        proc = self.ok("round", "--name", "sample", "--questions", "questions.json",
+                       "--answers", "answers.json", "--out", "round.jsonl")
+        self.assertEqual([r["own_words"] for r in self.rows("round.jsonl")], ["keep one queue"])
+        self.assertEqual(self.rows("round.jsonl")[0]["project"], "round-sample")
+        self.assertNotIn("compartment", self.rows("round.jsonl")[0])
+        self.assertIn("dropped 1 personal records, 0 secret records", proc.stdout)
 
 
 if __name__ == "__main__":
