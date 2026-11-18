@@ -115,6 +115,23 @@ run verify-main -- "$tmp/check.sh"
 expect 0 "green is current: $head"
 runs 1
 echo 'verify_main_test: first green, scratch cleanup and current green passed'
+# A tag named main must not hide a newer branch head from either script.
+tagged_old=$head
+git push -q origin "$head:refs/tags/main"
+commit tagged-main
+git push -q origin HEAD:refs/heads/main
+head=$(git rev-parse HEAD)
+git update-ref refs/remotes/origin/main "$tagged_old"
+verify
+expect 0 "green $head"
+ref_is refs/green/main "$head"
+runs 1
+run release-check "$head"
+expect 0 "release-check: ${head:0:12} passed the full check (green is ${head:0:12})."
+git -C "$tmp/remote.git" tag -d main >/dev/null
+if git show-ref --verify --quiet refs/tags/main; then git tag -d main >/dev/null; fi
+no_scratch
+echo 'verify_main_test: tag named main passed'
 # A killed run leaves its scratch registered; an unrelated worktree must stay.
 d=$(mktemp -d "${TMPDIR:-/tmp}/verify-main.XXXXXX")
 git worktree add -q --detach "$d/wt" HEAD
@@ -129,6 +146,24 @@ git worktree remove -- "$tmp/decoy"
 d=
 no_scratch
 echo 'verify_main_test: killed run scratch swept and decoy preserved passed'
+# A scratch parent replaced by a symlink must not remove its target worktree.
+git worktree add -q --detach "$tmp/target/wt" HEAD
+printf 'keep\n' > "$tmp/target/wt/untracked"
+real=$(mktemp -d "$tmp/real.XXXXXX")
+d=$real/verify-main.abcdef
+mkdir "$d"
+git worktree add -q --detach "$d/wt" HEAD
+rm -rf "$d"
+ln -s "$tmp/target" "$d"
+verify
+expect 0 "green is current: $head"
+[ -d "$tmp/target/wt" ] && [ -f "$tmp/target/wt/untracked" ] || fail 'symlink target worktree removed'
+rm "$d"
+d=
+git worktree remove --force -- "$tmp/target/wt"
+git worktree prune
+no_scratch
+echo 'verify_main_test: symlink target worktree preserved passed'
 # A check may finish after main has been rewound, on either outcome.
 G=$head
 for outcome in green red; do
@@ -224,6 +259,11 @@ expect 0 "green $head"
 ref_is refs/green/main "$head"
 ref_is refs/green/frozen "$orphan_freeze"
 if grep -q unfrozen "$tmp/out"; then fail 'unrelated freeze reported cleared'; fi
+verify
+expect 0 "green is current: $head"
+grep -Fx "verify-main: releases are still frozen at ${orphan_freeze:0:12}, which is not on origin/main; check it and delete refs/green/frozen on origin by hand." "$tmp/out" >/dev/null || fail 'missing unrelated freeze sentence'
+ref_is refs/green/frozen "$orphan_freeze"
+runs 0
 git -C "$tmp/remote.git" update-ref -d refs/green/frozen
 echo 'verify_main_test: unrelated freeze preserved passed'
 # A competing freeze update must win over this run's stale lease.
@@ -304,6 +344,12 @@ verify
 expect 0 "verify-main: already running (pid $live)"
 runs 0
 [ -L "$lock" ] && [ "$(readlink "$lock")" = "$live" ] || fail 'live lock changed'
+: > "$tmp/ran"
+run env COLUMNS=10 verify-main -- "$tmp/check.sh"
+expect 0 "verify-main: already running (pid $live)"
+runs 0
+[ -L "$lock" ] && [ "$(readlink "$lock")" = "$live" ] || fail 'narrow-column live lock changed'
+echo 'verify_main_test: narrow-column live holder passed'
 kill "$live"
 wait "$live" 2>/dev/null || true
 live=

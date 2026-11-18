@@ -32,7 +32,7 @@ while read -r oid ref; do
 done <<< "$refs"
 [ -z "$frozen" ] || fail "releases are frozen at ${frozen:0:12}: main went red twice there. Revert or fix it, and wait for the next green."
 [ -n "$green" ] || fail 'nothing on main has passed the full check yet.'
-git fetch --quiet -- "$remote" main || fail "could not fetch $remote"
+git fetch --quiet -- "$remote" "+refs/heads/main:refs/remotes/$remote/main" || fail "could not fetch $remote"
 git merge-base --is-ancestor "$green" "refs/remotes/$remote/main" || fail "green ${green:0:12} is not on $remote/main; nothing can be released until verify-main.sh moves it."
 if git merge-base --is-ancestor "$candidate" "$green"; then
   echo "release-check: ${candidate:0:12} passed the full check (green is ${green:0:12})."
