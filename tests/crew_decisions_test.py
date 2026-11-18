@@ -625,7 +625,8 @@ class Compartments(unittest.TestCase):
             with self.subTest(overrides=overrides):
                 member = self.garden_filters(overrides)
                 self.h.session(self.c.encode("~/projects/garden"), "garden",
-                               said("2026-09-01T00:00:00Z", "keep the garden review queue"),
+                               said("2026-09-01T00:00:00Z", "keep the garden review queue",
+                                    cwd="~/projects/garden"),
                                said("2026-09-01T00:01:00Z", "garden account 123456789"))
                 cross = [said("2026-09-02T00:00:00Z", "keep this review queue"),
                          said("2026-09-02T00:01:00Z", "keep the garden review queue")]
@@ -642,14 +643,54 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 rows = [json.loads(line) for line in self.h.read("out.jsonl").splitlines()]
                 self.assertEqual([(r["compartment"], r["text"]) for r in rows],
-                                 ([("garden", "keep the garden review queue")] if garden_kept else []) +
-                                 ([("work", "keep this review queue")] if "excluded_folders" in overrides else []))
+                                 [("garden", "keep the garden review queue")] if garden_kept else [])
+                self.assertIn(", 2 excluded records", proc.stdout)
                 self.assertFalse(any("garden" in r["text"] for r in rows if r["compartment"] == "work"))
                 # Merge retains member filters even for tagged records.
                 proc = self.h.crew(member, "merge", "--in", "out.jsonl", "--out", "merged.jsonl")
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 merged = [json.loads(line) for line in self.h.read("merged.jsonl").splitlines()]
                 self.assertEqual(merged, [r for r in rows if r["compartment"] == "work"])
+
+    def test_mine_hub_routing_does_not_borrow_compartment_filters(self):
+        member = self.garden_filters({"excluded_folders": "(?!)", "personal": "(?!)"})
+        config = json.loads(Path(member).read_text())
+        config["filters"]["personal"] = r"garden (review|stays)"
+        self.h.write("member.json", config)
+        self.config["compartments"]["client"]["filters"] = {"personal": "(?!)"}
+        self.config["hub"]["paths"].append("~/projects/garden/projects")
+        self.config["hub"]["routes"].update({"garden-stack": "garden", "work-stack": "work"})
+        self.h.write("compartments.json", self.config)
+        for folder, targets, expected, excluded in (
+                ("~/.hub", ["garden-stack"], "garden", 1),
+                ("~/.hub", ["garden-stack", "client-stack"], "hub-mixed", 1),
+                ("~/projects/garden", ["client-stack"], "client", 0),
+                ("~/projects/garden", ["client-stack", "work-stack"], "hub-mixed", 0)):
+            with self.subTest(folder=folder, compartment=expected):
+                shutil.rmtree(self.h.projects, ignore_errors=True)
+                tool = {"type": "assistant", "message": {"content": [
+                    {"type": "tool_use", "name": "Read", "input": {
+                        "file_path": folder + "/projects/" + target + "/queue.md"}}
+                    for target in targets]}}
+                self.h.session(self.c.encode(folder), "routed", tool,
+                               said("2026-09-01T00:00:00Z", "keep the garden review queue",
+                                    cwd="~/projects/garden"),
+                               said("2026-09-01T00:01:00Z", "keep this review queue",
+                                    cwd="~/projects/garden" if excluded else "~/projects/work"),
+                               said("2026-09-01T00:02:00Z", "garden stays private",
+                                    cwd="~/projects/work"),
+                               said("2026-09-01T00:03:00Z", "keep every review queue verdict",
+                                    cwd="~/projects/work"))
+                proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                rows = [json.loads(line) for line in self.h.read("out.jsonl").splitlines()]
+                self.assertEqual([(r["compartment"], r["text"]) for r in rows],
+                                 ([(expected, "keep this review queue")] if not excluded else []) +
+                                 [(expected, "keep every review queue verdict")])
+                if excluded:
+                    self.assertIn(", 2 excluded records", proc.stdout)
+                else:
+                    self.assertIn("2 personal records", proc.stdout)
 
     def test_compartment_filter_validation(self):
         for filters, suffix in ((None, ""), ([], ""), ({"secret": "x"}, ".secret"),

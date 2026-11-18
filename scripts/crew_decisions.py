@@ -1017,7 +1017,7 @@ def mining_filter(m, compartment, key):
     return m.compartments.filters.get(compartment, {}).get(key, fallback)
 
 
-def record_cwd_drop_reason(m, record):
+def record_cwd_drop_reason(m, record, folder_compartment_name):
     cwd = record.get("cwd")
     if not isinstance(cwd, str) or not cwd:
         return None
@@ -1027,7 +1027,8 @@ def record_cwd_drop_reason(m, record):
             matches_fence(Path(os.path.abspath(os.path.expanduser(cwd))), lexical_fences(c, os.getcwd()))):
         return "fenced"
     compartment = folder_compartment(c, cwd_folder) if c is not None else None
-    if mining_filter(m, compartment, "excluded_folders").search(cwd_folder):
+    excluded = mining_filter(m, compartment, "excluded_folders") if compartment == folder_compartment_name else m.excluded
+    if excluded.search(cwd_folder):
         return "excluded"
     return None
 
@@ -1052,18 +1053,19 @@ def cmd_mine(m, args):
             records = read_session(path)
             allowed = []
             for record in records:
-                reason = record_cwd_drop_reason(m, record)
+                reason = record_cwd_drop_reason(m, record, compartment)
                 if reason:
                     dropped[reason] += 1
                 else:
                     allowed.append(record)
             records = allowed
             session_compartment = hub_compartment(m.compartments, folder.name, compartment, records) if m.compartments is not None else None
+            personal = mining_filter(m, session_compartment, "personal") if session_compartment == compartment else m.personal
             for h, cwd in _harvest(m, path, project, records):
                 cwd_folder = encode(cwd) if isinstance(cwd, str) and cwd else None
                 if m.compartments is not None:
                     h["compartment"] = session_compartment
-                reason = privacy(m, h, personal=mining_filter(m, session_compartment, "personal"))
+                reason = privacy(m, h, personal=personal)
                 if reason:
                     dropped[reason] += 1
                 else:
