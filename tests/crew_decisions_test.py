@@ -4,6 +4,7 @@
 Every case runs the real CLI over fixture transcripts in a temp dir, so no test reads a real one.
 """
 import builtins
+import errno
 import hashlib
 import io
 import json
@@ -2248,7 +2249,11 @@ class Core(unittest.TestCase):
                         except BaseException:
                             os._exit(99)
                     try:
-                        os.write(master, b"y\n")
+                        try:
+                            os.write(master, b"y\n")
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                raise
                         _, status = os.waitpid(pid, 0)
                         self.assertEqual(os.waitstatus_to_exitcode(status), 1)
                         errors.seek(0)
