@@ -848,7 +848,9 @@ def hub_compartment(c, folder_name, compartment, records):
     if any(name.startswith(fold(encode(path)) + "-") for path in hub["paths"]):
         return compartment
     parents = [fold(encode(Path(path).expanduser().parent)) for path in hub["paths"]]
-    if not any(name == parent or name.startswith(parent + "-") for parent in parents):
+    owners = {path: path_compartment(c, Path(path).expanduser().parent, os.getcwd()) for path in hub["paths"]}
+    if not any(compartment == owners[path] and (name == parent or name.startswith(parent + "-"))
+               for path, parent in zip(hub["paths"], parents)):
         return compartment
     home = str(Path.home())
     forms = {}

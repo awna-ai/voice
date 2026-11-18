@@ -827,6 +827,14 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(self.c.hub_compartment(self.config, self.c.encode(folder), compartment, [record]), expected)
         self.assertEqual(self.c.hub_compartment(self.config, self.c.encode("~/.HUB").upper(), "work", [record]), "client")
 
+    def test_hub_routing_requires_the_matching_parents_owner(self):
+        self.config["hub"]["paths"].append("~/projects")
+        self.config["compartments"]["work"]["folders"].append("~/work")
+        record = self.write_tool("~/projects/client-stack/x.md")
+        for folder, compartment in (("~/work", "work"), ("~/anything/else", "p:else")):
+            with self.subTest(folder=folder):
+                self.assertEqual(self.c.hub_compartment(self.config, self.c.encode(folder), compartment, [record]), compartment)
+
     def test_mine_keeps_non_hub_session_compartment(self):
         for folder, session in ((ENCODED_HOME + "-projects-work", "work"), (ENCODED_HOME + "--hub", "hub")):
             self.h.session(folder, session, self.write_tool("~/.hub/projects/client-stack/x.md"),
