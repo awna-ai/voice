@@ -15,3 +15,4 @@ sha2 = "=0.10.9"
 sha1_smol = "=1.0.1"
 zip = { version = "=9.0.5", default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+unicode-normalization = "=0.1.25"

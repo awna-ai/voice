@@ -7,6 +7,7 @@ use crate::{
 use regex::Regex;
 use serde_json::{Map, Value};
 use std::{
+    collections::{HashMap, HashSet},
     ffi::{CString, OsStr},
     fs::File,
     io::{BufRead, BufReader},
@@ -14,6 +15,7 @@ use std::{
     path::{Path, PathBuf},
     sync::LazyLock,
 };
+use unicode_normalization::UnicodeNormalization;
 use voice_core::{
     deny::DenyList,
     error::{Error, Result},
@@ -35,6 +37,8 @@ pub struct Mined {
     pub messages: usize,
     pub cutoff: Option<String>,
     pub excluded: usize,
+    pub excluded_records: usize,
+    pub duplicates: usize,
     pub personal: usize,
     pub secret: usize,
     /// Records of a shape Voice can't read, left out whole.
@@ -470,6 +474,7 @@ impl Builder<'_> {
         session: &str,
         project: &str,
         context: &mut String,
+        seen: &mut HashSet<String>,
     ) -> Result<Vec<Map<String, Value>>> {
         let r = self.object(r, "record")?;
         let kind = r.get("type").and_then(Value::as_str);
@@ -486,14 +491,73 @@ impl Builder<'_> {
         let Some(when) = r.get("timestamp").filter(|v| truthy(v)) else {
             return Ok(vec![]);
         };
+        let uuid = r.get("uuid").and_then(Value::as_str);
+        if uuid.is_some_and(|uuid| seen.contains(uuid)) {
+            return Ok(vec![]);
+        }
         let when = self.string(when, "timestamp")?;
         let mut out = self.questions_in(r, session, project, when)?;
         if let Some(text) = self.typed_text(r)? {
             out.push(message_record(session, when, project, &text, context))
         }
+        if !out.is_empty()
+            && let Some(uuid) = uuid
+        {
+            seen.insert(uuid.to_owned());
+        }
         Ok(out)
     }
 }
+
+// Match pathlib's lexical cleanup, including its special two-slash POSIX root.
+fn encode(cwd: &str, home: &Path) -> String {
+    let path = if cwd == "~" {
+        home.to_string_lossy().into_owned()
+    } else if let Some(rest) = cwd.strip_prefix("~/") {
+        format!("{}/{rest}", home.to_string_lossy().trim_end_matches('/'))
+    } else {
+        cwd.to_owned()
+    };
+    let root = if path.starts_with("//") && !path.starts_with("///") {
+        "//"
+    } else if path.starts_with('/') {
+        "/"
+    } else {
+        ""
+    };
+    let parts = path
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+    let path = format!("{root}{parts}");
+    let path = if path.is_empty() { "." } else { &path };
+    path.nfc()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+fn cwd_score(cwd_folder: Option<&str>, folder: &str) -> u8 {
+    static WORKTREE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new("--claude-worktrees-.*").unwrap());
+    let Some(cwd) = cwd_folder else { return 0 };
+    if !folder.is_ascii() {
+        return 0;
+    }
+    let name = folder.to_ascii_lowercase();
+    let stripped = WORKTREE.replace_all(&name, "");
+    let cwd = cwd.to_ascii_lowercase();
+    if cwd == name {
+        3
+    } else if cwd == stripped {
+        2
+    } else if cwd.starts_with(&format!("{stripped}-")) {
+        1
+    } else {
+        0
+    }
+}
+
 /// Text strings from a message's string content or typed block list; the error is the key whose
 /// shape is wrong.
 pub(crate) fn text_blocks(content: &Value) -> std::result::Result<Vec<&str>, &'static str> {
@@ -771,6 +835,7 @@ pub fn mine_with_progress(
     let reminder = Regex::new(r"(?s)<system-reminder>.*?</system-reminder>").unwrap();
     let commas = Regex::new(r"[\s\x1c-\x1f]*,([\s\x1c-\x1f]*,)+[\s\x1c-\x1f]*").unwrap();
     let mut mined = Mined::default();
+    let mut kept = HashMap::<String, (Map<String, Value>, u8)>::new();
     let root = open_projects(projects)?;
     let folders = project_folders(projects, &root)?;
     let total = folders.len();
@@ -805,6 +870,7 @@ pub fn mine_with_progress(
             let mut reader = BufReader::new(file);
             let mut bytes = vec![];
             let mut context = String::new();
+            let mut seen = HashSet::new();
             let mut b = Builder {
                 member,
                 filters,
@@ -828,7 +894,16 @@ pub fn mine_with_progress(
                     let Ok(r) = serde_json::from_str::<Value>(line) else {
                         continue;
                     };
-                    let records = match b.harvest(&r, session, &project, &mut context) {
+                    let cwd_folder = r
+                        .get("cwd")
+                        .and_then(Value::as_str)
+                        .filter(|cwd| !cwd.is_empty())
+                        .map(|cwd| encode(cwd, home));
+                    if cwd_folder.as_ref().is_some_and(|cwd| filters.excluded(cwd)) {
+                        mined.excluded_records += 1;
+                        continue;
+                    }
+                    let records = match b.harvest(&r, session, &project, &mut context, &mut seen) {
                         Ok(records) => records,
                         Err(e) if unreadable(&e) => {
                             mined.unreadable += 1;
@@ -840,7 +915,17 @@ pub fn mine_with_progress(
                         match privacy(filters, &Value::Object(record.clone()))? {
                             Some(Kind::Personal) => mined.personal += 1,
                             Some(Kind::Secret) => mined.secret += 1,
-                            None => mined.records.push(record),
+                            None => {
+                                let score = cwd_score(cwd_folder.as_deref(), &folder_name);
+                                let id = record["id"].as_str().unwrap().to_owned();
+                                if let Some((_, previous_score)) = kept.get(&id) {
+                                    mined.duplicates += 1;
+                                    if score <= *previous_score {
+                                        continue;
+                                    }
+                                }
+                                kept.insert(id, (record, score));
+                            }
                         }
                     }
                 }
@@ -848,6 +933,7 @@ pub fn mine_with_progress(
         }
         progress(index + 1, total);
     }
+    mined.records = kept.into_values().map(|(record, _)| record).collect();
     mined.records.sort_by(|a, b| {
         (a["timestamp"].as_str().unwrap(), a["id"].as_str().unwrap())
             .cmp(&(b["timestamp"].as_str().unwrap(), b["id"].as_str().unwrap()))
@@ -879,6 +965,16 @@ pub fn summary(m: &Mined) -> String {
         (Some(a), Some(b)) => format!("{} → {}", date(a), date(b)),
         _ => "none".into(),
     };
+    let excluded = if m.excluded_records == 0 {
+        String::new()
+    } else {
+        format!(", {} excluded records", m.excluded_records)
+    };
+    let duplicates = if m.duplicates == 0 {
+        String::new()
+    } else {
+        format!(", {} duplicate records", m.duplicates)
+    };
     let skipped = if m.unreadable == 0 {
         String::new()
     } else {
@@ -890,7 +986,7 @@ pub fn summary(m: &Mined) -> String {
         format!("; left out {} files on the never-read list", m.denied)
     };
     format!(
-        "mined {} questions ({} held out) and {} messages, {}; held out from {}\ndropped {} excluded folders, {} personal records, {} secret records{skipped}{denied}\n",
+        "mined {} questions ({} held out) and {} messages, {}; held out from {}\ndropped {} excluded folders, {} personal records, {} secret records{excluded}{duplicates}{skipped}{denied}\n",
         m.questions,
         m.held,
         m.messages,

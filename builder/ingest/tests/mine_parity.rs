@@ -104,6 +104,16 @@ fn compare(case: &str, split: Split, flags: &[&str]) {
         String::from_utf8_lossy(&py.stderr)
     );
     let result = mine(&m, &f, &p, std::path::Path::new(home), &split).unwrap();
+    if case == "numeric_uuid" {
+        assert_eq!(result.messages, 1);
+        assert_eq!(result.duplicates, 1);
+    }
+    if case == "cwd_encoding" {
+        for text in ["encoded cwd 5", "encoded cwd 6"] {
+            let record = result.records.iter().find(|r| r["text"] == text).unwrap();
+            assert_eq!(record["project"], ".aaa");
+        }
+    }
     assert_eq!(
         to_jsonl(&result.records).as_bytes(),
         fs::read(output).unwrap(),
@@ -129,6 +139,13 @@ fn all_accepted_fixtures_match_python_bytes_and_summary() {
         "single_select",
         "notes",
         "tolerant_questions",
+        "repeated_uuid",
+        "numeric_uuid",
+        "uuid_array",
+        "uuid_object",
+        "resumed_cwd",
+        "excluded_cwd",
+        "cwd_encoding",
         "typed_text",
         "context",
         "bytes",

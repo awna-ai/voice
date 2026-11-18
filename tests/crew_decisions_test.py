@@ -111,6 +111,20 @@ def ada_fixture(h):
 
 
 class ExampleMember(unittest.TestCase):
+    def test_mine_non_ascii_folder_has_zero_cwd_score(self):
+        for cwd, folder in (("/projects/STRASSE", "-projects-Straße"),
+                            ("/projects/K", "-projects-K")):
+            with self.subTest(folder=folder):
+                h = Harness()
+                record = said("2026-09-01T00:00:00Z", "keep this review queue verdict", cwd=cwd)
+                h.session("-aaa", "same", record)
+                h.session(folder, "same", record)
+                out = h.crew(h.member(ADA), "mine", "--projects", str(h.projects), "--out", "d.jsonl")
+                self.assertEqual(out.returncode, 0, out.stderr)
+                records = [json.loads(line) for line in h.read("d.jsonl").splitlines()]
+                self.assertEqual([r["project"] for r in records], [".aaa"])
+                self.assertIn(", 1 duplicate records", out.stdout)
+
     def test_mine_reads_a_list_answer(self):
         h = Harness()
         h.session(ENCODED_HOME + "-projects-app", "s1",
@@ -853,7 +867,7 @@ class Compartments(unittest.TestCase):
 
     def test_mine_deduplicates_ids_with_distinct_or_missing_uuids(self):
         m = self.c.load_member(self.c.read_member(self.member))
-        for uuids in (("u1", "u2"), (None, None)):
+        for uuids in (("u1", "u2"), (None, None), (1, 1)):
             with self.subTest(uuids=uuids):
                 records = [said("2026-09-01T00:00:00Z", "keep every review queue verdict for later scoring",
                                 **({"uuid": uuid} if uuid else {})) for uuid in uuids]

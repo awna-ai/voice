@@ -42,7 +42,8 @@ fn claude_code_progress_counts_every_folder_including_excluded() {
     .unwrap();
     assert_eq!(progress, [(0, 3), (1, 3), (2, 3), (3, 3)]);
     assert_eq!(mined.excluded, 1);
-    assert_eq!(mined.messages, 2);
+    assert_eq!(mined.messages, 1);
+    assert_eq!(mined.duplicates, 1);
     assert_eq!(
         mine::to_jsonl(&mined.records),
         mine::to_jsonl(

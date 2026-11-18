@@ -735,13 +735,13 @@ def _harvest(m, path, project, records=None):
             context = assistant_text(r).strip() or context
         if r.get("type") != "user" or not r.get("timestamp"):
             continue
-        if r.get("uuid") is not None and r["uuid"] in seen:
+        if isinstance(r.get("uuid"), str) and r["uuid"] in seen:
             continue
         harvested = questions_in(m, r, path.stem, project)
         text = typed_text(m, r)
         if text is not None:
             harvested.append(message_record(path.stem, r["timestamp"], project, text, context))
-        if harvested and r.get("uuid") is not None:
+        if harvested and isinstance(r.get("uuid"), str):
             seen.add(r["uuid"])
         for record in harvested:
             yield record, r.get("cwd")
@@ -990,10 +990,10 @@ def cmd_mine(m, args):
                     dropped[reason] += 1
                 else:
                     score = 0
-                    if cwd_folder is not None:
-                        name = fold(folder.name)
+                    if cwd_folder is not None and folder.name.isascii():
+                        name = folder.name.lower()
                         stripped = re.sub(r"--claude-worktrees-.*", "", name)
-                        cwd_name = fold(cwd_folder)
+                        cwd_name = cwd_folder.lower()
                         if cwd_name == name:
                             score = 3
                         elif cwd_name == stripped:

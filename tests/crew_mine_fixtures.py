@@ -139,6 +139,45 @@ def build(case, h):
             h.raw(json.dumps(said(WHEN, 'ignored text file')).encode() + b'\n', folder, 'notes.txt')
     elif case == 'duplicates':
         h.session(FOLDER, 's1', said(WHEN, 'same message'), said(WHEN, 'same message'))
+    elif case == 'repeated_uuid':
+        h.session(FOLDER, 's1',
+                  said(WHEN, 'continue', uuid='retry'),
+                  said(WHEN, 'keep the first harvested copy', uuid='retry'),
+                  said(WHEN, 'discard the repeated copy', uuid='retry'),
+                  said(WHEN, 'my therapist moved it', uuid='private'),
+                  said(WHEN, 'discard even after privacy drops it', uuid='private'))
+    elif case == 'numeric_uuid':
+        record = said(WHEN, 'keep the numeric uuid copies', uuid=1)
+        h.session(FOLDER, 's1', record, record)
+    elif case in ('uuid_array', 'uuid_object'):
+        h.session(FOLDER, 's1', said(WHEN, 'keep the non-string uuid',
+                                   uuid=[] if case == 'uuid_array' else {}))
+    elif case == 'resumed_cwd':
+        worktree = FOLDER + '--claude-worktrees-second'
+        records = [said(WHEN, 'keep the worktree project', cwd='/Users/p/projects/app/.claude/worktrees/second'),
+                   said(WHEN, 'keep the base project', cwd='/Users/p/projects/app'),
+                   said(WHEN, 'keep first on a tied score', cwd=None)]
+        h.session(FOLDER, 'same', *records)
+        h.session(worktree, 'same', *records)
+    elif case == 'cwd_encoding':
+        for i, (cwd, folder) in enumerate((
+                ('~/projects/App', '-Users-p-projects-App'),
+                ('/Users/p/projects/cafe\u0301', '-Users-p-projects-caf-'),
+                ('./projects/app', 'projects-app'),
+                ('//projects/app', '--projects-app'),
+                ('///projects//./app/', '-projects-app'),
+                ('/projects/STRASSE', '-projects-Straße'),
+                ('/projects/K', '-projects-K'))):
+            record = said(WHEN, f'encoded cwd {i}', cwd=cwd)
+            h.session('-aaa', f'encoding-{i}', record)
+            h.session(folder, f'encoding-{i}', record)
+    elif case == 'excluded_cwd':
+        hidden = reply(WHEN, 'excluded reply must never become context')
+        hidden['cwd'] = '/Users/p/projects/garden-club'
+        h.session(FOLDER, 's1', reply(WHEN, 'allowed context'), hidden,
+                  said(WHEN, 'excluded user', cwd='/Users/p/projects/garden-club'),
+                  said(WHEN, 'keep the allowed message'),
+                  said(WHEN, 'keep the allowed message'))
     elif case == 'empty':
         pass
     elif case == 'no_sessions':
