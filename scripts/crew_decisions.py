@@ -44,7 +44,7 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
   core-check [--file F ...] [--block-list F]
       Check shared core files and the local overlay; report hit locations and classes only.
   core-import --from F [--block-list F]
-      In a terminal, check one distilled file and confirm its import into the private core overlay.
+      In a terminal, import one distilled file outside every fence into the private core overlay.
   folders [--projects DIR] [--json]
       Inventory transcript folders without opening fenced folders.
   similar [--corpus decisions.jsonl] (--query TEXT | --stdin) [--k 6] [--json]
@@ -204,7 +204,8 @@ def check_compartments(c):
                         or name not in c["compartments"] and not re.fullmatch(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*", name)
                         or not isinstance(terms, list) or not terms
                         or any(not isinstance(s, str) or not s.strip()
-                               or any(c in s for c in "\x00\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029") for s in terms)):
+                               or not s.isprintable()
+                               or any(c in s for c in "\u200b\u200c\u200d\u2060\ufeff") for s in terms)):
                     fail("core.markers")
         if "patterns" in core:
             if not isinstance(core["patterns"], list):
@@ -1305,7 +1306,7 @@ def core_config(m, command):
 
 
 def core_import_file(path, label):
-    """Read just one named file, without resolving or enumerating fenced paths."""
+    """Read one non-fenced named file, without following a link and with a size cap."""
     fd = os.open(Path(path).expanduser(), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as source:
         info = os.fstat(source.fileno())
@@ -1332,11 +1333,8 @@ def core_rules(m, core, block_list, command):
     rules += [(f"pattern {i}", [re.compile(s, re.I)]) for i, s in enumerate(core.get("patterns", []))]
     rules += [("personal", [m.personal]), ("secret", [m.secret])]
     if block_list:
-        if command == "core-import":
-            data = core_import_file(block_list, "--block-list")
-        else:
-            refuse_fenced_root(m, block_list)
-            data = Path(block_list).expanduser().read_bytes()
+        refuse_fenced_root(m, block_list)
+        data = core_import_file(block_list, "--block-list")
         terms = core_text(data, command, "--block-list").splitlines()
         rules.append(("block-list", [term(s.strip()) for s in terms if s.strip() and not s.lstrip().startswith("#")]))
     return rules
@@ -1392,7 +1390,12 @@ def confirm_import(text):
     script = (f'display dialog "{escaped}" buttons {{"Cancel", "Import"}} '
               'default button "Cancel" cancel button "Cancel" with icon caution')
     try:
-        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=600)
+        executable = Path("/usr/bin/osascript")
+        info = executable.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
+            return False
+        result = subprocess.run([str(executable), "-e", script], capture_output=True, text=True, timeout=600,
+                                env={"PATH": "/usr/bin:/bin", "HOME": str(Path.home())})
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0 and "button returned:Import" in result.stdout
@@ -1413,6 +1416,7 @@ def import_core(m, args):
     if not os.isatty(0) or not os.isatty(1):
         raise Failed("core-import: run this yourself in a terminal")
     rules = core_rules(m, core, args.block_list, "core-import")
+    refuse_fenced_root(m, args.from_file)
     data = core_import_file(args.from_file, "--from")
     text = core_text(data, "core-import", "--from")
     hits = core_hits([(args.from_file, text)], rules)
@@ -3156,7 +3160,7 @@ def run_main(argv=None, member=None, prog="crew_decisions", description=None):
         if m.compartments is not None:
             for name in PATH_ARGUMENTS:
                 # These commands render/raise their own cwd refusal (where also prints JSON).
-                if name == "cwd" or (args.cmd == "core-import" and name in ("from_file", "block_list")):
+                if name == "cwd":
                     continue
                 value = getattr(args, name, None)
                 for path in (value if isinstance(value, list) else [value]):

@@ -12,6 +12,7 @@ import pty
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1739,7 +1740,8 @@ class Core(unittest.TestCase):
 
     def test_core_validation_edge_cases(self):
         cases = {"markers": [{"client": [term]} for term in (" ", "\t", "x\0y", *(
-                    "x" + separator + "y" for separator in "\r\n\u2028\u2029\x0b\x0c\x1c\x1d\x1e\x85"), "x\r")],
+                    "x" + separator + "y" for separator in "\r\n\u2028\u2029\x0b\x0c\x1c\x1d\x1e\x85"), "x\r", *("x" + char + "y" for char in
+                    "\t\x1b\x7f\u200b\u200c\u200d\u2060\ufeff"))],
                  "patterns": [[pattern] for pattern in ("", "a*", "^", "(?:x)?")],
                  "files": [["."], ["a/"], ["a//b"], ["a", "./a"], ["a/./b", "a/b"]],
                  "overlay": ["/", "~/", "/tmp/core/"]}
@@ -1826,55 +1828,8 @@ class Core(unittest.TestCase):
         finally:
             os.chdir(previous)
 
-    def test_core_import_fenced_block_list_reads_only_two_named_files(self):
-        fence = self.h.root / "fence"
-        fence.mkdir()
-        source, blocks = fence / "chosen.md", fence / "blocks"
-        blocks.write_text("quiet-codename\n")
-        for name in ("unrelated", "sibling"):
-            (fence / name).write_text("Never read.\n")
-            (fence / name).chmod(0)
-        resolved_fence = fence.resolve()
-        opened = []
-        def guard(fn, opening=False):
-            def call(path, *args, **kwargs):
-                if isinstance(path, (str, bytes, os.PathLike)):
-                    path = Path(os.fsdecode(path))
-                    if self.c.under(path, fence) or self.c.under(path, resolved_fence):
-                        self.assertTrue(opening, "probed or listed a fenced path")
-                        self.assertIn(path, (source, blocks), "opened a sibling")
-                        self.assertEqual(args[0], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                        opened.append(path)
-                return fn(path, *args, **kwargs)
-            return call
-        for text, expected in (("quiet-codename\n", 1), ("A distilled pattern.\n", 0)):
-            source.write_text(text)
-            opened.clear()
-            with self.subTest(expected=expected), ExitStack() as stack:
-                for module, name in ((os, "open"), (os, "stat"), (os, "lstat"), (os, "scandir"),
-                                     (os, "listdir"), (builtins, "open"), (io, "open")):
-                    stack.enter_context(patch.object(module, name, guard(getattr(module, name),
-                                                                       module is os and name == "open")))
-                stack.enter_context(patch.object(os, "isatty", return_value=True))
-                stack.enter_context(patch.object(self.c, "confirm_import", return_value=True))
-                out = stack.enter_context(redirect_stdout(io.StringIO()))
-                err = stack.enter_context(redirect_stderr(io.StringIO()))
-                self.assertEqual(self.c.main(["--member", self.member, "core-import", "--from", str(source),
-                                              "--block-list", str(blocks)]), expected, err.getvalue())
-            self.assertCountEqual(opened, [source, blocks])
-            if expected:
-                self.assertIn("block-list", out.getvalue())
-                self.assertNotIn("quiet-codename", out.getvalue() + err.getvalue())
-                self.assertFalse(self.overlay.parent.exists())
-            else:
-                self.assertEqual(self.overlay.read_text(), text)
-        opened.clear()
-        with patch.object(os, "open", guard(os.open, True)), \
-                patch.object(builtins, "open", guard(builtins.open)), \
-                patch.object(io, "open", guard(io.open)), redirect_stderr(io.StringIO()) as err:
-            self.assertEqual(self.c.main(["--member", self.member, "core-check", "--block-list", str(blocks)]), 4)
-        self.assertIn("fenced", err.getvalue())
-        self.assertEqual(opened, [])
+    def test_core_import_fenced_block_list_refused_before_any_open(self):
+        self.assert_fenced_import_refused("--block-list")
 
     def test_core_block_list_ignores_indented_comments(self):
         (self.h.root / "blocks").write_text("  # ignored\n\t# also ignored\n")
@@ -1949,10 +1904,8 @@ class Core(unittest.TestCase):
             self.assertFalse(self.overlay.exists())
 
     def test_core_import_confirmation_metadata_and_modes(self):
-        fence = self.h.root / "fence"
-        fence.mkdir()
-        source = fence / "chosen.md"
-        planted = "unique-fenced-content-uvwx\n"
+        source = self.h.root / "chosen.md"
+        planted = "unique-import-content-uvwx\n"
         old = "unique-overlay-content-abcd\n"
         source.write_text(planted)
         self.overlay.parent.mkdir(parents=True)
@@ -2045,17 +1998,41 @@ class Core(unittest.TestCase):
         self.assertTrue(callable(getattr(self.c, "confirm_import", None)), "missing macOS confirmation")
         text = 'Import 1 lines into /state/"chosen".md?'
         script = 'display dialog "Import 1 lines into /state/\\"chosen\\".md?" buttons {"Cancel", "Import"} default button "Cancel" cancel button "Cancel" with icon caution'
-        with patch.object(sys, "platform", "darwin"), patch.object(subprocess, "run") as run:
+        fake_bin = self.h.root / "fake-bin"
+        fake_bin.mkdir()
+        fake = fake_bin / "osascript"
+        fake.write_text("#!/bin/sh\nprintf 'button returned:Import\\n'\n")
+        fake.chmod(0o755)
+        trusted = os.stat_result((stat.S_IFREG | 0o755, 0, 0, 1, 0, 0, 0, 0, 0, 0))
+        with patch.object(sys, "platform", "darwin"), \
+                patch.object(Path, "lstat", autospec=True, return_value=trusted) as check, \
+                patch.dict(os.environ, {"PATH": str(self.h.root / "fake-bin")}), \
+                patch.object(subprocess, "run") as run:
             for status, output, expected in ((0, "button returned:Import\n", True), (1, "button returned:Import", False),
                                              (0, "button returned:Cancel", False), (0, "", False)):
                 run.return_value = subprocess.CompletedProcess([], status, output, "")
                 self.assertEqual(self.c.confirm_import(text), expected)
-                run.assert_called_with(["osascript", "-e", script], capture_output=True, text=True, timeout=600)
+                check.assert_called_with(Path("/usr/bin/osascript"))
+                run.assert_called_with(["/usr/bin/osascript", "-e", script], capture_output=True, text=True,
+                                       timeout=600, env={"PATH": "/usr/bin:/bin", "HOME": str(TEST_HOME)})
             for error in (subprocess.TimeoutExpired("osascript", 600), OSError("failed")):
                 run.side_effect = error
                 self.assertFalse(self.c.confirm_import(text))
         with patch.object(sys, "platform", "linux"), patch.object(subprocess, "run") as run:
             self.assertFalse(self.c.confirm_import(text))
+            run.assert_not_called()
+
+    def test_confirm_import_refuses_untrusted_executable(self):
+        for mode, uid in ((stat.S_IFREG | 0o755, 501), (stat.S_IFDIR | 0o755, 0),
+                          (stat.S_IFLNK | 0o777, 0)):
+            with self.subTest(mode=mode, uid=uid), patch.object(sys, "platform", "darwin"), \
+                    patch.object(Path, "lstat", return_value=os.stat_result((mode, 0, 0, 1, uid, 0, 0, 0, 0, 0))), \
+                    patch.object(subprocess, "run") as run:
+                self.assertFalse(self.c.confirm_import("Import?"))
+                run.assert_not_called()
+        with patch.object(sys, "platform", "darwin"), patch.object(Path, "lstat", side_effect=OSError("missing")), \
+                patch.object(subprocess, "run") as run:
+            self.assertFalse(self.c.confirm_import("Import?"))
             run.assert_not_called()
 
     def test_core_import_overlay_stays_under_state(self):
@@ -2098,7 +2075,7 @@ class Core(unittest.TestCase):
         self.assertIn("the overlay must stay out of git and out of fences", err)
         self.assertFalse((self.h.root / "fence").exists())
 
-    def test_core_import_single_regular_file_and_fence_exception(self):
+    def test_core_import_single_regular_file(self):
         link = self.h.root / "link"
         link.symlink_to(self.h.root / "input.md")
         large = self.h.root / "large"
@@ -2110,44 +2087,46 @@ class Core(unittest.TestCase):
                     code, out, err = self.terminal(*args, option, str(path))
                     self.assertEqual(code, 1)
                     self.assertFalse(self.overlay.exists())
-        fence = self.h.root / "fence"
-        fence.mkdir()
-        source = fence / "chosen.md"
-        source.write_text("A distilled pattern.\n")
-        code, out, err = self.terminal("--from", str(source))
-        self.assertEqual(code, 0, err)
-        self.assertEqual(self.overlay.read_text(), "A distilled pattern.\n")
-        proc = self.h.crew(self.member, "core-check", "--file", str(source))
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("fenced", proc.stderr)
 
-    def test_core_import_fenced_source_opens_only_the_named_file(self):
+    def test_core_import_fenced_source_refused_before_any_open(self):
+        self.assert_fenced_import_refused("--from")
+
+    def assert_fenced_import_refused(self, option):
         fence = self.h.root / "fence"
         fence.mkdir()
         source = fence / "chosen.md"
         source.write_text("A distilled pattern.\n")
-        (fence / "unrelated").write_text("Never read.\n")
-        (fence / "unrelated").chmod(0)
-        m = self.c.load_member(self.c.read_member(self.member))
         resolved_fence = fence.resolve()
+        m = self.c.load_member(self.c.read_member(self.member))
+        args = [option, str(source)]
+        if option == "--block-list":
+            args = ["--from", str(self.h.root / "input.md"), *args]
+
         def guard(fn):
             def call(path, *args, **kwargs):
                 if isinstance(path, (str, bytes, os.PathLike)):
                     path = Path(os.fsdecode(path))
-                    if self.c.under(path, fence) or self.c.under(path, resolved_fence):
-                        self.assertEqual(path, source, "touched another fenced path")
+                    self.assertFalse(self.c.under(path, fence) or self.c.under(path, resolved_fence),
+                                     "touched a fenced path before refusal")
                 return fn(path, *args, **kwargs)
             return call
+
         with ExitStack() as stack:
             for module, name in ((os, "open"), (os, "stat"), (os, "lstat"), (os, "scandir"),
                                  (os, "listdir"), (builtins, "open"), (io, "open")):
                 stack.enter_context(patch.object(module, name, guard(getattr(module, name))))
             stack.enter_context(patch.object(os, "isatty", return_value=True))
-            stack.enter_context(patch.object(self.c, "confirm_import", return_value=True))
-            stack.enter_context(redirect_stdout(io.StringIO()))
-            args = self.c.parser_for(m, "test").parse_args(["core-import", "--from", str(source)])
-            self.assertEqual(self.c.cmd_core_import(m, args), 0)
-        self.assertEqual(self.overlay.read_text(), "A distilled pattern.\n")
+            confirm = stack.enter_context(patch.object(self.c, "confirm_import", return_value=True))
+            out = stack.enter_context(redirect_stdout(io.StringIO()))
+            err = stack.enter_context(redirect_stderr(io.StringIO()))
+            self.assertEqual(self.c.main(["--member", self.member, "core-import", *args]), 4)
+            self.assertIn("fenced", err.getvalue())
+            parsed = self.c.parser_for(m, "test").parse_args(["core-import", *args])
+            with self.assertRaisesRegex(self.c.Failed, "fenced"):
+                self.c.cmd_core_import(m, parsed)
+            confirm.assert_not_called()
+        self.assertEqual(out.getvalue(), "")
+        self.assertFalse(self.overlay.exists())
 
 
 if __name__ == "__main__":
