@@ -142,7 +142,6 @@ if $passed; then
   if ! $pushed || [[ "$push_output" == =* || "$push_output" == *$'\n='* ]]; then
     checked_frozen=$frozen
     read_refs
-    [ "$frozen" = "$checked_frozen" ] || fail 'the freeze moved during the check — nothing changed; run it again'
     if [ -n "$green" ]; then
       ensure_commit "$green" || fail 'green moved during the check — nothing changed; run it again'
       if git merge-base --is-ancestor "$head" "$green"; then
@@ -150,6 +149,7 @@ if $passed; then
         exit 0
       fi
     fi
+    [ "$frozen" = "$checked_frozen" ] || fail 'the freeze moved during the check — nothing changed; run it again'
     fail 'green moved during the check — nothing changed; run it again'
   fi
   echo "green $head"

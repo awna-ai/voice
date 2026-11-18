@@ -47,6 +47,10 @@ fi
 if [ -f "$VERIFY_TEST_TMP/movefreeze" ]; then
   git -C "$VERIFY_TEST_TMP/remote.git" update-ref refs/green/frozen "$(cat "$VERIFY_TEST_TMP/movefreeze")"
 fi
+if [ -f "$VERIFY_TEST_TMP/cover" ]; then
+  git -C "$VERIFY_TEST_TMP/remote.git" update-ref refs/green/main "$(git rev-parse HEAD)"
+  git -C "$VERIFY_TEST_TMP/remote.git" update-ref -d refs/green/frozen
+fi
 if [ -f RED ]; then exit 1; fi
 if [ -f "$VERIFY_TEST_TMP/flaky" ]; then rm "$VERIFY_TEST_TMP/flaky"; exit 1; fi
 CHECK
@@ -334,6 +338,21 @@ expect 1 'verify-main: green moved during the check — nothing changed; run it 
 ref_is refs/green/main "$old"
 rm "$tmp/move"
 echo 'verify_main_test: release checks, off-main green and leases passed'
+# Another run may cover this head and clear the freeze during the check.
+git -C "$tmp/remote.git" update-ref refs/green/main "$head"
+push_commit covered-freeze
+git -C "$tmp/remote.git" update-ref refs/green/frozen "$head"
+push_commit covered-head
+: > "$tmp/cover"
+verify
+expect 0 "covered: green is $head"
+ref_is refs/green/main "$head"
+ref_is refs/green/frozen ''
+runs 1
+rm "$tmp/cover"
+push_commit after-covered
+no_scratch
+echo 'verify_main_test: covered head wins over cleared freeze passed'
 lock="$(git rev-parse --git-common-dir)/verify-main.lock"
 mkdir "$tmp/holder"
 printf '%s\n' 'while :; do sleep 1; done' > "$tmp/holder/verify-main.sh"
