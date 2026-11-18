@@ -65,7 +65,6 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       A member's watcher runs pending with no model.
 """
 import argparse
-import difflib
 import errno
 import hashlib
 import json
@@ -187,10 +186,16 @@ def check_compartments(c):
         if "files" in core:
             if not isinstance(core["files"], list) or not core["files"]:
                 fail("core.files")
+            seen = set()
             for value in core["files"]:
                 if (not isinstance(value, str) or not value or value.startswith(("/", "~"))
+                        or "" in value.split("/") or not Path(value).name
                         or ".." in Path(value).parts or any(c in value for c in ("\x00", "\n"))):
                     fail("core.files")
+                normalized = str(Path(value))
+                if normalized in seen:
+                    fail("core.files")
+                seen.add(normalized)
         if "markers" in core:
             if not isinstance(core["markers"], dict):
                 fail("core.markers")
@@ -198,7 +203,8 @@ def check_compartments(c):
                 if (not isinstance(name, str)
                         or name not in c["compartments"] and not re.fullmatch(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*", name)
                         or not isinstance(terms, list) or not terms
-                        or any(not isinstance(s, str) or not s or "\n" in s for s in terms)):
+                        or any(not isinstance(s, str) or not s.strip()
+                               or any(c in s for c in "\x00\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029") for s in terms)):
                     fail("core.markers")
         if "patterns" in core:
             if not isinstance(core["patterns"], list):
@@ -207,11 +213,14 @@ def check_compartments(c):
                 if not isinstance(value, str):
                     fail("core.patterns")
                 try:
-                    re.compile(value, re.I)
+                    if re.compile(value, re.I).search("") is not None:
+                        fail("core.patterns")
                 except re.error:
                     fail("core.patterns")
         if "overlay" in core:
             path(core["overlay"], "core.overlay")
+            if core["overlay"].endswith("/"):
+                fail("core.overlay")
     checked = CompartmentMap(c)
     checked.base = getattr(c, "base", None)
     return checked
@@ -1370,7 +1379,34 @@ def cmd_core_check(m, args):
     return 0
 
 
+def refuse_agent_import():
+    if any(os.environ.get(name) for name in
+           ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID")):
+        raise Failed("core-import: run this yourself in a terminal, not from an agent")
+
+
+def confirm_import(text):
+    if sys.platform != "darwin":
+        return False
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    script = (f'display dialog "{escaped}" buttons {{"Cancel", "Import"}} '
+              'default button "Cancel" cancel button "Cancel" with icon caution')
+    try:
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and "button returned:Import" in result.stdout
+
+
 def cmd_core_import(m, args):
+    try:
+        refuse_agent_import()
+        return import_core(m, args)
+    except KeyboardInterrupt:
+        raise Failed("core-import: not imported") from None
+
+
+def import_core(m, args):
     core = core_config(m, "core-import")
     if not core.get("overlay"):
         raise Failed("core-import: no core.overlay in compartments.json")
@@ -1387,12 +1423,19 @@ def cmd_core_import(m, args):
     overlay, fenced = safe_resolve(m.compartments, core["overlay"], os.getcwd())
     if fenced or any(os.path.lexists(parent / ".git") for parent in (overlay, *overlay.parents)):
         raise Failed("core-import: the overlay must stay out of git and out of fences")
-    old = core_text(overlay.read_bytes(), "core-import", "core file") if overlay.exists() else ""
-    diff = "".join(difflib.unified_diff(old.splitlines(keepends=True), text.splitlines(keepends=True),
-                                        fromfile=str(overlay), tofile=args.from_file))
-    print(diff, end="" if diff.endswith("\n") or not diff else "\n")
-    print(f"Import into {overlay}? [y/N] ", end="", flush=True)
-    if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+    state_dir = m.state_dir.resolve()
+    if overlay == state_dir or not under(overlay, state_dir) or not overlay.name or overlay.is_dir():
+        raise Failed("core-import: overlay must be a file inside state_dir")
+    old_data = overlay.read_bytes() if overlay.exists() else None
+    old = core_text(old_data, "core-import", "core file") if old_data is not None else ""
+    lines = len(text.splitlines())
+    print(f"source: {lines} lines, {len(data)} bytes, sha256 {hashlib.sha256(data).hexdigest()[:12]}")
+    if old_data is None:
+        print("overlay: none")
+    else:
+        print(f"overlay: {len(old.splitlines())} lines, sha256 {hashlib.sha256(old_data).hexdigest()[:12]}")
+    print(f"overlay path: {overlay}")
+    if not confirm_import(f"Import {lines} lines into {overlay}?"):
         raise Failed("core-import: not imported")
     overlay.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     overlay.parent.chmod(0o700)
@@ -3074,6 +3117,26 @@ def resolve_member(argv, member):
 
 
 def main(argv=None, member=None, prog="crew_decisions", description=None):
+    argv = sys.argv[1:] if argv is None else argv
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--member")
+    pre.add_argument("cmd", nargs="?")
+    command, _ = pre.parse_known_args(argv)
+    try:
+        if command.cmd == "core-import":
+            refuse_agent_import()
+        return run_main(argv, member, prog, description)
+    except KeyboardInterrupt:
+        if command.cmd != "core-import":
+            raise
+        print(f"{prog}: core-import: not imported", file=sys.stderr)
+        return 1
+    except Failed as exc:
+        print(f"{prog}: {exc}", file=sys.stderr)
+        return 1
+
+
+def run_main(argv=None, member=None, prog="crew_decisions", description=None):
     argv = sys.argv[1:] if argv is None else argv
     description = description or __doc__.split("\n\n")[0]
     try:

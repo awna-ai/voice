@@ -4,6 +4,7 @@
 Every case runs the real CLI over fixture transcripts in a temp dir, so no test reads a real one.
 """
 import builtins
+import hashlib
 import io
 import json
 import os
@@ -1698,7 +1699,12 @@ class Core(unittest.TestCase):
         sys.path.insert(0, str(SCRIPTS))
         import crew_decisions
         self.c = crew_decisions
-        self.overlay = self.h.root.resolve() / "private/core/patterns.md"
+        self.agent_vars = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX", "CODEX_THREAD_ID")
+        clean_env = {key: value for key, value in os.environ.items() if key not in self.agent_vars}
+        self.env_patch = patch.dict(os.environ, clean_env, clear=True)
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
+        self.overlay = self.h.root.resolve() / "state/core/patterns.md"
         self.config = {"version": 1, "fenced": [str(self.h.root / "fence")],
                        "compartments": {"client": {"folders": []}},
                        "core": {"files": ["a.md", "b.md"],
@@ -1730,6 +1736,19 @@ class Core(unittest.TestCase):
         self.assertEqual(loaded, self.config)
         self.assertEqual(loaded.base, self.h.root)
         self.assertEqual(self.c.check_compartments({**self.config, "core": {}})["core"], {})
+
+    def test_core_validation_edge_cases(self):
+        cases = {"markers": [{"client": [term]} for term in (" ", "\t", "x\0y", *(
+                    "x" + separator + "y" for separator in "\r\n\u2028\u2029\x0b\x0c\x1c\x1d\x1e\x85"), "x\r")],
+                 "patterns": [[pattern] for pattern in ("", "a*", "^", "(?:x)?")],
+                 "files": [["."], ["a/"], ["a//b"], ["a", "./a"], ["a/./b", "a/b"]],
+                 "overlay": ["/", "~/", "/tmp/core/"]}
+        for key, values in cases.items():
+            for value in values:
+                config = {**self.config, "core": {**self.config["core"], key: value}}
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(
+                        self.c.CompartmentConfigError, "invalid core." + key):
+                    self.c.check_compartments(config)
 
     def test_core_check_clean_override_overlay_and_missing(self):
         proc = self.h.crew(self.member, "core-check")
@@ -1795,22 +1814,17 @@ class Core(unittest.TestCase):
                 self.assertIn("fenced", err.getvalue())
 
     def terminal(self, *args, answer="y", stdin_tty=True, stdout_tty=True):
-        master, slave = pty.openpty()
-        self.addCleanup(os.close, master)
-        self.addCleanup(os.close, slave)
-        with tempfile.TemporaryFile() as err:
-            proc = subprocess.Popen([sys.executable, str(CREW), "--member", self.member, "core-import", *args],
-                                    stdin=slave if stdin_tty else subprocess.PIPE,
-                                    stdout=slave if stdout_tty else subprocess.PIPE, stderr=err, cwd=self.h.root,
-                                    env={**os.environ, "HOME": str(TEST_HOME)})
-            os.write(master, (answer + "\n").encode())
-            out, _ = proc.communicate(input=None if stdin_tty else b"y\n", timeout=10)
-            import select
-            chunks = []
-            while select.select([master], [], [], 0)[0]:
-                chunks.append(os.read(master, 65536))
-            err.seek(0)
-            return proc.returncode, (out or b"").decode() + b"".join(chunks).decode().replace("\r\n", "\n"), err.read().decode()
+        previous = Path.cwd()
+        try:
+            os.chdir(self.h.root)
+            with patch.object(os, "isatty", side_effect=lambda fd: stdin_tty if fd == 0 else stdout_tty), \
+                    patch.object(self.c, "confirm_import", return_value=answer.strip().lower() in ("y", "yes")), \
+                    patch.object(sys, "stdin", io.StringIO("y\n")), \
+                    redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+                code = self.c.main(["--member", self.member, "core-import", *args])
+            return code, out.getvalue(), err.getvalue()
+        finally:
+            os.chdir(previous)
 
     def test_core_import_fenced_block_list_reads_only_two_named_files(self):
         fence = self.h.root / "fence"
@@ -1842,7 +1856,7 @@ class Core(unittest.TestCase):
                     stack.enter_context(patch.object(module, name, guard(getattr(module, name),
                                                                        module is os and name == "open")))
                 stack.enter_context(patch.object(os, "isatty", return_value=True))
-                stack.enter_context(patch.object(sys, "stdin", io.StringIO("y\n")))
+                stack.enter_context(patch.object(self.c, "confirm_import", return_value=True))
                 out = stack.enter_context(redirect_stdout(io.StringIO()))
                 err = stack.enter_context(redirect_stderr(io.StringIO()))
                 self.assertEqual(self.c.main(["--member", self.member, "core-import", "--from", str(source),
@@ -1934,27 +1948,137 @@ class Core(unittest.TestCase):
             self.assertNotIn(text, out + err)
             self.assertFalse(self.overlay.exists())
 
-    def test_core_import_confirmation_diff_and_modes(self):
+    def test_core_import_confirmation_metadata_and_modes(self):
+        fence = self.h.root / "fence"
+        fence.mkdir()
+        source = fence / "chosen.md"
+        planted = "unique-fenced-content-uvwx\n"
+        old = "unique-overlay-content-abcd\n"
+        source.write_text(planted)
         self.overlay.parent.mkdir(parents=True)
         self.overlay.parent.chmod(0o755)
-        self.overlay.write_text("Old pattern.\n")
-        code, out, err = self.terminal("--from", "input.md", answer="n")
-        self.assertEqual(code, 1)
-        self.assertIn("core-import: not imported", err)
-        self.assertEqual(self.overlay.read_text(), "Old pattern.\n")
-        code, out, err = self.terminal("--from", "input.md", answer=" YES ")
-        self.assertEqual(code, 0, err)
-        self.assertLess(out.index("-Old pattern."), out.index("Import into"))
-        self.assertIn("+Keep one source.", out)
-        self.assertIn(f"core-import: imported 1 lines into {self.overlay}", out)
-        self.assertEqual(self.overlay.read_text(), "Keep one source.\n")
+        self.overlay.write_text(old)
+        for answer, expected in (("n", 1), ("y", 0)):
+            with self.subTest(answer=answer):
+                code, out, err = self.terminal("--from", str(source), answer=answer)
+                self.assertEqual(code, expected, err)
+                self.assertNotIn(planted.strip(), out + err)
+                self.assertNotIn(old.strip(), out + err)
+                self.assertIn(f"source: 1 lines, {len(planted.encode())} bytes, sha256 {hashlib.sha256(planted.encode()).hexdigest()[:12]}", out)
+                self.assertIn(f"overlay: 1 lines, sha256 {hashlib.sha256(old.encode()).hexdigest()[:12]}", out)
+                self.assertIn(str(self.overlay), out)
+                self.assertNotIn("[y/N]", out)
+                if expected:
+                    self.assertIn("core-import: not imported", err)
+                    self.assertEqual(self.overlay.read_text(), old)
+                    self.assertEqual(self.overlay.parent.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(self.overlay.read_text(), planted)
         self.assertEqual(self.overlay.stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.overlay.parent.stat().st_mode & 0o777, 0o700)
         self.assertEqual(list(self.overlay.parent.iterdir()), [self.overlay])
 
+    def test_core_import_dialog_text_and_absent_overlay(self):
+        source = self.h.root / "input.md"
+        source.write_text("Keep one source.\nKeep it local.\n")
+        with patch.object(os, "isatty", return_value=True), \
+                patch.object(self.c, "confirm_import", return_value=False) as confirm, \
+                patch.object(sys, "stdin") as stdin, \
+                redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.c.main(["--member", self.member, "core-import", "--from", str(source)]), 1)
+        confirm.assert_called_once_with(f"Import 2 lines into {self.overlay}?")
+        stdin.readline.assert_not_called()
+        self.assertIn("overlay: none\n", out.getvalue())
+        self.assertIn("core-import: not imported", err.getvalue())
+        self.assertNotIn("Keep one source.", out.getvalue() + err.getvalue())
+        self.assertNotIn("Keep it local.", out.getvalue() + err.getvalue())
+        self.assertFalse(self.overlay.exists())
+
+    def test_core_import_agent_pty_refused_before_any_open(self):
+        for variable in self.agent_vars:
+            with self.subTest(variable=variable):
+                with tempfile.TemporaryFile() as errors:
+                    pid, master = pty.fork()
+                    if pid == 0:
+                        try:
+                            os.environ[variable] = "1"
+                            assert os.isatty(0) and os.isatty(1)
+                            with patch.object(os, "open", side_effect=AssertionError("opened before refusal")), \
+                                    patch.object(builtins, "open", side_effect=AssertionError("opened config")), \
+                                    patch.object(io, "open", side_effect=AssertionError("opened content")), \
+                                    redirect_stderr(io.StringIO()) as err:
+                                code = self.c.main(["--member", self.member, "core-import", "--from", "input.md"])
+                            os.write(errors.fileno(), err.getvalue().encode())
+                            os._exit(code)
+                        except BaseException:
+                            os._exit(99)
+                    try:
+                        os.write(master, b"y\n")
+                        _, status = os.waitpid(pid, 0)
+                        self.assertEqual(os.waitstatus_to_exitcode(status), 1)
+                        errors.seek(0)
+                        self.assertIn("core-import: run this yourself in a terminal, not from an agent",
+                                      errors.read().decode())
+                    finally:
+                        os.close(master)
+                self.assertFalse(self.overlay.exists())
+
+    def test_core_import_keyboard_interrupt_is_clean(self):
+        for seam in ("core_import_file", "confirm_import", "load_member"):
+            with self.subTest(seam=seam), patch.object(self.c, seam, side_effect=KeyboardInterrupt):
+                try:
+                    code, out, err = self.terminal("--from", "input.md") if seam != "confirm_import" else self.interrupted_dialog()
+                except KeyboardInterrupt:
+                    self.fail("core-import leaked KeyboardInterrupt")
+                self.assertEqual(code, 1)
+                self.assertIn("core-import: not imported", err)
+                self.assertNotIn("Traceback", out + err)
+                self.assertFalse(self.overlay.exists())
+
+    def interrupted_dialog(self):
+        with patch.object(os, "isatty", return_value=True), \
+                patch.object(self.c, "confirm_import", side_effect=KeyboardInterrupt), \
+                redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            code = self.c.main(["--member", self.member, "core-import", "--from", str(self.h.root / "input.md")])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_confirm_import_dialog(self):
+        self.assertTrue(callable(getattr(self.c, "confirm_import", None)), "missing macOS confirmation")
+        text = 'Import 1 lines into /state/"chosen".md?'
+        script = 'display dialog "Import 1 lines into /state/\\"chosen\\".md?" buttons {"Cancel", "Import"} default button "Cancel" cancel button "Cancel" with icon caution'
+        with patch.object(sys, "platform", "darwin"), patch.object(subprocess, "run") as run:
+            for status, output, expected in ((0, "button returned:Import\n", True), (1, "button returned:Import", False),
+                                             (0, "button returned:Cancel", False), (0, "", False)):
+                run.return_value = subprocess.CompletedProcess([], status, output, "")
+                self.assertEqual(self.c.confirm_import(text), expected)
+                run.assert_called_with(["osascript", "-e", script], capture_output=True, text=True, timeout=600)
+            for error in (subprocess.TimeoutExpired("osascript", 600), OSError("failed")):
+                run.side_effect = error
+                self.assertFalse(self.c.confirm_import(text))
+        with patch.object(sys, "platform", "linux"), patch.object(subprocess, "run") as run:
+            self.assertFalse(self.c.confirm_import(text))
+            run.assert_not_called()
+
+    def test_core_import_overlay_stays_under_state(self):
+        outside = self.h.root / "outside"
+        outside.mkdir(mode=0o755)
+        link = self.h.root / "state/link"
+        link.parent.mkdir()
+        link.symlink_to(outside, target_is_directory=True)
+        for overlay in (outside / "patterns.md", link / "patterns.md", self.h.root / "state", self.h.root / "state/core"):
+            if overlay.name == "core":
+                overlay.mkdir()
+            self.config["core"]["overlay"] = str(overlay)
+            self.save()
+            with self.subTest(overlay=overlay):
+                code, out, err = self.terminal("--from", "input.md")
+                self.assertEqual(code, 1)
+                self.assertIn("overlay must be a file inside state_dir", err)
+                self.assertEqual(outside.stat().st_mode & 0o777, 0o755)
+                self.assertFalse((outside / "patterns.md").exists())
+
     def test_core_import_rejects_git_and_fenced_overlays(self):
-        checkout = self.h.root / "checkout"
-        checkout.mkdir()
+        checkout = self.h.root / "state/checkout"
+        checkout.mkdir(parents=True)
         for git_dir in (False, True):
             entry = checkout / ".git"
             if git_dir: entry.mkdir()
@@ -2019,7 +2143,7 @@ class Core(unittest.TestCase):
                                  (os, "listdir"), (builtins, "open"), (io, "open")):
                 stack.enter_context(patch.object(module, name, guard(getattr(module, name))))
             stack.enter_context(patch.object(os, "isatty", return_value=True))
-            stack.enter_context(patch.object(sys, "stdin", io.StringIO("y\n")))
+            stack.enter_context(patch.object(self.c, "confirm_import", return_value=True))
             stack.enter_context(redirect_stdout(io.StringIO()))
             args = self.c.parser_for(m, "test").parse_args(["core-import", "--from", str(source)])
             self.assertEqual(self.c.cmd_core_import(m, args), 0)
