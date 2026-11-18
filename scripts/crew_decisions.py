@@ -41,6 +41,10 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       the recommended option. Every held-out question needs a prediction.
   where [--cwd DIR] [--json]
       The cwd compartment, or all without config; fenced folders exit 4.
+  core-check [--file F ...] [--block-list F]
+      Check shared core files and the local overlay; report hit locations and classes only.
+  core-import --from F [--block-list F]
+      In a terminal, check one distilled file and confirm its import into the private core overlay.
   folders [--projects DIR] [--json]
       Inventory transcript folders without opening fenced folders.
   similar [--corpus decisions.jsonl] (--query TEXT | --stdin) [--k 6] [--json]
@@ -61,6 +65,7 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       A member's watcher runs pending with no model.
 """
 import argparse
+import difflib
 import errno
 import hashlib
 import json
@@ -70,6 +75,7 @@ import re
 import stat
 import sys
 import subprocess
+import tempfile
 import uuid
 import unicodedata
 import zipfile
@@ -125,6 +131,7 @@ class CompartmentMap(dict):
     _lexical_fenced_roots = None
     _hub_children = None
     _hub_projects = None
+    base = None
 
 
 def check_compartments(c):
@@ -141,7 +148,7 @@ def check_compartments(c):
         if not isinstance(value, str) or not value.startswith(("/", "~/")) or any(c in value for c in ("\x00", "\n")):
             fail(key)
 
-    keys(c, {"version", "fenced", "compartments", "hub"}, "config")
+    keys(c, {"version", "fenced", "compartments", "hub", "core"}, "config")
     if type(c.get("version")) is not int or c["version"] != 1:
         fail("version")
     if not isinstance(c.get("fenced"), list):
@@ -174,7 +181,40 @@ def check_compartments(c):
                     or not isinstance(target, str)
                     or (target not in c["compartments"] and not re.fullmatch(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*", target))):
                 fail("hub.routes." + name)
-    return CompartmentMap(c)
+    if "core" in c:
+        core = c["core"]
+        keys(core, {"files", "markers", "patterns", "overlay"}, "core")
+        if "files" in core:
+            if not isinstance(core["files"], list) or not core["files"]:
+                fail("core.files")
+            for value in core["files"]:
+                if (not isinstance(value, str) or not value or value.startswith(("/", "~"))
+                        or ".." in Path(value).parts or any(c in value for c in ("\x00", "\n"))):
+                    fail("core.files")
+        if "markers" in core:
+            if not isinstance(core["markers"], dict):
+                fail("core.markers")
+            for name, terms in core["markers"].items():
+                if (not isinstance(name, str)
+                        or name not in c["compartments"] and not re.fullmatch(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*", name)
+                        or not isinstance(terms, list) or not terms
+                        or any(not isinstance(s, str) or not s or "\n" in s for s in terms)):
+                    fail("core.markers")
+        if "patterns" in core:
+            if not isinstance(core["patterns"], list):
+                fail("core.patterns")
+            for value in core["patterns"]:
+                if not isinstance(value, str):
+                    fail("core.patterns")
+                try:
+                    re.compile(value, re.I)
+                except re.error:
+                    fail("core.patterns")
+        if "overlay" in core:
+            path(core["overlay"], "core.overlay")
+    checked = CompartmentMap(c)
+    checked.base = getattr(c, "base", None)
+    return checked
 
 
 def read_compartments(value, base):
@@ -184,7 +224,9 @@ def read_compartments(value, base):
     if not path.is_absolute():
         path = base / path
     try:
-        return check_compartments(json.loads(path.read_text()))
+        c = check_compartments(json.loads(path.read_text()))
+        c.base = path.absolute().parent
+        return c
     except (OSError, ValueError, UnicodeDecodeError, RecursionError):
         raise CompartmentConfigError("compartments: cannot read JSON file")
 
@@ -1245,6 +1287,133 @@ def cmd_where(m, args):
     name = cwd_compartment(m, getattr(args, "cwd", None))
     print(json.dumps({"compartment": name, "fenced": name == "fenced"}) if args.json else name)
     return 4 if name == "fenced" else 0
+
+
+def core_config(m, command):
+    if m.compartments is None or "core" not in m.compartments:
+        raise Failed(f"{command}: no core in compartments.json")
+    return m.compartments["core"]
+
+
+def core_import_file(path, label):
+    """Read just one named file, without resolving or enumerating fenced paths."""
+    fd = os.open(Path(path).expanduser(), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 256 * 1024:
+            raise Failed(f"core-import: {label} must be a regular file of at most 256 KiB")
+        data = source.read(256 * 1024 + 1)
+        if len(data) > 256 * 1024:
+            raise Failed(f"core-import: {label} must be a regular file of at most 256 KiB")
+    return data
+
+
+def core_text(data, command, label):
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Failed(f"{command}: {label} is not UTF-8 text") from None
+
+
+def core_rules(m, core, block_list, command):
+    def term(s):
+        return re.compile(r"(?<![A-Za-z0-9])" + re.escape(s) + r"(?![A-Za-z0-9])", re.I)
+
+    rules = [("marker " + name, [term(s) for s in terms]) for name, terms in core.get("markers", {}).items()]
+    rules += [(f"pattern {i}", [re.compile(s, re.I)]) for i, s in enumerate(core.get("patterns", []))]
+    rules += [("personal", [m.personal]), ("secret", [m.secret])]
+    if block_list:
+        if command == "core-import":
+            data = core_import_file(block_list, "--block-list")
+        else:
+            refuse_fenced_root(m, block_list)
+            data = Path(block_list).expanduser().read_bytes()
+        terms = core_text(data, command, "--block-list").splitlines()
+        rules.append(("block-list", [term(s.strip()) for s in terms if s.strip() and not s.lstrip().startswith("#")]))
+    return rules
+
+
+def core_hits(files, rules):
+    hits = []
+    for name, text in sorted(files):
+        for number, line in enumerate(text.splitlines(), 1):
+            for kind, patterns in rules:
+                if any(p.search(line) for p in patterns):
+                    hits.append(f"{name}:{number}: {kind}")
+    return hits
+
+
+def cmd_core_check(m, args):
+    core = core_config(m, "core-check")
+    paths = args.file
+    if not paths:
+        base = getattr(m.compartments, "base", None)
+        if core.get("files") and base is None:
+            raise Failed("core-check: no base folder for core.files")
+        paths = [str(base / name) for name in core.get("files", [])]
+        if core.get("overlay"):
+            overlay = Path(core["overlay"]).expanduser()
+            refuse_fenced_root(m, overlay)
+            if overlay.exists():
+                paths.append(str(overlay))
+    rules = core_rules(m, core, args.block_list, "core-check")
+    files = []
+    for name in sorted(set(paths)):
+        refuse_fenced_root(m, name)
+        files.append((name, core_text(Path(name).expanduser().read_bytes(), "core-check", "core file")))
+    hits = core_hits(files, rules)
+    for hit in hits:
+        print(hit)
+    if hits:
+        raise Failed(f"core-check: {len(hits)} hits in {len(files)} files")
+    print(f"core-check: clean, {len(files)} files")
+    return 0
+
+
+def cmd_core_import(m, args):
+    core = core_config(m, "core-import")
+    if not core.get("overlay"):
+        raise Failed("core-import: no core.overlay in compartments.json")
+    if not os.isatty(0) or not os.isatty(1):
+        raise Failed("core-import: run this yourself in a terminal")
+    rules = core_rules(m, core, args.block_list, "core-import")
+    data = core_import_file(args.from_file, "--from")
+    text = core_text(data, "core-import", "--from")
+    hits = core_hits([(args.from_file, text)], rules)
+    for hit in hits:
+        print(hit)
+    if hits:
+        raise Failed(f"core-import: {len(hits)} hits in 1 files")
+    overlay, fenced = safe_resolve(m.compartments, core["overlay"], os.getcwd())
+    if fenced or any(os.path.lexists(parent / ".git") for parent in (overlay, *overlay.parents)):
+        raise Failed("core-import: the overlay must stay out of git and out of fences")
+    old = core_text(overlay.read_bytes(), "core-import", "core file") if overlay.exists() else ""
+    diff = "".join(difflib.unified_diff(old.splitlines(keepends=True), text.splitlines(keepends=True),
+                                        fromfile=str(overlay), tofile=args.from_file))
+    print(diff, end="" if diff.endswith("\n") or not diff else "\n")
+    print(f"Import into {overlay}? [y/N] ", end="", flush=True)
+    if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+        raise Failed("core-import: not imported")
+    overlay.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    overlay.parent.chmod(0o700)
+    fd, temporary = tempfile.mkstemp(dir=overlay.parent)
+    try:
+        with os.fdopen(fd, "wb") as dest:
+            os.fchmod(dest.fileno(), 0o600)
+            dest.write(data)
+            dest.flush()
+            os.fsync(dest.fileno())
+        os.replace(temporary, overlay)
+        folder = os.open(overlay.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print(f"core-import: imported {len(text.splitlines())} lines into {overlay}")
+    return 0
 
 
 def cmd_similar(m, args):
@@ -2731,7 +2900,8 @@ def cmd_privacy_check(m, args):
     return 1 if hits else 0
 
 
-COMMANDS = {"where": cmd_where, "sources": cmd_sources, "mine": cmd_mine, "tally": cmd_tally, "split": cmd_split, "score": cmd_score,
+COMMANDS = {"where": cmd_where, "core-check": cmd_core_check, "core-import": cmd_core_import,
+            "sources": cmd_sources, "mine": cmd_mine, "tally": cmd_tally, "split": cmd_split, "score": cmd_score,
             "similar": cmd_similar, "record": cmd_record, "pending": cmd_pending, "claudeai": cmd_claudeai,
             "documents": cmd_documents, "round": cmd_round, "merge": cmd_merge, "folders": cmd_folders,
             "chunk": cmd_chunk, "check-labels": cmd_check_labels, "distil-in": cmd_distil_in,
@@ -2741,7 +2911,7 @@ COMMANDS = {"where": cmd_where, "sources": cmd_sources, "mine": cmd_mine, "tally
 # Every parser destination whose value is a file or folder (including path lists).
 PATH_ARGUMENTS = ("member", "cwd", "work", "projects", "queues", "corpus", "answers", "labels", "predictions",
                   "log", "out", "seen", "dir", "out_dir", "questions", "export", "review", "inputs",
-                  "rounds", "train", "pdftotext", "chunk", "doc", "corpora")
+                  "rounds", "train", "pdftotext", "chunk", "doc", "corpora", "file", "block_list", "from_file")
 
 
 def parser_for(m, description):
@@ -2751,6 +2921,12 @@ def parser_for(m, description):
     p = sub.add_parser("where")
     p.add_argument("--cwd")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("core-check")
+    p.add_argument("--file", action="append")
+    p.add_argument("--block-list")
+    p = sub.add_parser("core-import")
+    p.add_argument("--from", dest="from_file", required=True)
+    p.add_argument("--block-list")
     p = sub.add_parser("mine")
     p.add_argument("--projects", default="~/.claude/projects")
     p.add_argument("--out", required=True)
@@ -2917,7 +3093,7 @@ def main(argv=None, member=None, prog="crew_decisions", description=None):
         if m.compartments is not None:
             for name in PATH_ARGUMENTS:
                 # These commands render/raise their own cwd refusal (where also prints JSON).
-                if name == "cwd":
+                if name == "cwd" or (args.cmd == "core-import" and name in ("from_file", "block_list")):
                     continue
                 value = getattr(args, name, None)
                 for path in (value if isinstance(value, list) else [value]):

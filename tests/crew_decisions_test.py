@@ -7,6 +7,7 @@ import builtins
 import io
 import json
 import os
+import pty
 import re
 import shutil
 import signal
@@ -1458,7 +1459,7 @@ class Compartments(unittest.TestCase):
         import argparse
         expected = {"member", "cwd", "work", "projects", "queues", "corpus", "answers", "labels", "predictions",
                     "log", "out", "seen", "dir", "out_dir", "questions", "export", "review", "inputs",
-                    "rounds", "train", "pdftotext", "chunk", "doc", "corpora"}
+                    "rounds", "train", "pdftotext", "chunk", "doc", "corpora", "file", "block_list", "from_file"}
         found = set()
         def visit(parser):
             for action in parser._actions:
@@ -1688,6 +1689,341 @@ class Compartments(unittest.TestCase):
             for _ in range(3):
                 self.assertIs(self.c.fenced_forms(m.compartments, TEST_HOME), first)
             self.assertEqual(calls.call_count, count)
+
+
+class Core(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.dir.cleanup)
+        sys.path.insert(0, str(SCRIPTS))
+        import crew_decisions
+        self.c = crew_decisions
+        self.overlay = self.h.root.resolve() / "private/core/patterns.md"
+        self.config = {"version": 1, "fenced": [str(self.h.root / "fence")],
+                       "compartments": {"client": {"folders": []}},
+                       "core": {"files": ["a.md", "b.md"],
+                                "markers": {"client": ["clientco", "client-stack"], "p:garden": ["garden site"]},
+                                "patterns": [r"slack\.com/archives"], "overlay": str(self.overlay)}}
+        self.member = self.h.member({**ADA, "compartments": "compartments.json"})
+        self.save()
+        for name in ("a.md", "b.md", "input.md"):
+            (self.h.root / name).write_text("Keep one source.\n")
+
+    def save(self):
+        self.h.write("compartments.json", self.config)
+
+    def test_core_config_validation(self):
+        for key, values in {"core": [None, [], {"unknown": []}],
+                            "files": [None, [], "a.md", [""], [1], ["/a"], ["~a"], ["a/../b"], ["a\0"], ["a\nb"]],
+                            "markers": [None, [], {1: ["x"]}, {"unknown": ["x"]}, {"p:": ["x"]}, {"client": []},
+                                        {"client": [""]}, {"client": [1]}, {"client": ["x\ny"]}],
+                            "patterns": [None, "x", [1], ["["]],
+                            "overlay": [None, "relative", "~other/a", "/a\0", "/a\nb"]}.items():
+            for value in values:
+                c = json.loads(json.dumps(self.config))
+                if key == "core": c[key] = value
+                else: c["core"][key] = value
+                with self.subTest(key=key, value=value), self.assertRaisesRegex(
+                        self.c.CompartmentConfigError, "invalid " + (key if key == "core" else "core." + key)):
+                    self.c.check_compartments(c)
+        loaded = self.c.read_compartments("compartments.json", self.h.root)
+        self.assertEqual(loaded, self.config)
+        self.assertEqual(loaded.base, self.h.root)
+        self.assertEqual(self.c.check_compartments({**self.config, "core": {}})["core"], {})
+
+    def test_core_check_clean_override_overlay_and_missing(self):
+        proc = self.h.crew(self.member, "core-check")
+        self.assertEqual((proc.returncode, proc.stdout), (0, "core-check: clean, 2 files\n"), proc.stderr)
+        self.overlay.parent.mkdir(parents=True)
+        self.overlay.write_text("ClientCo.\n")
+        proc = self.h.crew(self.member, "core-check")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout, f"{self.overlay}:1: marker client\n")
+        proc = self.h.crew(self.member, "core-check", "--file", "b.md", "--file", "input.md")
+        self.assertEqual((proc.returncode, proc.stdout), (0, "core-check: clean, 2 files\n"), proc.stderr)
+        (self.h.root / "a.md").unlink()
+        proc = self.h.crew(self.member, "core-check")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("a.md", proc.stderr)
+
+    def test_core_check_hits_are_sorted_and_redacted(self):
+        (self.h.root / "a.md").write_text("clientcoast\nClientCo.\nclient-stack/\nSLACK.com/archives/x\nmy therapist\n123456789\nquiet-codename\ngarden site\n")
+        (self.h.root / "b.md").write_text("clientco client-stack\n")
+        (self.h.root / "blocks").write_text("\n# ignored\nquiet-codename\n")
+        proc = self.h.crew(self.member, "core-check", "--file", "b.md", "--file", "a.md", "--block-list", "blocks")
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout.splitlines(), [f"a.md:{n}: {kind}" for n, kind in
+                         [(2, "marker client"), (3, "marker client"), (4, "pattern 0"), (5, "personal"),
+                          (6, "secret"), (7, "block-list"), (8, "marker p:garden")]] + ["b.md:1: marker client"])
+        self.assertIn("core-check: 8 hits in 2 files", proc.stderr)
+        for term in ("clientco", "client-stack", "quiet-codename", "my therapist", "123456789", "garden site"):
+            self.assertNotIn(term, (proc.stdout + proc.stderr).lower())
+
+    def test_core_requires_config_and_base(self):
+        del self.config["core"]
+        self.save()
+        proc = self.h.crew(self.member, "core-check")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("core-check: no core in compartments.json", proc.stderr)
+        self.config["core"] = {"files": ["a.md"]}
+        with redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.c.main(["core-check"], member={**ADA, "compartments": self.config}), 1)
+        self.assertIn("base", err.getvalue())
+
+    def test_core_fences_refused_before_open(self):
+        fence = self.h.root / "fence"
+        fence.mkdir()
+        target = fence / "blocked"
+        target.write_text("private\n")
+        target.chmod(0)
+        link = self.h.root / "link"
+        link.symlink_to(fence, target_is_directory=True)
+        original_open, original_io_open, original_os_open = builtins.open, io.open, os.open
+        def guard(fn):
+            def call(path, *args, **kwargs):
+                if isinstance(path, (str, bytes, os.PathLike)):
+                    self.assertFalse(self.c.under(Path(os.fsdecode(path)), fence), "opened fence")
+                return fn(path, *args, **kwargs)
+            return call
+        for path in (target, link / "blocked"):
+            for args in (("core-check", "--file", str(path)),
+                         ("core-check", "--block-list", str(path))):
+                with self.subTest(args=args), patch.object(builtins, "open", guard(original_open)), \
+                        patch.object(io, "open", guard(original_io_open)), \
+                        patch.object(os, "open", guard(original_os_open)), redirect_stderr(io.StringIO()) as err:
+                    self.assertNotEqual(self.c.main(["--member", self.member, *args]), 0)
+                self.assertIn("fenced", err.getvalue())
+
+    def terminal(self, *args, answer="y", stdin_tty=True, stdout_tty=True):
+        master, slave = pty.openpty()
+        self.addCleanup(os.close, master)
+        self.addCleanup(os.close, slave)
+        with tempfile.TemporaryFile() as err:
+            proc = subprocess.Popen([sys.executable, str(CREW), "--member", self.member, "core-import", *args],
+                                    stdin=slave if stdin_tty else subprocess.PIPE,
+                                    stdout=slave if stdout_tty else subprocess.PIPE, stderr=err, cwd=self.h.root,
+                                    env={**os.environ, "HOME": str(TEST_HOME)})
+            os.write(master, (answer + "\n").encode())
+            out, _ = proc.communicate(input=None if stdin_tty else b"y\n", timeout=10)
+            import select
+            chunks = []
+            while select.select([master], [], [], 0)[0]:
+                chunks.append(os.read(master, 65536))
+            err.seek(0)
+            return proc.returncode, (out or b"").decode() + b"".join(chunks).decode().replace("\r\n", "\n"), err.read().decode()
+
+    def test_core_import_fenced_block_list_reads_only_two_named_files(self):
+        fence = self.h.root / "fence"
+        fence.mkdir()
+        source, blocks = fence / "chosen.md", fence / "blocks"
+        blocks.write_text("quiet-codename\n")
+        for name in ("unrelated", "sibling"):
+            (fence / name).write_text("Never read.\n")
+            (fence / name).chmod(0)
+        resolved_fence = fence.resolve()
+        opened = []
+        def guard(fn, opening=False):
+            def call(path, *args, **kwargs):
+                if isinstance(path, (str, bytes, os.PathLike)):
+                    path = Path(os.fsdecode(path))
+                    if self.c.under(path, fence) or self.c.under(path, resolved_fence):
+                        self.assertTrue(opening, "probed or listed a fenced path")
+                        self.assertIn(path, (source, blocks), "opened a sibling")
+                        self.assertEqual(args[0], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                        opened.append(path)
+                return fn(path, *args, **kwargs)
+            return call
+        for text, expected in (("quiet-codename\n", 1), ("A distilled pattern.\n", 0)):
+            source.write_text(text)
+            opened.clear()
+            with self.subTest(expected=expected), ExitStack() as stack:
+                for module, name in ((os, "open"), (os, "stat"), (os, "lstat"), (os, "scandir"),
+                                     (os, "listdir"), (builtins, "open"), (io, "open")):
+                    stack.enter_context(patch.object(module, name, guard(getattr(module, name),
+                                                                       module is os and name == "open")))
+                stack.enter_context(patch.object(os, "isatty", return_value=True))
+                stack.enter_context(patch.object(sys, "stdin", io.StringIO("y\n")))
+                out = stack.enter_context(redirect_stdout(io.StringIO()))
+                err = stack.enter_context(redirect_stderr(io.StringIO()))
+                self.assertEqual(self.c.main(["--member", self.member, "core-import", "--from", str(source),
+                                              "--block-list", str(blocks)]), expected, err.getvalue())
+            self.assertCountEqual(opened, [source, blocks])
+            if expected:
+                self.assertIn("block-list", out.getvalue())
+                self.assertNotIn("quiet-codename", out.getvalue() + err.getvalue())
+                self.assertFalse(self.overlay.parent.exists())
+            else:
+                self.assertEqual(self.overlay.read_text(), text)
+        opened.clear()
+        with patch.object(os, "open", guard(os.open, True)), \
+                patch.object(builtins, "open", guard(builtins.open)), \
+                patch.object(io, "open", guard(io.open)), redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.c.main(["--member", self.member, "core-check", "--block-list", str(blocks)]), 4)
+        self.assertIn("fenced", err.getvalue())
+        self.assertEqual(opened, [])
+
+    def test_core_block_list_ignores_indented_comments(self):
+        (self.h.root / "blocks").write_text("  # ignored\n\t# also ignored\n")
+        (self.h.root / "input.md").write_text("# ignored\n# also ignored\n")
+        proc = self.h.crew(self.member, "core-check", "--file", "input.md", "--block-list", "blocks")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        code, out, err = self.terminal("--from", "input.md", "--block-list", "blocks")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.overlay.read_text(), "# ignored\n# also ignored\n")
+
+    def test_core_non_utf8_inputs_fail_cleanly_without_writes(self):
+        for name, command, label in (("input.md", "core-import", "--from"),
+                                      ("blocks", "core-import", "--block-list"),
+                                      ("blocks", "core-check", "--block-list"),
+                                      ("a.md", "core-check", "core file")):
+            with self.subTest(command=command, label=label):
+                path = self.h.root / name
+                path.write_bytes(b"private-\xff")
+                if command == "core-import":
+                    extra = ("--block-list", "blocks") if label == "--block-list" else ()
+                    code, out, err = self.terminal("--from", "input.md", *extra)
+                else:
+                    extra = ("--block-list", "blocks") if label == "--block-list" else ()
+                    proc = self.h.crew(self.member, command, *extra)
+                    code, out, err = proc.returncode, proc.stdout, proc.stderr
+                self.assertEqual(code, 1)
+                self.assertIn(f"{command}: {label} is not UTF-8 text", err)
+                self.assertNotIn("Traceback", out + err)
+                self.assertNotIn("private-", out + err)
+                self.assertIn(out, ("", "y\n") if command == "core-import" else ("",))
+                self.assertFalse(self.overlay.parent.exists())
+                path.write_text("Keep one source.\n")
+
+    def test_core_non_utf8_overlay_stays_unchanged(self):
+        self.overlay.parent.mkdir(parents=True)
+        self.overlay.write_bytes(b"private-\xff")
+        for command in ("core-check", "core-import"):
+            with self.subTest(command=command):
+                if command == "core-import":
+                    code, out, err = self.terminal("--from", "input.md")
+                else:
+                    proc = self.h.crew(self.member, command)
+                    code, out, err = proc.returncode, proc.stdout, proc.stderr
+                self.assertEqual(code, 1)
+                self.assertIn(f"{command}: core file is not UTF-8 text", err)
+                self.assertNotIn("Traceback", out + err)
+                self.assertNotIn("private-", out + err)
+                self.assertEqual(self.overlay.read_bytes(), b"private-\xff")
+                self.assertEqual(list(self.overlay.parent.iterdir()), [self.overlay])
+
+    def test_core_import_requires_ttys_and_overlay(self):
+        for stdin_tty, stdout_tty in ((False, True), (True, False)):
+            code, out, err = self.terminal("--from", "input.md", stdin_tty=stdin_tty, stdout_tty=stdout_tty)
+            self.assertEqual(code, 1)
+            self.assertIn("core-import: run this yourself in a terminal", err)
+            self.assertFalse(self.overlay.exists())
+        del self.config["core"]["overlay"]
+        self.save()
+        code, out, err = self.terminal("--from", "input.md")
+        self.assertEqual(code, 1)
+        self.assertIn("overlay", err)
+
+    def test_core_import_hits_never_write(self):
+        for text, kind in (("ClientCo.", "marker client"), ("slack.com/archives", "pattern 0"),
+                           ("my therapist", "personal"), ("123456789", "secret"), ("quiet-codename", "block-list")):
+            (self.h.root / "input.md").write_text(text + "\n")
+            (self.h.root / "blocks").write_text("quiet-codename\n")
+            code, out, err = self.terminal("--from", "input.md", "--block-list", "blocks")
+            self.assertEqual(code, 1)
+            self.assertIn("input.md:1: " + kind, out)
+            self.assertNotIn(text, out + err)
+            self.assertFalse(self.overlay.exists())
+
+    def test_core_import_confirmation_diff_and_modes(self):
+        self.overlay.parent.mkdir(parents=True)
+        self.overlay.parent.chmod(0o755)
+        self.overlay.write_text("Old pattern.\n")
+        code, out, err = self.terminal("--from", "input.md", answer="n")
+        self.assertEqual(code, 1)
+        self.assertIn("core-import: not imported", err)
+        self.assertEqual(self.overlay.read_text(), "Old pattern.\n")
+        code, out, err = self.terminal("--from", "input.md", answer=" YES ")
+        self.assertEqual(code, 0, err)
+        self.assertLess(out.index("-Old pattern."), out.index("Import into"))
+        self.assertIn("+Keep one source.", out)
+        self.assertIn(f"core-import: imported 1 lines into {self.overlay}", out)
+        self.assertEqual(self.overlay.read_text(), "Keep one source.\n")
+        self.assertEqual(self.overlay.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.overlay.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(list(self.overlay.parent.iterdir()), [self.overlay])
+
+    def test_core_import_rejects_git_and_fenced_overlays(self):
+        checkout = self.h.root / "checkout"
+        checkout.mkdir()
+        for git_dir in (False, True):
+            entry = checkout / ".git"
+            if git_dir: entry.mkdir()
+            else: entry.write_text("gitdir: elsewhere\n")
+            self.config["core"]["overlay"] = str(checkout / "nested/patterns.md")
+            self.save()
+            code, out, err = self.terminal("--from", "input.md")
+            self.assertEqual(code, 1)
+            self.assertIn("the overlay must stay out of git and out of fences", err)
+            self.assertFalse((checkout / "nested").exists())
+            if git_dir: entry.rmdir()
+            else: entry.unlink()
+        self.config["core"]["overlay"] = str(self.h.root / "fence/patterns.md")
+        self.save()
+        code, out, err = self.terminal("--from", "input.md")
+        self.assertEqual(code, 1)
+        self.assertIn("the overlay must stay out of git and out of fences", err)
+        self.assertFalse((self.h.root / "fence").exists())
+
+    def test_core_import_single_regular_file_and_fence_exception(self):
+        link = self.h.root / "link"
+        link.symlink_to(self.h.root / "input.md")
+        large = self.h.root / "large"
+        large.write_bytes(b"x" * (256 * 1024 + 1))
+        for path in (link, self.h.root, large):
+            for option in ("--from", "--block-list"):
+                with self.subTest(path=path.name, option=option):
+                    args = ("--from", "input.md") if option == "--block-list" else ()
+                    code, out, err = self.terminal(*args, option, str(path))
+                    self.assertEqual(code, 1)
+                    self.assertFalse(self.overlay.exists())
+        fence = self.h.root / "fence"
+        fence.mkdir()
+        source = fence / "chosen.md"
+        source.write_text("A distilled pattern.\n")
+        code, out, err = self.terminal("--from", str(source))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.overlay.read_text(), "A distilled pattern.\n")
+        proc = self.h.crew(self.member, "core-check", "--file", str(source))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("fenced", proc.stderr)
+
+    def test_core_import_fenced_source_opens_only_the_named_file(self):
+        fence = self.h.root / "fence"
+        fence.mkdir()
+        source = fence / "chosen.md"
+        source.write_text("A distilled pattern.\n")
+        (fence / "unrelated").write_text("Never read.\n")
+        (fence / "unrelated").chmod(0)
+        m = self.c.load_member(self.c.read_member(self.member))
+        resolved_fence = fence.resolve()
+        def guard(fn):
+            def call(path, *args, **kwargs):
+                if isinstance(path, (str, bytes, os.PathLike)):
+                    path = Path(os.fsdecode(path))
+                    if self.c.under(path, fence) or self.c.under(path, resolved_fence):
+                        self.assertEqual(path, source, "touched another fenced path")
+                return fn(path, *args, **kwargs)
+            return call
+        with ExitStack() as stack:
+            for module, name in ((os, "open"), (os, "stat"), (os, "lstat"), (os, "scandir"),
+                                 (os, "listdir"), (builtins, "open"), (io, "open")):
+                stack.enter_context(patch.object(module, name, guard(getattr(module, name))))
+            stack.enter_context(patch.object(os, "isatty", return_value=True))
+            stack.enter_context(patch.object(sys, "stdin", io.StringIO("y\n")))
+            stack.enter_context(redirect_stdout(io.StringIO()))
+            args = self.c.parser_for(m, "test").parse_args(["core-import", "--from", str(source)])
+            self.assertEqual(self.c.cmd_core_import(m, args), 0)
+        self.assertEqual(self.overlay.read_text(), "A distilled pattern.\n")
 
 
 if __name__ == "__main__":
