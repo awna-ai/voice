@@ -644,7 +644,8 @@ class Compartments(unittest.TestCase):
                 rows = [json.loads(line) for line in self.h.read("out.jsonl").splitlines()]
                 self.assertEqual([(r["compartment"], r["text"]) for r in rows],
                                  [("garden", "keep the garden review queue")] if garden_kept else [])
-                self.assertIn(", 2 excluded records", proc.stdout)
+                excluded = 3 if "excluded_folders" in overrides else 2
+                self.assertIn(f", {excluded} excluded records", proc.stdout)
                 self.assertFalse(any("garden" in r["text"] for r in rows if r["compartment"] == "work"))
                 # Merge retains member filters even for tagged records.
                 proc = self.h.crew(member, "merge", "--in", "out.jsonl", "--out", "merged.jsonl")
@@ -685,12 +686,95 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 rows = [json.loads(line) for line in self.h.read("out.jsonl").splitlines()]
                 self.assertEqual([(r["compartment"], r["text"]) for r in rows],
-                                 ([(expected, "keep this review queue")] if not excluded else []) +
-                                 [(expected, "keep every review queue verdict")])
+                                 [(expected, "keep every review queue verdict")] if excluded else [])
                 if excluded:
                     self.assertIn(", 2 excluded records", proc.stdout)
                 else:
-                    self.assertIn("2 personal records", proc.stdout)
+                    self.assertIn(", 5 excluded records", proc.stdout)
+
+    def test_admitted_hub_parent_cannot_route_into_another_compartment(self):
+        member = self.garden_filters({"excluded_folders": "(?!)", "personal": "(?!)"})
+        config = json.loads(Path(member).read_text())
+        config["filters"]["personal"] = "garden review"
+        self.h.write("member.json", config)
+        self.config["hub"]["paths"].append("~/projects/garden/projects")
+        self.h.write("compartments.json", self.config)
+        self.h.session(self.c.encode("~/projects/garden"), "cross-route",
+                       self.write_tool("~/projects/garden/projects/client-stack/queue.md"),
+                       said("2026-09-01T00:00:00Z", "keep this review queue",
+                            cwd="~/projects/garden"))
+        proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.h.read("out.jsonl"), "")
+        self.assertIn(", 2 excluded records", proc.stdout)
+
+    def test_admitted_folder_rejects_other_and_unmapped_cwds(self):
+        member = self.garden_filters({"excluded_folders": "(?!)", "personal": "(?!)"})
+        for i, cwd in enumerate(("~/projects/work", "~/outside", "~/projects/garden", None)):
+            record = said(f"2026-09-01T00:0{i}:00Z", "keep this review queue")
+            if cwd is not None:
+                record["cwd"] = cwd
+            else:
+                record.pop("cwd", None)
+            self.h.session(self.c.encode("~/projects/garden"), f"cwd-{i}", record)
+        proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = [json.loads(line) for line in self.h.read("out.jsonl").splitlines()]
+        self.assertEqual([(r["timestamp"], r["compartment"]) for r in rows],
+                         [("2026-09-01T00:02:00Z", "garden"), ("2026-09-01T00:03:00Z", "garden")])
+        self.assertIn(", 2 excluded records", proc.stdout)
+
+    def test_filter_override_grid_only_adds_its_own_records(self):
+        member = self.garden_filters({"excluded_folders": "(?!)", "personal": "(?!)"})
+        folders = {"work": "~/projects/work", "garden": "~/projects/garden", "hub": "~/.hub"}
+        self.config["hub"]["paths"] = [folder + "/projects" for folder in folders.values()]
+        self.config["hub"]["routes"] = {"work-stack": "work", "garden-stack": "garden"}
+        cases = {}
+        for owner, folder in folders.items():
+            for cwd_name, cwd in (("work", "~/projects/work"), ("garden", "~/projects/garden"),
+                                  ("none", None), ("fenced", "~/projects/garden/blocked"),
+                                  ("unmapped", "~/outside")):
+                for route, targets in (("off", []), ("toA", ["work-stack"]),
+                                       ("toB", ["garden-stack"]),
+                                       ("mixed", ["work-stack", "garden-stack"])):
+                    for mentions in (False, True):
+                        name = f"2026-09-01T{len(cases) // 60:02d}:{len(cases) % 60:02d}:00Z"
+                        text = "keep the garden review queue" if mentions else "keep this review queue"
+                        record = said(name, text)
+                        if cwd is None:
+                            record.pop("cwd", None)
+                        else:
+                            record["cwd"] = cwd
+                        tools = [self.write_tool(folder + "/projects/" + target + "/queue.md")
+                                 for target in targets]
+                        self.h.session(self.c.encode(folder), name, *tools, record)
+                        routed = {"off": "work" if owner == "hub" else owner,
+                                  "toA": "work", "toB": "garden", "mixed": "hub-mixed"}[route]
+                        cases[name] = (owner, cwd_name, routed, mentions)
+        # Exercise both newly admitted folders and personal-only overrides in member-kept folders.
+        for excluded in ("garden", "(?!)"):
+            with self.subTest(excluded=excluded):
+                config = json.loads(Path(member).read_text())
+                config["filters"]["excluded_folders"] = excluded
+                config["filters"]["personal"] = "garden review"
+                self.h.write("member.json", config)
+                baseline = json.loads(json.dumps(self.config))
+                del baseline["compartments"]["garden"]["filters"]
+                outputs = []
+                for c in (baseline, self.config):
+                    self.h.write("compartments.json", c)
+                    proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    outputs.append({r["timestamp"]: r for r in
+                                    map(json.loads, self.h.read("out.jsonl").splitlines())})
+                before, after = outputs
+                eligible = {name for name, (owner, cwd, routed, mentions) in cases.items()
+                            if owner == "garden" and routed == "garden" and cwd in ("garden", "none")}
+                expected_new = {name for name in eligible if excluded == "garden" or cases[name][3]}
+                self.assertEqual(set(after) - set(before), expected_new)
+                for name in expected_new:
+                    self.assertEqual(after[name]["compartment"], "garden", name)
+                self.assertEqual({name: row for name, row in after.items() if name in before}, before)
 
     def test_compartment_filter_validation(self):
         for filters, suffix in ((None, ""), ([], ""), ({"secret": "x"}, ".secret"),

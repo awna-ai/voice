@@ -1017,7 +1017,7 @@ def mining_filter(m, compartment, key):
     return m.compartments.filters.get(compartment, {}).get(key, fallback)
 
 
-def record_cwd_drop_reason(m, record, folder_compartment_name):
+def record_cwd_drop_reason(m, record, *, excluded=None):
     cwd = record.get("cwd")
     if not isinstance(cwd, str) or not cwd:
         return None
@@ -1026,9 +1026,7 @@ def record_cwd_drop_reason(m, record, folder_compartment_name):
     if c is not None and (folder_compartment(c, cwd_folder) == "fenced" or
             matches_fence(Path(os.path.abspath(os.path.expanduser(cwd))), lexical_fences(c, os.getcwd()))):
         return "fenced"
-    compartment = folder_compartment(c, cwd_folder) if c is not None else None
-    excluded = mining_filter(m, compartment, "excluded_folders") if compartment == folder_compartment_name else m.excluded
-    if excluded.search(cwd_folder):
+    if (m.excluded if excluded is None else excluded).search(cwd_folder):
         return "excluded"
     return None
 
@@ -1043,9 +1041,12 @@ def cmd_mine(m, args):
             continue
         if not folder.is_dir():
             continue
-        if mining_filter(m, compartment, "excluded_folders").search(folder.name):
+        member_excluded = m.excluded.search(folder.name)
+        override_excluded = mining_filter(m, compartment, "excluded_folders")
+        if override_excluded.search(folder.name):
             excluded += 1
             continue
+        admitted = bool(member_excluded)
         project = project_name(folder.name)
         for path in sorted(folder.glob("*.jsonl")):
             if m.compartments is not None and path_compartment(m.compartments, path, os.getcwd()) == "fenced":
@@ -1053,18 +1054,33 @@ def cmd_mine(m, args):
             records = read_session(path)
             allowed = []
             for record in records:
-                reason = record_cwd_drop_reason(m, record, compartment)
+                reason = record_cwd_drop_reason(m, record, excluded=override_excluded if admitted else None)
                 if reason:
                     dropped[reason] += 1
                 else:
                     allowed.append(record)
             records = allowed
             session_compartment = hub_compartment(m.compartments, folder.name, compartment, records) if m.compartments is not None else None
-            personal = mining_filter(m, session_compartment, "personal") if session_compartment == compartment else m.personal
+            if admitted:
+                if session_compartment != compartment:
+                    dropped["excluded"] += len(records)
+                    continue
+                allowed = []
+                for record in records:
+                    cwd = record.get("cwd")
+                    if isinstance(cwd, str) and cwd and folder_compartment(m.compartments, encode(cwd)) != compartment:
+                        dropped["excluded"] += 1
+                    else:
+                        allowed.append(record)
+                records = allowed
             for h, cwd in _harvest(m, path, project, records):
                 cwd_folder = encode(cwd) if isinstance(cwd, str) and cwd else None
                 if m.compartments is not None:
                     h["compartment"] = session_compartment
+                own_record = (session_compartment == compartment and
+                              (cwd_folder is None or (m.compartments is not None and
+                               folder_compartment(m.compartments, cwd_folder) == compartment)))
+                personal = mining_filter(m, compartment, "personal") if own_record else m.personal
                 reason = privacy(m, h, personal=personal)
                 if reason:
                     dropped[reason] += 1
