@@ -17,6 +17,8 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       of the reply it answered. Drops excluded folders, and records on a personal topic or holding a
       secret. The newest share of questions, and every message from that point on, is split
       "heldout" for the backtest.
+      compartments.<name>.filters replaces excluded_folders/personal for mine only; other commands
+      keep the member filters, and secrets and fences always apply.
   documents [--dir FOLDER] [--sources] --out-dir DIR [--size 6000] [--pdftotext PATH]
       Read the principal's documents into filtered private lens inputs and an inventory; with
       --sources, also each consented folder source's files marked y in its review.
@@ -59,7 +61,7 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       One JSON line per question waiting on the principal that it has not printed before: an
       unanswered AskUserQuestion, a closing wrap_up ask nothing has replied to, an open CONTROL-Q
       (only when the member config names `queues`), or an answer to an escalation, written by the
-      config's `queue_answerer`, for relay to its asking session. Same privacy filters as mine.
+      config's `queue_answerer`, for relay to its asking session. Uses the member privacy filters.
       Asks come only from headless sessions (a job run): one the principal opened, in the
       desktop app or a terminal, is attended and never reported.
       A member's watcher runs pending with no model.
@@ -157,11 +159,23 @@ def check_compartments(c):
     if not isinstance(c.get("compartments"), dict):
         fail("compartments")
     reserved = {"all", "auto", "fenced", "hub-mixed", "excluded"}
+    compiled_filters = {}
     for name, entry in c["compartments"].items():
         key = "compartments." + name
         if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}", name) or name in reserved:
             fail(key)
-        keys(entry, {"folders"}, key)
+        keys(entry, {"folders", "filters"}, key)
+        if "filters" in entry:
+            keys(entry["filters"], {"excluded_folders", "personal"}, key + ".filters")
+            compiled_filters[name] = {}
+            for filter_name, value in entry["filters"].items():
+                filter_key = key + ".filters." + filter_name
+                if not isinstance(value, str):
+                    fail(filter_key)
+                try:
+                    compiled_filters[name][filter_name] = re.compile(value, re.I)
+                except (re.error, OverflowError):
+                    fail(filter_key)
         if not isinstance(entry.get("folders"), list):
             fail(key + ".folders")
         for value in entry["folders"]:
@@ -223,6 +237,7 @@ def check_compartments(c):
             if core["overlay"].endswith("/"):
                 fail("core.overlay")
     checked = CompartmentMap(c)
+    checked.filters = compiled_filters
     checked.base = getattr(c, "base", None)
     return checked
 
@@ -804,12 +819,12 @@ def message_record(session, when, project, text, context):
             "project": project, "text": text, "context": context[-CONTEXT_CHARS:]}
 
 
-def privacy(m, record):
+def privacy(m, record, *, personal=None):
     """Which filter drops the record: "secret", "personal", or None to keep it."""
     text = filtered(record)
     if m.secret.search(text):
         return "secret"
-    if m.personal.search(text):
+    if (m.personal if personal is None else personal).search(text):
         return "personal"
     return None
 
@@ -994,6 +1009,14 @@ def queue_compartment(m, queues, path):
     return {"compartment": name}
 
 
+def mining_filter(m, compartment, key):
+    """Select a compiled compartment override for mine, falling back per key."""
+    fallback = m.excluded if key == "excluded_folders" else m.personal
+    if m.compartments is None:
+        return fallback
+    return m.compartments.filters.get(compartment, {}).get(key, fallback)
+
+
 def record_cwd_drop_reason(m, record):
     cwd = record.get("cwd")
     if not isinstance(cwd, str) or not cwd:
@@ -1003,7 +1026,8 @@ def record_cwd_drop_reason(m, record):
     if c is not None and (folder_compartment(c, cwd_folder) == "fenced" or
             matches_fence(Path(os.path.abspath(os.path.expanduser(cwd))), lexical_fences(c, os.getcwd()))):
         return "fenced"
-    if m.excluded.search(cwd_folder):
+    compartment = folder_compartment(c, cwd_folder) if c is not None else None
+    if mining_filter(m, compartment, "excluded_folders").search(cwd_folder):
         return "excluded"
     return None
 
@@ -1018,7 +1042,7 @@ def cmd_mine(m, args):
             continue
         if not folder.is_dir():
             continue
-        if m.excluded.search(folder.name):
+        if mining_filter(m, compartment, "excluded_folders").search(folder.name):
             excluded += 1
             continue
         project = project_name(folder.name)
@@ -1039,7 +1063,7 @@ def cmd_mine(m, args):
                 cwd_folder = encode(cwd) if isinstance(cwd, str) and cwd else None
                 if m.compartments is not None:
                     h["compartment"] = session_compartment
-                reason = privacy(m, h)
+                reason = privacy(m, h, personal=mining_filter(m, session_compartment, "personal"))
                 if reason:
                     dropped[reason] += 1
                 else:

@@ -88,7 +88,7 @@ fn tree(path: &Path) -> BTreeMap<PathBuf, (u32, Vec<u8>)> {
 }
 const BLOCK: &str =
     "<!-- voice:begin ari -->\n@~/.claude/voice/assistants/ari/RULES.md\n<!-- voice:end ari -->\n";
-const RULES: &str = "# Ari\n\nBefore you ask me a question (a choice between options, a go or no-go, a plan's open questions),\nask Ari first with the /ari skill. Ari says what I would likely pick and how sure\nthat answer is. Ask me only what Ari hands back, and show me Ari's answer beside the\nquestion.\n";
+const RULES: &str = "# Ari\n\nBefore you ask me a question (a choice between options, a go or no-go, a plan's open questions),\nask Ari first with the /ari skill. Ari says what I would likely pick and how sure\nthat answer is. Ask me only what Ari hands back, and show me Ari's answer beside the\nquestion.\n\nIn a folder where the /ari skill says it is fenced, don't ask Ari: that folder has its own skill.\n";
 
 #[test]
 fn empty_install_has_exact_contents_record_and_private_modes() {
@@ -343,6 +343,40 @@ fn status_tracks_missing_changed_line_and_outdated_member() {
     );
     fs::remove_file(f.member.join("SKILL.md")).unwrap();
     assert!(status(&f.places).unwrap().unwrap().out_of_date);
+}
+#[test]
+fn old_rules_are_out_of_date_and_turn_on_refreshes_them() {
+    let f = Fixture::new();
+    f.on();
+    let path = f.path("voice/assistants/ari/RULES.md");
+    let old_rules = RULES.split_once("\nIn a folder").unwrap().0;
+    fs::write(&path, old_rules).unwrap();
+    let mut record = install_record::read(&f.places.claude_home)
+        .unwrap()
+        .unwrap();
+    for added in &mut record.added {
+        if let Added::File { path: file, text } = added
+            && *file == path
+        {
+            *text = old_rules.to_owned();
+        }
+    }
+    fs::write(
+        install_record::record_path(&f.places.claude_home),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    let current = status(&f.places).unwrap().unwrap();
+    assert!(current.out_of_date);
+    assert!(
+        current
+            .files
+            .iter()
+            .all(|(_, state)| *state == FileState::Present)
+    );
+    f.on();
+    assert_eq!(fs::read_to_string(&path).unwrap(), RULES);
+    assert!(!status(&f.places).unwrap().unwrap().out_of_date);
 }
 #[test]
 fn import_paths_escape_spaces_and_use_absolute_path_outside_home() {

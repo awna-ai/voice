@@ -609,6 +609,60 @@ class Compartments(unittest.TestCase):
         import crew_decisions
         self.c = crew_decisions
 
+    def garden_filters(self, overrides):
+        self.config["compartments"]["garden"] = {
+            "folders": ["~/projects/garden"], "filters": overrides}
+        self.config["fenced"] = ["~/projects/garden/blocked"]
+        self.h.write("compartments.json", self.config)
+        return self.h.member({**ADA, "compartments": "compartments.json",
+                              "filters": {**ADA["filters"], "excluded_folders": "garden",
+                                          "personal": "garden"}})
+
+    def test_mine_compartment_filters_replace_only_their_own_member_filter(self):
+        for overrides, garden_kept in (({}, False), ({"excluded_folders": "(?!)"}, False),
+                                       ({"personal": "(?!)"}, False),
+                                       ({"excluded_folders": "(?!)", "personal": "(?!)"}, True)):
+            with self.subTest(overrides=overrides):
+                member = self.garden_filters(overrides)
+                self.h.session(self.c.encode("~/projects/garden"), "garden",
+                               said("2026-09-01T00:00:00Z", "keep the garden review queue"),
+                               said("2026-09-01T00:01:00Z", "garden account 123456789"))
+                cross = [said("2026-09-02T00:00:00Z", "keep this review queue"),
+                         said("2026-09-02T00:01:00Z", "keep the garden review queue")]
+                for record in cross:
+                    record["cwd"] = str(TEST_HOME / "projects/garden")
+                self.h.session(self.c.encode("~/projects/work"), "work", *cross,
+                               said("2026-09-02T00:02:00Z", "garden stays private"))
+                self.h.session(self.c.encode("~/projects/garden/blocked"), "fenced",
+                               said("2026-09-03T00:00:00Z", "never admit fenced folder"))
+                blocked = said("2026-09-04T00:00:00Z", "never admit fenced cwd")
+                blocked["cwd"] = str(TEST_HOME / "projects/garden/blocked")
+                self.h.session(self.c.encode("~/projects/garden"), "blocked-cwd", blocked)
+                proc = self.h.crew(member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                rows = [json.loads(line) for line in self.h.read("out.jsonl").splitlines()]
+                self.assertEqual([(r["compartment"], r["text"]) for r in rows],
+                                 ([("garden", "keep the garden review queue")] if garden_kept else []) +
+                                 ([("work", "keep this review queue")] if "excluded_folders" in overrides else []))
+                self.assertFalse(any("garden" in r["text"] for r in rows if r["compartment"] == "work"))
+                # Merge retains member filters even for tagged records.
+                proc = self.h.crew(member, "merge", "--in", "out.jsonl", "--out", "merged.jsonl")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                merged = [json.loads(line) for line in self.h.read("merged.jsonl").splitlines()]
+                self.assertEqual(merged, [r for r in rows if r["compartment"] == "work"])
+
+    def test_compartment_filter_validation(self):
+        for filters, suffix in ((None, ""), ([], ""), ({"secret": "x"}, ".secret"),
+                                ({"personal": 1}, ".personal"), ({"personal": "("}, ".personal"),
+                                ({"excluded_folders": False}, ".excluded_folders"),
+                                ({"excluded_folders": "["}, ".excluded_folders"),
+                                ({"personal": "x{99999999999999999999}"}, ".personal")):
+            with self.subTest(filters=filters):
+                self.garden_filters(filters)
+                proc = self.h.crew(self.member, "where")
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertIn("compartments.garden.filters" + suffix, proc.stderr)
+
     def test_config_and_resolvers(self):
         m = self.c.load_member(self.c.read_member(self.member))
         c = m.compartments

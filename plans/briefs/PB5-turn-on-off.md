@@ -155,6 +155,8 @@ Before you ask me a question (a choice between options, a go or no-go, a plan's 
 ask {{NAME}} first with the /{{SLUG}} skill. {{NAME}} says what I would likely pick and how sure
 that answer is. Ask me only what {{NAME}} hands back, and show me {{NAME}}'s answer beside the
 question.
+
+In a folder where the /{{SLUG}} skill says it is fenced, don't ask {{NAME}}: that folder has its own skill.
 ```
 
 ### A5. `pub fn turn_on(member_dir: &Path, places: &Places) -> Result<TurnedOn>`

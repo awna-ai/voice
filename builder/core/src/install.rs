@@ -48,7 +48,7 @@ pub struct Status {
     pub out_of_date: bool,
 }
 
-const RULES: &str = "# {{NAME}}\n\nBefore you ask me a question (a choice between options, a go or no-go, a plan's open questions),\nask {{NAME}} first with the /{{SLUG}} skill. {{NAME}} says what I would likely pick and how sure\nthat answer is. Ask me only what {{NAME}} hands back, and show me {{NAME}}'s answer beside the\nquestion.\n";
+const RULES: &str = "# {{NAME}}\n\nBefore you ask me a question (a choice between options, a go or no-go, a plan's open questions),\nask {{NAME}} first with the /{{SLUG}} skill. {{NAME}} says what I would likely pick and how sure\nthat answer is. Ask me only what {{NAME}} hands back, and show me {{NAME}}'s answer beside the\nquestion.\n\nIn a folder where the /{{SLUG}} skill says it is fenced, don't ask {{NAME}}: that folder has its own skill.\n";
 
 impl Places {
     pub(crate) fn canonical(&self) -> Result<Self> {
@@ -387,9 +387,18 @@ pub fn status(places: &Places) -> Result<Option<Status>> {
         .is_some();
     let mut files = vec![];
     let mut out_of_date = false;
+    let rules_path = places
+        .claude_home
+        .join("voice/assistants")
+        .join(&record.slug)
+        .join("RULES.md");
+    let rules = crew::fill(RULES, &[("NAME", &record.name), ("SLUG", &record.slug)]);
     for added in &record.added {
         if let Added::File { path, text } = added {
             files.push((path.clone(), file_state(path, text)?));
+            if path == &rules_path {
+                out_of_date |= text != &rules;
+            }
             if path
                 == &places
                     .claude_home
@@ -397,7 +406,7 @@ pub fn status(places: &Places) -> Result<Option<Status>> {
                     .join(&record.slug)
                     .join("SKILL.md")
             {
-                out_of_date =
+                out_of_date |=
                     file_state(&record.member_dir.join("SKILL.md"), text)? != FileState::Present;
             }
         }
