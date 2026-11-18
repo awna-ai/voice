@@ -22,8 +22,9 @@ git remote get-url -- "$remote" >/dev/null 2>&1 || usage
 lock="$(git rev-parse --git-common-dir)/verify-main.lock"
 if ! ln -s "$$" "$lock" 2>/dev/null; then
   pid=$(readlink "$lock" 2>/dev/null || true)
+  holder=$(ps -p "$pid" -o command= 2>/dev/null || true)
   if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null &&
-    ps -p "$pid" -o command= | grep -q 'verify-main\.sh'; then
+    [[ "$holder" == *verify-main.sh* ]]; then
     echo "verify-main: already running (pid $pid)"
     exit 0
   fi
