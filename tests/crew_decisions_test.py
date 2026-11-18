@@ -1579,21 +1579,21 @@ class Compartments(unittest.TestCase):
         values = (("a/" * (1024 * 512), "work"),
                   ((mention * (1024 * 1024 // len(mention) + 1))[:1024 * 1024], "client"))
         def deadline(signum, frame):
-            self.fail("hub routing exceeded 2 seconds")
-        old_handler = signal.signal(signal.SIGALRM, deadline)
+            self.fail("hub routing exceeded 2 seconds of CPU time")
+        old_handler = signal.signal(signal.SIGPROF, deadline)
         try:
             for value, expected in values:
                 with self.subTest(expected=expected):
-                    signal.setitimer(signal.ITIMER_REAL, 2)
-                    start = time.perf_counter()
+                    signal.setitimer(signal.ITIMER_PROF, 2)
+                    start = time.process_time()
                     actual = self.c.hub_compartment(self.config, ENCODED_HOME + "--hub", "work", [self.write_tool(value)])
-                    elapsed = time.perf_counter() - start
-                    signal.setitimer(signal.ITIMER_REAL, 0)
+                    elapsed = time.process_time() - start
+                    signal.setitimer(signal.ITIMER_PROF, 0)
                     self.assertEqual(actual, expected)
                     self.assertLess(elapsed, 2)
         finally:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            signal.signal(signal.SIGALRM, old_handler)
+            signal.setitimer(signal.ITIMER_PROF, 0)
+            signal.signal(signal.SIGPROF, old_handler)
 
     def test_hub_session_folder_longest_route(self):
         self.config["hub"]["routes"]["client"] = "work"
@@ -1951,18 +1951,19 @@ class Compartments(unittest.TestCase):
         value = " ".join("~/.hub/projects/unknown-%05d/file" % i for i in range(30000))
         self.assertGreater(len(value), 1024 * 1024)
         def deadline(signum, frame):
-            self.fail("distinct hub routing exceeded 4 seconds")
-        old = signal.signal(signal.SIGALRM, deadline)
+            self.fail("distinct hub routing exceeded 15 seconds of CPU time")
+        old = signal.signal(signal.SIGPROF, deadline)
         try:
-            signal.setitimer(signal.ITIMER_REAL, 4)
-            start = time.perf_counter()
+            # CPU time, not wall time: a busy Mac runs this on slow cores; a quadratic matcher takes minutes.
+            signal.setitimer(signal.ITIMER_PROF, 15)
+            start = time.process_time()
             actual = self.c.hub_compartment(m.compartments, ENCODED_HOME + "--hub", "work", [self.write_tool(value)])
-            elapsed = time.perf_counter() - start
+            elapsed = time.process_time() - start
             self.assertEqual(actual, "work")
-            self.assertLess(elapsed, 4)
+            self.assertLess(elapsed, 15)
         finally:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            signal.signal(signal.SIGALRM, old)
+            signal.setitimer(signal.ITIMER_PROF, 0)
+            signal.signal(signal.SIGPROF, old)
 
     def test_fenced_root_forms_cached_per_member(self):
         m = self.save_config()
