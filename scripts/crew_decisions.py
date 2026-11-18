@@ -58,13 +58,15 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       --stdin reads the texts as one JSON object, so the shell never reads them.
       Appends one live decision: what the member decided alone, or escalated with their lean.
   pending [--projects DIR] [--queues DIR] [--seen FILE] [--since-hours 24] [--exclude ID]
+          [--compartment NAME]
       One JSON line per question waiting on the principal that it has not printed before: an
       unanswered AskUserQuestion, a closing wrap_up ask nothing has replied to, an open CONTROL-Q
       (only when the member config names `queues`), or an answer to an escalation, written by the
       config's `queue_answerer`, for relay to its asking session. Uses the member privacy filters.
       Asks come only from headless sessions (a job run): one the principal opened, in the
       desktop app or a terminal, is attended and never reported.
-      A member's watcher runs pending with no model.
+      --compartment prints and marks seen only that compartment's items; it requires compartments
+      configuration and refuses fenced. A member's watcher runs pending with no model.
 """
 import argparse
 import errno
@@ -991,22 +993,10 @@ def queue_files(m, queues):
             yield path
 
 
-def queue_compartment(m, queues, path):
+def queue_compartment(m, path):
     if m.compartments is None:
         return {}
-    c = m.compartments
-    if safe_resolve(c, path, os.getcwd())[1]:
-        return {"compartment": "fenced"}
-    hub = c.get("hub")
-    queues_real, fenced = safe_resolve(c, queues, os.getcwd())
-    if fenced:
-        return {"compartment": "fenced"}
-    if hub and any(not blocked and fold(str(queues_real)) == fold(str(real))
-                   for root in hub["paths"] for real, blocked in [safe_resolve(c, root, os.getcwd())]):
-        name = route_compartment(hub, path.parent.name)
-    else:
-        name = path_compartment(m.compartments, path, os.getcwd())
-    return {"compartment": name}
+    return {"compartment": path_compartment(m.compartments, path.parent, os.getcwd())}
 
 
 def mining_filter(m, compartment, key):
@@ -1670,7 +1660,7 @@ def open_control_qs(m, queues):
                 options = [match.group(1) for row in (body["body"] or "").splitlines()
                            if (match := re.match(r"^\s*[a-z]\)\s+(.*)$", row))]
                 found.append({"kind": "control-q", "project": path.parent.name, "key": key, "line": n,
-                              "question": line, "options": options, **body, **queue_compartment(m, queues, path)})
+                              "question": line, "options": options, **body, **queue_compartment(m, path)})
     return found
 
 
@@ -1708,12 +1698,17 @@ def answered_escalations(m, queues):
                     continue
                 answers[key] = {"kind": "control-a", "project": path.parent.name, "key": key,
                                 "line": n, "answer": line.strip(), "session": sessions[key],
-                                **control_body(m, lines, n - first), **queue_compartment(m, queues, path)}
+                                **control_body(m, lines, n - first), **queue_compartment(m, path)}
         found.extend(answers.values())
     return found
 
 
 def cmd_pending(m, args):
+    if args.compartment is not None:
+        if args.compartment == "fenced":
+            raise Failed("pending: refusing compartment fenced")
+        if m.compartments is None:
+            raise Failed("pending: --compartment requires compartments configuration")
     seen_path = Path(args.seen or m.state("autonomous/seen.json")).expanduser()
     seen = set(json.loads(seen_path.read_text())) if seen_path.exists() else set()
     cutoff = datetime.now(timezone.utc).timestamp() - args.since_hours * 3600
@@ -1744,7 +1739,8 @@ def cmd_pending(m, args):
                   for q in open_control_qs(m, Path(queues).expanduser())]
         items += [{**a, "id": f"{a['project']}:{a['key']}:A:{a['line']}"}
                   for a in answered_escalations(m, Path(queues).expanduser())]
-    new = [i for i in items if i["id"] not in seen]
+    new = [i for i in items if i["id"] not in seen
+           and (args.compartment is None or i.get("compartment") == args.compartment)]
     for i in new:
         print(json.dumps(i, ensure_ascii=False))
     if new:
@@ -3059,7 +3055,9 @@ def parser_for(m, description):
     p.add_argument(f"--{m.principal_slug}-answer" if m else "--principal-answer", dest="principal_answer")
     p.add_argument("--stdin", action="store_true", help="read the texts as one JSON object from stdin")
     p.set_defaults(usage_error=p.error, record_required=required)
-    p = sub.add_parser("pending")
+    p = sub.add_parser("pending", help="unseen questions and escalation answers, optionally in one compartment")
+    p.add_argument("--compartment", metavar="NAME",
+                   help="print and mark seen only NAME; requires compartments configuration; refuses fenced")
     p.add_argument("--projects", default="~/.claude/projects")
     p.add_argument("--queues", help="default: the member config's queues, if any")
     p.add_argument("--seen", help="default: <state_dir>/autonomous/seen.json")

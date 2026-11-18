@@ -456,6 +456,25 @@ class Pending(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual([json.loads(line)["session"] for line in proc.stdout.splitlines()], ["job-run"])
 
+    def test_pending_without_compartments_preserves_output_bytes(self):
+        h = Harness()
+        self.addCleanup(h.dir.cleanup)
+        h.session(ENCODED_HOME + "-projects-app", "s",
+                  asking("2026-09-01T00:00:00Z", "t", "Which?", "sdk-cli"))
+        folder = h.root / "queues" / "app"
+        folder.mkdir(parents=True)
+        (folder / "queue.md").write_text("🎛️ CONTROL-Q APP-1 · t · lane ALL\n")
+        proc = h.crew(h.member(ADA), "pending", "--projects", str(h.projects),
+                      "--queues", str(folder.parent), "--seen", "seen.json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.encode(), (
+            '{"kind": "ask", "tool_id": "t", "when": "2026-09-01T00:00:00Z", '
+            '"question": "Which?", "options": ["a", "b"], "session": "s", "project": "app", "id": "s:t"}\n'
+            '{"kind": "control-q", "project": "app", "key": "APP-1", "line": 1, '
+            '"question": "🎛️ CONTROL-Q APP-1 · t · lane ALL", "options": [], "body": "", "id": "app:APP-1:1"}\n'
+        ).encode())
+        self.assertEqual(json.loads(h.read("seen.json")), ["app:APP-1:1", "s:t"])
+
 
 class PrivacyCheck(unittest.TestCase):
     """The step 11 gate over a crew folder made from the template the way install.sh makes it."""
@@ -1253,6 +1272,79 @@ class Compartments(unittest.TestCase):
             if command[0] == "folders":
                 self.assertEqual(json.loads(proc.stdout)[0]["state"], "fenced")
 
+    def test_pending_compartment_refusals_do_not_touch_seen(self):
+        for configured, scope, error in (
+                (True, "fenced", "pending: refusing compartment fenced"),
+                (False, "X", "pending: --compartment requires compartments configuration")):
+            member = self.member if configured else self.h.member(ADA, "unscoped.json")
+            for existing in (False, True):
+                with self.subTest(configured=configured, existing=existing):
+                    seen = self.h.root / "seen.json"
+                    seen.unlink(missing_ok=True)
+                    if existing:
+                        seen.write_text('[ "already-seen" ]\n')
+                    before = seen.read_bytes() if existing else None
+                    proc = self.h.crew(member, "pending", "--compartment", scope,
+                                       "--projects", str(self.h.projects), "--seen", str(seen))
+                    self.assertNotEqual(proc.returncode, 0)
+                    self.assertEqual(proc.stdout, "")
+                    self.assertEqual(proc.stderr, "crew_decisions: " + error + "\n")
+                    self.assertEqual(seen.read_bytes() if seen.exists() else None, before)
+
+    def test_pending_compartment_leaves_other_events_unseen(self):
+        for folder, session in (("work", "a"), ("client", "b")):
+            self.h.session(self.c.encode("~/projects/" + folder), session,
+                           asking("2026-09-01T00:00:00Z", "t", "Which queue?", "sdk-cli"))
+        queues = self.h.root / "queues"
+        folder = queues / "archive-stack"
+        folder.mkdir(parents=True)
+        (folder / "queue.md").write_text("🎛️ CONTROL-Q APP-1 · t · lane ALL\n")
+        self.config["compartments"]["archive"] = {"folders": []}
+        self.config["hub"]["paths"].append(str(queues))
+        self.config["hub"]["routes"]["archive-stack"] = "archive"
+        self.h.write("compartments.json", self.config)
+        flags = ("pending", "--projects", str(self.h.projects), "--queues", str(queues),
+                 "--seen", "seen.json")
+        for scope, ids, seen in (
+                (("--compartment", "work"), ["a:t"], ["a:t"]),
+                (("--compartment", "work"), [], ["a:t"]),
+                (("--compartment", "archive"), ["archive-stack:APP-1:1"],
+                 ["a:t", "archive-stack:APP-1:1"]),
+                ((), ["b:t"], ["a:t", "archive-stack:APP-1:1", "b:t"])):
+            with self.subTest(scope=scope, ids=ids):
+                proc = self.h.crew(self.member, *flags, *scope)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                rows = [json.loads(line) for line in proc.stdout.splitlines()]
+                self.assertEqual([r["id"] for r in rows], ids)
+                self.assertEqual(json.loads(self.h.read("seen.json")), seen)
+                if ids == ["archive-stack:APP-1:1"]:
+                    self.assertEqual(rows[0]["compartment"], "archive")
+
+    def test_pending_queue_uses_project_folder_for_questions_and_answers(self):
+        queues = self.h.root / "queues"
+        folder = queues / "app"
+        folder.mkdir(parents=True)
+        target = self.h.root / "other" / "queue.md"
+        target.parent.mkdir()
+        target.write_text("🎛️ CONTROL-Q APP-1 · t · lane ALL\n"
+                          "🎛️ CONTROL-Q APP-2 · t · session s (Autonomous on)\n"
+                          "🎛️ CONTROL-A APP-2 · t · Ari · answered by Robin\n")
+        (folder / "queue.md").symlink_to(target)
+        self.config["compartments"]["client"]["folders"].append(str(folder))
+        self.config["compartments"]["work"]["folders"].append(str(target.parent))
+        self.h.write("compartments.json", self.config)
+        member = self.h.member({**ADA, "compartments": "compartments.json", "queue_answerer": "Ari"})
+        for scope in ((), ("--compartment", "client")):
+            with self.subTest(scope=scope):
+                proc = self.h.crew(member, "pending", "--projects", str(self.h.projects),
+                                   "--queues", str(queues), "--seen", "seen.json", *scope)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                rows = [json.loads(line) for line in proc.stdout.splitlines()]
+                self.assertEqual([(r["kind"], r["compartment"]) for r in rows],
+                                 [("control-q", "client"), ("control-a", "client")])
+                self.assertEqual(json.loads(self.h.read("seen.json")), ["app:APP-1:1", "app:APP-2:A:3"])
+                (self.h.root / "seen.json").unlink()
+
     def test_pending_compartments_and_fenced_queues(self):
         self.h.session(ENCODED_HOME + "-projects-work", "s", {
             "type": "assistant", "timestamp": "2026-09-01T00:00:00Z", "entrypoint": "sdk-cli",
@@ -1266,11 +1358,22 @@ class Compartments(unittest.TestCase):
         self.config["hub"]["paths"].append(str(queues))
         self.config["fenced"].append(str(queues / "blocked"))
         self.h.write("compartments.json", self.config)
-        proc = self.h.crew(self.member, "pending", "--projects", str(self.h.projects), "--queues", str(queues))
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        rows = [json.loads(line) for line in proc.stdout.splitlines()]
-        self.assertEqual({r["project"]: r["compartment"] for r in rows},
-                         {"work": "work", "client-stack": "client", "other": "p:other"})
+        blocked = queues / "blocked" / "queue.md"
+        blocked.write_text("🎛️ CONTROL-Q APP-2 · t · session s (Autonomous on)\n"
+                           "🎛️ CONTROL-A APP-2 · t · Ari · answered by Robin\n")
+        blocked.chmod(0)
+        self.addCleanup(blocked.chmod, 0o600)
+        member = self.h.member({**ADA, "compartments": "compartments.json", "queue_answerer": "Ari"})
+        for scope, expected in (((), {"work": "work", "client-stack": "client", "other": "p:other"}),
+                                (("--compartment", "client"), {"client-stack": "client"})):
+            with self.subTest(scope=scope):
+                (self.h.root / "seen.json").unlink(missing_ok=True)
+                proc = self.h.crew(member, "pending", "--projects", str(self.h.projects),
+                                   "--queues", str(queues), "--seen", "seen.json", *scope)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                rows = [json.loads(line) for line in proc.stdout.splitlines()]
+                self.assertEqual({r["project"]: r["compartment"] for r in rows}, expected)
+                self.assertEqual(json.loads(self.h.read("seen.json")), sorted(r["id"] for r in rows))
 
     def test_stdin_fence_and_cwd_precedence(self):
         from argparse import Namespace
@@ -1432,7 +1535,7 @@ class Compartments(unittest.TestCase):
         self.assertEqual(self.c.path_compartment(c, "~/.HUB/PROJECTS/CLIENT-STACK/x", TEST_HOME), "client")
         self.assertEqual(self.c.path_compartment(c, "~/.HUB/PROJECTS/New-App/x", TEST_HOME), "work")
         self.assertTrue(self.c.overlaps_fenced(m, str(TEST_HOME).upper()))
-        self.assertEqual(self.c.queue_compartment(m, "~/.HUB/PROJECTS",
+        self.assertEqual(self.c.queue_compartment(m,
                          Path("~/.HUB/PROJECTS/CLIENT-STACK/queue.md")), {"compartment": "client"})
         self.assertEqual(self.c.path_compartment(c, self.c.encode("~/Cafe\u0301").upper(), TEST_HOME), "fenced")
 
