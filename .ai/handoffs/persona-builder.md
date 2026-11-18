@@ -5,16 +5,22 @@ One record per slice, newest first. Paraphrase only; no real person.
 ## VF27: the crew routing time guards measure CPU time (2026-11-18, lane: V1)
 
 - **Status:** built and verified on `lane-v1/VF27`: `705b06d` brief (with fix-up 1), `03a5953` the test change,
-  then this record. Test-only: gated per V-Q19.
+  `769b483` this record, `23b266a` fix-up 2 brief, `d6fc63c` fix-up 2, then this record's update. Test-only: gated
+  per V-Q19.
 - **What it does:** `Compartments.test_hub_routing_megabyte_strings_are_linear` and
   `test_hub_distinct_megabyte_names_with_two_fences` in `tests/crew_decisions_test.py` time CPU time
   (`ITIMER_PROF`/`SIGPROF`, `time.process_time()`) in place of the wall clock, so a busy Mac doesn't fail them.
   The megabyte-strings bound stays 2 s; the distinct-names bound is now 15 s of CPU.
+- **Fix-up 2:** the first land (08:0x EST) went red, nothing pushed, on another load race in the same file:
+  `Core.test_core_import_agent_pty_refused_before_any_open` (from `520ab42`) writes `y` to the pty after the child
+  has already refused and exited, and macOS fails that write with EIO. The write now ignores EIO only; the exit-code
+  and message assertions are unchanged. Red first: a 1.5 s sleep before the write failed all four subtests with
+  `Errno 5`; with the fix and the sleep, it passed (run here and by Codex).
 - **Planning miss:** the card said "same bounds". On Mimi at load 13 to 22 the distinct-names call takes 5.1 to
   5.3 s of CPU time (`process_time()`, measured with the timer lifted): the scheduler runs it on the efficiency
   cores (4 performance, 6 efficiency), and the work is linear but costs about 0.15 ms per distinct name (a profile
   shows `getcwd` and `pathlib` parsing per name in `hub_project_compartment`). Fix-up 1 set 15 s.
-- **Who built it:** Codex, from the brief and its fix-up. `scripts/crew_mail.py` and
+- **Who built it:** Codex, from the brief and its two fix-ups. `scripts/crew_mail.py` and
   `tests/crew_extra_sources_test.py` keep `ITIMER_REAL`: that is the product's wall-clock budget and its test, not a
   speed guard.
 - **Verified:** red first: both tests run alone on `main` `e2ac948` at load 22 failed (the 4 s guard fired after
