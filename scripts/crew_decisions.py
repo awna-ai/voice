@@ -17,7 +17,7 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       of the reply it answered. Drops excluded folders, and records on a personal topic or holding a
       secret. The newest share of questions, and every message from that point on, is split
       "heldout" for the backtest.
-      compartments.<name>.filters applies to mine, merge and folders; private filters, secrets and fences still apply.
+      compartments.<name>.filters applies to mine and folders; merge uses it only for records mine stamped filtered_as; private filters, secrets and fences still apply.
   documents [--dir FOLDER] [--sources] --out-dir DIR [--size 6000] [--pdftotext PATH]
       Read the principal's documents into filtered private lens inputs and an inventory; with
       --sources, also each consented folder source's files marked y in its review.
@@ -420,12 +420,16 @@ def folder_children(c, folder):
         if isinstance(c, CompartmentMap):
             c._folder_children = children
     if folder not in children:
+        children[folder] = None
         try:
+            _, fenced = safe_resolve(c, folder, os.getcwd())
+            if fenced:
+                return None
             with os.scandir(folder) as entries:
                 children[folder] = {Path(entry.path): entry.is_dir(follow_symlinks=False)
                                     for entry in entries
                                     if entry.is_symlink() or entry.is_dir(follow_symlinks=False)}
-        except OSError:
+        except (OSError, ValueError, RecursionError):
             children[folder] = None
     return children[folder]
 

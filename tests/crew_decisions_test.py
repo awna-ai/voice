@@ -2555,6 +2555,70 @@ class CompartmentFilterCommands(unittest.TestCase):
             compartments["compartments"]["fleet"]["folders"] = ["~/p"]
             self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(home / "p/noor-x")), "fleet")
 
+    def test_folder_compartment_never_lists_declared_link_into_fence(self):
+        home = self.h.root / "home"
+        secret = home / "secret"
+        (secret / "inner").mkdir(parents=True)
+        root = home / "q/noor"
+        root.parent.mkdir()
+        root.symlink_to(secret, target_is_directory=True)
+        self.config["fenced"] = ["~/secret"]
+        self.config["compartments"]["noor"]["folders"] = ["~/q/noor"]
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            compartments = self.c.check_compartments(self.config)
+            with patch.object(os, "scandir", wraps=os.scandir) as scan:
+                result = self.c.folder_compartment(compartments, self.c.encode(root / "inner"))
+                self.assertFalse(any(Path(call.args[0]).resolve().is_relative_to(secret.resolve())
+                                     for call in scan.call_args_list))
+                self.assertEqual(result, "p:q-noor-inner")
+                self.assertIsNone(compartments._folder_children[root])
+
+    def test_folder_compartment_never_lists_parent_link_into_fence(self):
+        home = self.h.root / "home"
+        root = home / "q/noor"
+        (root / "inner").mkdir(parents=True)
+        secret = home / "secret"
+        secret.mkdir()
+        self.config["fenced"] = ["~/secret"]
+        self.config["compartments"]["noor"]["folders"] = ["~/q/noor"]
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            compartments = self.c.check_compartments(self.config)
+            # Keep inside evidence from before the parent became a fenced link.
+            self.c.folder_children(compartments, root)
+            root.parent.rename(home / "original")
+            root.parent.symlink_to(secret, target_is_directory=True)
+            with patch.object(os, "scandir", wraps=os.scandir) as scan:
+                result = self.c.folder_compartment(compartments, self.c.encode(root / "inner"))
+                self.assertFalse(any(Path(call.args[0]).resolve().is_relative_to(secret.resolve())
+                                     for call in scan.call_args_list))
+                self.assertEqual(result, "p:q-noor-inner")
+                self.assertIsNone(compartments._folder_children[root.parent])
+
+    def test_folder_compartment_caches_unsafe_resolution_as_unavailable(self):
+        home = self.h.root / "home"
+        root = home / "p/noor"
+        (root / "inner").mkdir(parents=True)
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            for error in (OSError, ValueError, RecursionError):
+                with self.subTest(error=error.__name__):
+                    compartments = self.c.check_compartments(self.config)
+                    with patch.object(self.c, "safe_resolve", side_effect=error) as resolve, \
+                            patch.object(os, "scandir", wraps=os.scandir) as scan:
+                        for _ in range(2):
+                            self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(root / "inner")),
+                                             "p:p-noor-inner")
+                        scan.assert_not_called()
+                        resolve.assert_called_once_with(compartments, root, os.getcwd())
+                        self.assertIsNone(compartments._folder_children[root])
+
+    def test_folder_compartment_keeps_unfenced_real_subfolder(self):
+        home = self.h.root / "home"
+        root = home / "p/noor"
+        (root / "inner").mkdir(parents=True)
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            compartments = self.c.check_compartments(self.config)
+            self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(root / "inner")), "noor")
+
     def test_folder_compartment_skips_unreadable_parent(self):
         home = self.h.root / "home"
         root = home / "p/noor"
