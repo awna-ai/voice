@@ -1114,7 +1114,11 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["project"], expected)
                 self.assertEqual(rows[0]["compartment"], "client" if expected == "b" else "work")
-                self.assertEqual(set(rows[0]), {"id", "kind", "timestamp", "project", "text", "context", "compartment", "split"})
+                fields = {"id", "kind", "timestamp", "project", "text", "context", "compartment", "split"}
+                if cwd != "~/projects/b/sub":
+                    fields.add("filtered_as")
+                    self.assertEqual(rows[0]["filtered_as"], rows[0]["compartment"])
+                self.assertEqual(set(rows[0]), fields)
                 self.assertIn(", 1 duplicate records", proc.stdout)
 
     def test_mine_drops_records_with_fenced_cwd_without_probing(self):
@@ -1599,7 +1603,8 @@ class Compartments(unittest.TestCase):
     def test_hub_session_folder_longest_route(self):
         self.config["hub"]["routes"]["client"] = "work"
         for suffix, expected in (("client-stack", "client"), ("client-stack--claude-worktrees-one", "client"),
-                                 ("Other-App", "work"), ("clientele", "work")):
+                                 ("Other-App", "p:.HUB-PROJECTS-Other-App"),
+                                 ("clientele", "p:.HUB-PROJECTS-clientele")):
             folder = self.c.encode("~/.HUB/PROJECTS") + "-" + suffix
             self.assertEqual(self.c.folder_compartment(self.config, folder), expected)
 
@@ -2449,22 +2454,44 @@ class CompartmentFilterCommands(unittest.TestCase):
                 "project": "p-noor", "text": text, **extra}
 
     def test_merge_uses_record_compartment_and_always_drops_secrets(self):
-        records = [self.record("own", "noor review", compartment="noor"),
+        records = [self.record("own", "noor review", compartment="noor", filtered_as="noor"),
                    self.record("unscoped", "noor review"),
                    self.record("other", "noor review", compartment="fleet"),
                    self.record("unknown", "noor review", compartment="unknown"),
                    self.record("invalid", "noor review", compartment=[]),
-                   self.record("override", "zzoverride", compartment="noor")]
+                   self.record("override", "zzoverride", compartment="noor"),
+                   self.record("old", "noor review", compartment="noor"),
+                   self.record("mismatch", "noor review", compartment="noor", filtered_as="fleet"),
+                   self.record("invalid-stamp", "noor review", compartment="noor", filtered_as=[])]
         records += [self.record("secret-" + str(i), "account 123456789", **extra)
                     for i, extra in enumerate(({}, {"compartment": "noor"}, {"compartment": "fleet"}))]
         proc = self.merge_records(records)
         self.assertEqual([r["id"] for r in self.rows("merged.jsonl")], ["own"])
-        self.assertIn("dropped 5 personal records, 3 secret records", proc.stdout)
+        self.assertIn("dropped 8 personal records, 3 secret records", proc.stdout)
         config = json.loads(Path(self.member).read_text())
         del config["compartments"]
         self.h.write("member.json", config)
         self.merge_records(records[:1], out="legacy.jsonl")
         self.assertEqual(self.rows("legacy.jsonl"), [])
+
+    def test_merge_only_reuses_override_for_own_mined_records(self):
+        config = json.loads(Path(self.member).read_text())
+        config["filters"]["personal"] = "zzunrelated"
+        config["filters"]["excluded_folders"] = "zzexcluded"
+        self.h.write("member.json", config)
+        self.h.session(self.c.encode("~/p/noor"), "mixed",
+                       said("2026-09-01T00:00:00Z", "zzmember from elsewhere", cwd="~/p/other"),
+                       said("2026-09-01T00:01:00Z", "zzmember own review", cwd="~/p/noor"))
+        self.ok("mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+        mined = self.rows("mined.jsonl")
+        self.assertEqual(len(mined), 2)
+        self.assertEqual([r["compartment"] for r in mined], ["noor", "noor"])
+        config["filters"]["personal"] = "zzunrelated|zzmember"
+        self.h.write("member.json", config)
+        self.ok("merge", "--in", "mined.jsonl", "--out", "merged.jsonl")
+        self.assertEqual([r["text"] for r in self.rows("merged.jsonl")], ["zzmember own review"])
+        self.assertNotIn("filtered_as", mined[0])
+        self.assertEqual(mined[1]["filtered_as"], "noor")
 
     def test_private_personal_addition_reaches_mine_override(self):
         self.h.session(self.c.encode("~/p/noor"), "own",
@@ -2479,9 +2506,9 @@ class CompartmentFilterCommands(unittest.TestCase):
         self.assertEqual([r["text"] for r in self.rows("private.jsonl")], ["noor keep this queue"])
 
     def test_private_personal_addition_reaches_merge_override(self):
-        records = [self.record("private", "noor zzprivate", compartment="noor"),
-                   self.record("override", "zzoverride", compartment="noor"),
-                   self.record("safe", "noor keep this queue", compartment="noor")]
+        records = [self.record("private", "noor zzprivate", compartment="noor", filtered_as="noor"),
+                   self.record("override", "zzoverride", compartment="noor", filtered_as="noor"),
+                   self.record("safe", "noor keep this queue", compartment="noor", filtered_as="noor")]
         self.merge_records(records, out="baseline.jsonl")
         self.assertEqual([r["id"] for r in self.rows("baseline.jsonl")], ["private", "safe"])
         self.h.write("private.json", {"filters": {"personal": "zzprivate"}})
@@ -2489,27 +2516,38 @@ class CompartmentFilterCommands(unittest.TestCase):
         self.assertEqual([r["id"] for r in self.rows("merged.jsonl")], ["safe"])
 
     def test_private_excluded_addition_reaches_mine_override(self):
-        for suffix in ("", "/zzprivate", "/zzexcluded"):
-            self.h.session(self.c.encode("~/p/noor" + suffix), "own" + suffix.replace("/", "-"),
-                           said("2026-09-01T00:00:00Z", "noor keep this queue", cwd="~/p/noor"))
-        self.ok("mine", "--projects", str(self.h.projects), "--out", "baseline.jsonl")
-        self.assertEqual([r["project"] for r in self.rows("baseline.jsonl")], ["p-noor", "p-noor-zzprivate"])
-        self.h.write("private.json", {"filters": {"excluded_folders": "zzprivate"}})
-        self.ok("mine", "--projects", str(self.h.projects), "--out", "private.jsonl")
-        self.assertEqual([r["project"] for r in self.rows("private.jsonl")], ["p-noor"])
+        home = self.h.root / "home"
+        for child in ("zzprivate", "zzexcluded"):
+            (home / "p/noor" / child).mkdir(parents=True)
+        with patch.dict(os.environ, {"HOME": str(home)}), patch.object(sys.modules[__name__], "TEST_HOME", home):
+            for suffix in ("", "/zzprivate", "/zzexcluded"):
+                self.h.session(self.c.encode("~/p/noor" + suffix), "own" + suffix.replace("/", "-"),
+                               said("2026-09-01T00:00:00Z", "noor keep this queue", cwd="~/p/noor"))
+            self.ok("mine", "--projects", str(self.h.projects), "--out", "baseline.jsonl")
+            self.assertEqual([r["project"] for r in self.rows("baseline.jsonl")], ["p-noor", "p-noor-zzprivate"])
+            self.h.write("private.json", {"filters": {"excluded_folders": "zzprivate"}})
+            self.ok("mine", "--projects", str(self.h.projects), "--out", "private.jsonl")
+            self.assertEqual([r["project"] for r in self.rows("private.jsonl")], ["p-noor"])
 
     def test_folder_compartment_distinguishes_siblings_from_descendants(self):
         home = self.h.root / "home"
         root = home / "p/noor"
-        (root / "sub").mkdir(parents=True)
+        for child in ("sub", "x", "link"):
+            (root / child).mkdir(parents=True)
         (home / "p/noor-x").mkdir()
+        (home / "p/noor-y").mkdir()
         (home / "p/noor-note").touch()
         (home / "p/noor-link").symlink_to(root / "sub", target_is_directory=True)
+        (root / "ln").symlink_to(root / "sub", target_is_directory=True)
         with patch.dict(os.environ, {"HOME": str(home)}):
             compartments = self.c.read_compartments("compartments.json", self.h.root)
-            for suffix, expected in (("", "noor"), ("/sub", "noor"), ("-x", "p:p-noor-x"),
-                                     ("-x/sub", "p:p-noor-x-sub"), ("-note", "noor"),
-                                     ("-link", "noor"), ("/.claude/worktrees/a", "noor"),
+            for suffix, expected in (("", "noor"), ("/sub", "noor"), ("/sub/deeper", "noor"),
+                                     ("-old", "p:p-noor-old"), ("-x", "p:p-noor-x"),
+                                     ("-y", "p:p-noor-y"),
+                                     ("-x/sub", "p:p-noor-x-sub"), ("-note", "p:p-noor-note"),
+                                     ("-link", "p:p-noor-link"), ("/ln", "p:p-noor-ln"),
+                                     ("/submarine", "p:p-noor-submarine"),
+                                     ("/.claude/worktrees/a", "noor"),
                                      ("-x/.claude/worktrees/a", "p:p-noor-x")):
                 with self.subTest(suffix=suffix):
                     self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(str(root) + suffix)),
@@ -2518,9 +2556,61 @@ class CompartmentFilterCommands(unittest.TestCase):
             self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(home / "p/noor-x")), "fleet")
 
     def test_folder_compartment_skips_unreadable_parent(self):
-        with patch.object(os, "scandir", side_effect=PermissionError):
+        home = self.h.root / "home"
+        root = home / "p/noor"
+        (root / "sub").mkdir(parents=True)
+        parent = root.parent
+        self.addCleanup(parent.chmod, 0o700)
+        with patch.dict(os.environ, {"HOME": str(home)}):
             compartments = self.c.read_compartments("compartments.json", self.h.root)
-            self.assertEqual(self.c.folder_compartment(compartments, self.c.encode("~/p/noor/sub")), "noor")
+            parent.chmod(0o000)
+            self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(root / "sub")), "p:p-noor-sub")
+
+    def test_folder_compartment_requires_parent_listing_even_with_inside_evidence(self):
+        home = self.h.root / "home"
+        root = home / "p/noor"
+        (root / "sub").mkdir(parents=True)
+        scan = os.scandir
+
+        def guarded(path):
+            if Path(path) == root.parent:
+                raise PermissionError
+            return scan(path)
+
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            compartments = self.c.read_compartments("compartments.json", self.h.root)
+            with patch.object(os, "scandir", side_effect=guarded):
+                self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(root / "sub")),
+                                 "p:p-noor-sub")
+
+    def test_folder_compartment_requires_readable_inside_evidence(self):
+        home = self.h.root / "home"
+        root = home / "p/noor"
+        root.mkdir(parents=True)
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            for error in (PermissionError, FileNotFoundError):
+                with self.subTest(error=error.__name__), patch.object(os, "scandir", side_effect=error):
+                    compartments = self.c.read_compartments("compartments.json", self.h.root)
+                    self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(root / "sub")),
+                                     "p:p-noor-sub")
+
+    def test_folder_compartment_caches_directory_listings_per_map(self):
+        home = self.h.root / "home"
+        root = home / "p/noor"
+        for child in ("a", "b"):
+            (root / child).mkdir(parents=True)
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            compartments = self.c.read_compartments("compartments.json", self.h.root)
+            with patch.object(os, "scandir", wraps=os.scandir) as scan:
+                for child in ("a", "b"):
+                    self.assertEqual(self.c.folder_compartment(compartments, self.c.encode(root / child)), "noor")
+                paths = [Path(call.args[0]) for call in scan.call_args_list]
+                self.assertEqual(paths.count(root), 1)
+                self.assertEqual(paths.count(root.parent), 1)
+            # A new map must not inherit the prior member's cached evidence.
+            (root / "a").rmdir()
+            fresh = self.c.read_compartments("compartments.json", self.h.root)
+            self.assertEqual(self.c.folder_compartment(fresh, self.c.encode(root / "a")), "p:p-noor-a")
 
     def test_folders_text_and_json_use_the_same_exclusion_as_mine(self):
         noor = self.c.encode("~/p/noor")

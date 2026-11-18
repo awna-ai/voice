@@ -132,6 +132,7 @@ class CompartmentMap(dict):
     _resolved_home = None
     _lexical_fenced_roots = None
     _hub_children = None
+    _folder_children = None
     _hub_projects = None
     base = None
 
@@ -411,6 +412,24 @@ def hub_project_compartment(c, hub_path, project):
     return route_compartment(hub, project) if projects[key] else None
 
 
+def folder_children(c, folder):
+    """Cache real directories and symlinks; None means the listing was unavailable."""
+    children = getattr(c, "_folder_children", None)
+    if children is None:
+        children = {}
+        if isinstance(c, CompartmentMap):
+            c._folder_children = children
+    if folder not in children:
+        try:
+            with os.scandir(folder) as entries:
+                children[folder] = {Path(entry.path): entry.is_dir(follow_symlinks=False)
+                                    for entry in entries
+                                    if entry.is_symlink() or entry.is_dir(follow_symlinks=False)}
+        except OSError:
+            children[folder] = None
+    return children[folder]
+
+
 def folder_compartment(c, folder_name):
     folded = fold(folder_name)
     if any(fold(encode(f)) in folded for f in c["fenced"]):
@@ -431,24 +450,22 @@ def folder_compartment(c, folder_name):
                         return route
             if fold(name) == fold(prefix):
                 break
-    matches, siblings = [], {}
+    matches = []
     name = fold(name)
     for compartment, folder in declared_folders(c):
         prefix = fold(encode(folder))
         if name == prefix:
             matches.append((len(prefix), compartment))
         elif name.startswith(prefix + "-"):
-            parent = folder.parent
-            if parent not in siblings:
-                siblings[parent] = []
-                try:
-                    with os.scandir(parent) as entries:
-                        siblings[parent] = [fold(encode(entry.path)) for entry in entries
-                                            if entry.is_dir(follow_symlinks=False)]
-                except OSError:
-                    pass
-            if any(len(sibling) > len(prefix) and (name == sibling or name.startswith(sibling + "-"))
-                   for sibling in siblings[parent]):
+            inside = folder_children(c, folder)
+            if not inside or not any(real and (name == (child := fold(encode(path))) or
+                                               name.startswith(child + "-"))
+                                     for path, real in inside.items()):
+                continue
+            siblings = folder_children(c, folder.parent)
+            if siblings is None or any(path != folder and len(sibling := fold(encode(path))) > len(prefix)
+                                       and (name == sibling or name.startswith(sibling + "-"))
+                                       for path in siblings):
                 continue
             matches.append((len(prefix), compartment))
     return max(matches)[1] if matches else "p:" + project_name(folder_name)
@@ -661,12 +678,11 @@ def read_member(path):
     if "compartments" in merged:
         compartments = read_compartments(merged["compartments"], path.parent)
         private_filters = extra.get("filters") or {}
-        for name, entry in compartments["compartments"].items():
+        for entry in compartments["compartments"].values():
             for key, override in entry.get("filters", {}).items():
                 if key in private_filters:
                     pattern = f"(?:{override})|(?:{private_filters[key]})"
                     entry["filters"][key] = pattern
-                    compartments.filters[name][key] = compile_pattern("filters." + key, pattern)
         merged["compartments"] = compartments
     return merged
 
@@ -1096,6 +1112,8 @@ def cmd_mine(m, args):
                               (cwd_folder is None or (m.compartments is not None and
                                folder_compartment(m.compartments, cwd_folder) == compartment)))
                 personal = mining_filter(m, compartment, "personal") if own_record else m.personal
+                if own_record and m.compartments is not None:
+                    h["filtered_as"] = compartment
                 reason = privacy(m, h, personal=personal)
                 if reason:
                     dropped[reason] += 1
@@ -2251,7 +2269,8 @@ def cmd_round(m, args):
 def cmd_merge(m, args):
     """Every input's records once, re-split as one corpus. The privacy filters run again, so a
     filter tightened since another Mac mined its corpus still applies. Records from a --train input
-    (the calibration interview) always train; --rounds keeps imported splits. Neither moves the cutoff."""
+    (the calibration interview) always train; --rounds keeps imported splits. Neither moves the cutoff.
+    Older mines without filtered_as use the member filter, failing closed."""
     inputs = ([(p, "history") for p in args.inputs] + [(p, "train") for p in args.train] +
               [(p, "round") for p in args.rounds])
     if not inputs:
@@ -2268,7 +2287,8 @@ def cmd_merge(m, args):
                 continue
             seen.add(r["id"])
             personal = (mining_filter(m, r["compartment"], "personal")
-                        if m.compartments is not None and isinstance(r.get("compartment"), str) else m.personal)
+                        if m.compartments is not None and isinstance(r.get("filtered_as"), str)
+                        and r["filtered_as"] == r.get("compartment") else m.personal)
             reason = privacy(m, r, personal=personal)
             if reason:
                 dropped[reason] += 1
