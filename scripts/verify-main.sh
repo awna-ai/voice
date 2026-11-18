@@ -22,7 +22,8 @@ git remote get-url -- "$remote" >/dev/null 2>&1 || usage
 lock="$(git rev-parse --git-common-dir)/verify-main.lock"
 if ! ln -s "$$" "$lock" 2>/dev/null; then
   pid=$(readlink "$lock" 2>/dev/null || true)
-  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null &&
+    ps -p "$pid" -o command= | grep -q 'verify-main\.sh'; then
     echo "verify-main: already running (pid $pid)"
     exit 0
   fi
@@ -62,10 +63,39 @@ read_refs() {
 ensure_commit() {
   git cat-file -e "$1^{commit}" 2>/dev/null || git fetch --quiet -- "$remote" "$1"
 }
+# A rewind between this re-fetch and the push is not caught; the lease guards only the green refs. That window is accepted.
+still_on_main() {
+  git fetch --quiet -- "$remote" main || fail "could not fetch $remote"
+  git merge-base --is-ancestor "$head" "refs/remotes/$remote/main" ||
+    fail "$remote/main no longer contains ${head:0:12} — nothing changed; run it again"
+}
+git worktree list --porcelain | while IFS= read -r entry; do
+  case "$entry" in
+    "worktree "*/verify-main.??????/wt)
+      path=${entry#worktree }
+      git worktree remove --force -- "$path" >/dev/null 2>&1 || true
+      rmdir -- "${path%/wt}" 2>/dev/null || true
+      ;;
+  esac
+done
+git worktree prune
 git fetch --quiet -- "$remote" main || fail "could not fetch $remote"
 head=$(git rev-parse --verify "refs/remotes/$remote/main^{commit}") || fail "could not read $remote/main"
 read_refs
-if [ "$green" = "$head" ]; then echo "green is current: $head"; exit 0; fi
+if [ "$green" = "$head" ]; then
+  if [ -n "$frozen" ]; then
+    ensure_commit "$frozen" || fail "could not fetch freeze ${frozen:0:12}"
+    if git merge-base --is-ancestor "$frozen" "$head"; then
+      git push --porcelain "--force-with-lease=refs/green/frozen:$frozen" -- "$remote" :refs/green/frozen ||
+        fail "could not clear the freeze at ${frozen:0:12}"
+      echo "green is current: $head"
+      echo "releases unfrozen (freeze at $frozen cleared)"
+      exit 0
+    fi
+  fi
+  echo "green is current: $head"
+  exit 0
+fi
 if [ -n "$green" ]; then
   ensure_commit "$green" || fail "could not fetch green ${green:0:12}"
   git merge-base --is-ancestor "$green" "$head" || fail "green ${green:0:12} is not on $remote/main — nothing changed"
@@ -74,7 +104,7 @@ if [ -n "$green" ]; then
 else
   description='no green yet'
 fi
-scratch=$(mktemp -d)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/verify-main.XXXXXX")
 git worktree add --quiet --detach "$scratch/wt" "$head" || fail 'could not create scratch worktree'
 passed=false
 for attempt in 1 2; do
@@ -88,6 +118,7 @@ for attempt in 1 2; do
 done
 if $passed; then
   if [ "$attempt" = 2 ]; then echo "verify-main: ${head:0:12} passed on the rerun (the first run was red)"; fi
+  still_on_main
   push=(--atomic --porcelain "--force-with-lease=refs/green/main:$green")
   clear=false
   if [ -n "$frozen" ]; then
@@ -138,6 +169,7 @@ else
   red="red $head across $count commits from $first to $head"
   code=6
 fi
+still_on_main
 if ! git push --porcelain "--force-with-lease=refs/green/frozen:$frozen" -- "$remote" "$head:refs/green/frozen"; then
   echo "$red"
   fail "${head:0:12} is red, and the freeze could not be pushed"
