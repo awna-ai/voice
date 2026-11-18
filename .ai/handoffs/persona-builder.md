@@ -2,6 +2,43 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## PE3.3v: voice gets a full check on `main` after lands, and a release reads the green ref (2026-11-18, lane: V1)
+
+- **Status:** built and verified on `lane-v1/PE3.3v` (rebased on `main` this run): `d3f6e76` brief, `e89ff28`
+  tests, `e5620d2` scripts, `140ad78`/`c60eb9c` fix-up 1, `1518d1a`/`8d5d850` fix-up 2, `e2ba7fd`/`0d4b992`
+  fix-up 3, `beaa15c`/`f9399de` fix-up 4, `027a86f`/`3f2d0c4` fix-up 5, `66e0f3e`/`a002ca1` fix-up 6, then this record.
+- **What it does:** `scripts/verify-main.sh` runs the full gate (`bash scripts/ci-local.sh`, or the command after
+  `--`) in a scratch worktree at the remote's `main`, for every land since the last green as one batch. A pass moves
+  `refs/green/main` on the remote (leased, atomic) and clears a freeze `main` contains. A red is rerun once; a
+  second red pushes `refs/green/frozen` and names the culprit (exit 5) or the range on the first-parent line
+  (exit 6). Exit 0 also for green current, covered, or already running; 1 for nothing judged. `main` is fetched by
+  its full ref and re-read just before either push, so a rewind during the check changes nothing. One run at a
+  time per clone (a symlink lock holding the pid; a pid whose command isn't this script is stale); a killed run's
+  scratch worktree is swept by the next. `scripts/release-check.sh <commit>` refuses while frozen, with no green,
+  with a green off `main`, or for a commit not at or behind green.
+- **Decided at pickup** (the PE3.3v spec entry): the green ref lives on `origin` as `refs/green/main` (plus
+  `refs/green/frozen`), not through `flightdeck coord verify`, whose claim commit voice's root guard refuses and
+  which would publish session metadata. The nightly scheduler lives outside this repo.
+- **Who built it:** Codex, from the brief and five fix-up briefs. Its sandbox denies `ps`, so the live-holder cases
+  ran here.
+- **Reviews:** security review on the first build: three lows → fix-up 2. Verifier (Fable) on `676cb63`: FAIL, a
+  `main` rewound mid-check got green on a commit off `main` (reproduced), plus should-fixes (a vacuous literal-argv
+  test, untested lock ownership, freeze and merge cases, a freeze left on the green-current path, a reused pid, a
+  killed run's scratch) → fix-up 3; `ps | grep -q` under `pipefail` → fix-up 4. Repeat Verifier (Opus) on
+  `f9399de`: FAIL, `ps` cut to `$COLUMNS` on Linux reads a live run as stale (reproduced in Debian), plus four
+  should-fixes. Security review (Opus) on `f9399de`: one medium (a remote tag `main` left the tracking ref stale,
+  reproduced end to end), one low (the sweep could follow a symlinked scratch parent) → fix-up 5 (`ps -ww`, no
+  `kill -0`, explicit refspecs, a symlink and owner check, two messages). Repeat Verifier (Opus) on `3f2d0c4`: PASS
+  (the `ps -ww` fix checked in Debian with `COLUMNS=10`; the tag case caught with the old fetch put back), one
+  fail-safe should-fix: the freeze-moved check pre-empted a real "covered" → fix-up 6 (19 lines, the pass holds).
+- **Not changed, recorded:** a rewind in the seconds between the re-fetch and the push is not caught; the suite's
+  symlink case passes with or without the sweep's symlink guard (it doesn't rebuild the reviewer's setup); the
+  `COLUMNS` case can only fail on Linux.
+- **Verified:** red first per case; mutants killed: both `still_on_main` calls dropped, a plain `--force` on the
+  freeze push, the short-name fetch put back, the freeze-moved check back before covered, plus Codex's by-hand removal of the stale-lock recheck;
+  `bash tests/verify_main_test.sh` (also under `/bin/bash` 3.2), `bash tests/ci_local_test.sh`, shellcheck clean;
+  the full `scripts/ci-local.sh` at the land.
+
 ## VF27: the crew routing time guards measure CPU time (2026-11-18, lane: V1)
 
 - **Status:** built and verified on `lane-v1/VF27`: `705b06d` brief (with fix-up 1), `03a5953` the test change,
