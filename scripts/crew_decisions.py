@@ -636,17 +636,30 @@ def validate_config(config, source):
 
 
 def refuse_fence_links(c):
-    links, clauses = [], []
+    for value in c["fenced"]:
+        if ".." in Path(value).expanduser().parts:
+            raise CompartmentConfigError(
+                f'compartments: the fenced folder {value} has a ".." part; write it without ".."')
+    for inner in c["fenced"]:
+        for outer in c["fenced"]:
+            inner_path, outer_path = Path(inner).expanduser(), Path(outer).expanduser()
+            if len(inner_path.parts) > len(outer_path.parts) and under(inner_path, outer_path):
+                raise CompartmentConfigError(
+                    f"compartments: the fenced folder {inner} is inside the fenced folder {outer}; "
+                    f"fence only {outer}")
+    links, clauses, identities = [], [], set()
     for value in c["fenced"]:
         path = Path(value).expanduser()
         try:
-            mode = os.lstat(path).st_mode
+            info = os.lstat(path)
         except (FileNotFoundError, NotADirectoryError):
             continue
-        except OSError:
+        except (OSError, ValueError):
             raise CompartmentConfigError(
                 f"compartments: cannot check whether the fenced folder {value} is a link")
-        if stat.S_ISLNK(mode) and path not in links:
+        identity = (info.st_dev, info.st_ino)
+        if stat.S_ISLNK(info.st_mode) and identity not in identities:
+            identities.add(identity)
             links.append(path)
             clauses.append(f'compartments: the fenced folder {value} is a link; '
                            'put the folder it points to in "fenced" instead, or remove the link')
@@ -659,7 +672,7 @@ def post_fence_link_todos(argv, links):
         command = args[0]
         try:
             result = subprocess.run([*argv, *args], stdin=subprocess.DEVNULL, capture_output=True,
-                                    text=True, timeout=10, check=False)
+                                    timeout=10, check=False)
         except subprocess.TimeoutExpired:
             return None, f"could not add a TODO item: todo_command {command} timed out"
         except OSError:
@@ -672,7 +685,7 @@ def post_fence_link_todos(argv, links):
     if note:
         return note
     try:
-        data = json.loads(result.stdout)
+        data = json.loads(result.stdout.decode("utf-8"))
     except (ValueError, RecursionError):
         data = None
     if not isinstance(data, dict) or not isinstance(data.get("open"), list):
@@ -680,10 +693,10 @@ def post_fence_link_todos(argv, links):
     texts = [" ".join(item["text"].split()) for item in data["open"]
              if isinstance(item, dict) and isinstance(item.get("text"), str)]
     for link in links:
-        marker = f"the fenced folder {link} is a link"
+        marker = f"the fenced folder {link} is a link."
         if any(" ".join(marker.split()) in text for text in texts):
             continue
-        text = (f"Voice refused a compartment map: {marker}. "
+        text = (f"Voice refused a compartment map: {marker} "
                 'Put the folder it points to in "fenced" instead, or remove the link.')
         _, failure = run("add", text)
         note = note or failure

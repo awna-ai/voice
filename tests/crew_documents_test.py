@@ -207,7 +207,7 @@ class Documents(unittest.TestCase):
         for command in (("documents", "--dir", str(self.source), "--out-dir", str(self.output)),
                         ("sources", "review", "--name", "fixture", "--projects", str(self.h.projects))):
             with self.subTest(command=command):
-                proc = tripwire_crew(self.h, self.member, [fence], *command)
+                proc = tripwire_crew(self.h, self.member, [fence], *command, allow_root_metadata=True)
                 self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_fifo_is_skipped_without_opening_and_regular_file_is_read(self):
