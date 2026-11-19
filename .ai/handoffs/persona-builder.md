@@ -5,7 +5,8 @@ One record per slice, newest first. Paraphrase only; no real person.
 ## VF30: `pending --compartment` refuses an unknown name, and keeps compartments apart (2026-11-19, lane: V1)
 
 - **Status: built, not landed.** Branch `lane-v1/VF30` (pushed): `c7f32eb` brief, `e28eb6e` tests, `cc20fb9` code,
-  `98c0a78` fix-up 1 brief, `063cf1c` fix-up 1, then this record. Private half: ai-personas `lane-v1/VF30` `7ece0b1`
+  `98c0a78` fix-up 1 brief, `063cf1c` fix-up 1, `d0523d7` record, `9702d3b` fix-up 2 brief, `532ded8` fix-up 2,
+  then this record. Private half: ai-personas `lane-v1/VF30` `7ece0b1`
   (local), one expectation in the private member's seen-file test.
 - **What it does:** (1) an unknown `--compartment` exits 2 and names the configured compartments (`p:<project>` still
   allowed, by the same pattern the map uses for routes); (2) with a map, `seen.json` entries are `[compartment, id]`,
@@ -22,13 +23,36 @@ One record per slice, newest first. Paraphrase only; no real person.
   could stat through a link swapped into a fence; both fixed in fix-up 1, red first. Two lows accepted: a hub child
   linking into another compartment's folder is labelled by its name (anyone who can make that link can also write
   the hub's queue text directly); the exit-2 message lists compartment names (the spec asks for it). Verifier
-  (Fable) on `cc20fb9`: still running at the run's end; her result goes into the next run.
+  (Fable) on `cc20fb9`: below.
 - **Verified:** red first per case (Codex's runs); Python 3.12: decisions 147 OK (2 skipped), hardening 40 OK,
   sources 15 OK, extra sources 34 OK. The private member's suite against this branch: only the seen-file expectation changes
   (the private half); `test_real_member_folder_routing` and `test_real_member_routing_uses_temporary_home` fail on
   voice `main` `5b3999d` too, not this change.
-- **Owed:** the Verifier's verdict and any fix-up, then the full `scripts/ci-local.sh` land (V-Q26 A), then the
-  ai-personas PR.
+- **Verifier (Fable) on `cc20fb9` + fix-up 1: PASS-WITH-SHOULD-FIX.** Her must-fix (a declared folder that is a link)
+  was fix-up 1. Should-fixes taken in fix-up 2 (Codex, from the brief): (S2) a linked queue folder under a queues folder
+  that is not a hub is labelled where it sits, **decided** (as the hub rule and a linked `queue.md` on `main`; the fence,
+  not compartments, is the hard boundary), and pinned by a test; (S3, N5) with no map the seen file is read and written as
+  `main` did, `[compartment, id]` entries kept untouched and never counted; (N6) a deeply nested seen file is "not
+  readable"; (N8) an item labelled `fenced` never prints; (S4) mutants killed: `fullmatch`→`match`, the refusal moved
+  after the seen read, each clause of the `follow_last=False` fence check, `fold` and `not blocked` in the hub check (the
+  last only through a mocked `safe_resolve`); the fenced-root check in `queue_compartment` is equivalent (the next check
+  refuses the same path) and stays as a guard; the probe spies wrap `lstat` and `stat` and compare both the fence's
+  absolute and real path. (N7) filed as VF32 (`dB8DhEFM`): live records and the compartment's own `personal` filter.
+- **Security review (Opus) on fix-up 2:** no high or medium. Two lows accepted: with no map a malformed list entry
+  (`["a","b","c"]`) is now kept, so a map added later makes `pending` exit 1 "not readable" until the file is fixed
+  (fails closed, nothing hidden; `main` crashed on it); the logical label lets a folder link in `work`'s queues show
+  `client`'s question to `work`, which `main` already allowed with a file link, so it adds nothing; if compartments
+  ever become a hard boundary, both link forms close together.
+- **Verified (fix-up 2):** Codex's red runs and mutants (restored with `cp`, checked with `cmp`); Python 3.12.14:
+  decisions 156 OK (2 skipped), hardening 40 OK, sources 15 OK, extra sources 34 OK; the security review re-ran
+  decisions 156 OK. The private member's suite against `532ded8`: 48 of 50 pass; the 2 failures are the ones on `main`
+  (now VF33, `AYP1n9LU`).
+- **Repeat Verifier (Opus) on `532ded8`: PASS**, no must-fix or should-fix. She re-ran the mutants: each is killed but the
+  fenced-root return, which survives as an equivalent; `not blocked` dies only in the mocked test (equivalent on real input, in her reading); the RecursionError and
+  no-map-pairs mutants and her `sandbox-exec` probe were not run (stopped for the land window; the tests read as
+  covering them). Notes: a queues *root* that is a link is labelled by its target, a queue *folder* by where it sits;
+  fix-up 1's narrow race (the fallback's `is_dir`/`.git` calls after the swap check) is unchanged.
+- **Owed:** the full `scripts/ci-local.sh` land (V-Q26 A), then the ai-personas PR.
 
 ## PE3.3v: voice gets a full check on `main` after lands, and a release reads the green ref (2026-11-18, lane: V1)
 
