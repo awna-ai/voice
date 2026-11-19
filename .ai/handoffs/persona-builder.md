@@ -2,6 +2,34 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF30: `pending --compartment` refuses an unknown name, and keeps compartments apart (2026-11-19, lane: V1)
+
+- **Status: built, not landed.** Branch `lane-v1/VF30` (pushed): `c7f32eb` brief, `e28eb6e` tests, `cc20fb9` code,
+  `98c0a78` fix-up 1 brief, `063cf1c` fix-up 1, then this record. Private half: ai-personas `lane-v1/VF30` `7ece0b1`
+  (local), one expectation in the private member's seen-file test.
+- **What it does:** (1) an unknown `--compartment` exits 2 and names the configured compartments (`p:<project>` still
+  allowed, by the same pattern the map uses for routes); (2) with a map, `seen.json` entries are `[compartment, id]`,
+  and a bare string from an older file still counts as seen everywhere; without a map the file is byte-identical;
+  (3) a queue item is labelled by its logical folder: a hub child by its name (the hub's rule), any other folder by
+  its resolved parent plus its own name; a folder linking into a fence is labelled `fenced`; (4) `live_record` keeps a
+  live line's compartment, so `similar --compartment` sees live answers.
+- **Decided at pickup** (the spec allowed either): label by the logical path rather than refuse the link, which keeps
+  the linked-`queue.md` behaviour `e2ac948` pinned.
+- **Who built it:** Codex, from the brief and fix-up 1. It widened the brief's path rule on its own when case (d)
+  failed, which opened the medium below.
+- **Reviews:** security review (Opus) on `cc20fb9`: one medium, a declared folder that is itself a link no longer
+  matched a queue inside it, so a scoped run for another compartment printed it (reproduced); one low, the labeller
+  could stat through a link swapped into a fence; both fixed in fix-up 1, red first. Two lows accepted: a hub child
+  linking into another compartment's folder is labelled by its name (anyone who can make that link can also write
+  the hub's queue text directly); the exit-2 message lists compartment names (the spec asks for it). Verifier
+  (Fable) on `cc20fb9`: still running at the run's end; her result goes into the next run.
+- **Verified:** red first per case (Codex's runs); Python 3.12: decisions 147 OK (2 skipped), hardening 40 OK,
+  sources 15 OK, extra sources 34 OK. The private member's suite against this branch: only the seen-file expectation changes
+  (the private half); `test_real_member_folder_routing` and `test_real_member_routing_uses_temporary_home` fail on
+  voice `main` `5b3999d` too, not this change.
+- **Owed:** the Verifier's verdict and any fix-up, then the full `scripts/ci-local.sh` land (V-Q26 A), then the
+  ai-personas PR.
+
 ## PE3.3v: voice gets a full check on `main` after lands, and a release reads the green ref (2026-11-18, lane: V1)
 
 - **Status:** built and verified on `lane-v1/PE3.3v` (rebased on `main` this run): `d3f6e76` brief, `e89ff28`
