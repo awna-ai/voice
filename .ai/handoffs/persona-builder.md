@@ -4,8 +4,9 @@ One record per slice, newest first. Paraphrase only; no real person.
 
 ## VF31: a fenced folder that is a link refuses the compartment map (2026-11-19, lane: V1)
 
-- **Status:** in progress on `lane-v1/VF31` (fix-up 2 owed), not landed: `790139e` brief, `960cda7` tests, `974a18f` code, `d1bd709`
-  fix-up 1 brief, `741a705` fix-up 1, then this record. The owner picked V-Q28 (b). Code by Codex from both briefs.
+- **Status:** built on `lane-v1/VF31`, not landed, parked on V-Q29 (lane-v.md): `790139e` brief, `960cda7` tests, `974a18f` code, `d1bd709`
+  fix-up 1 brief, `741a705` fix-up 1, `e9374ba` this record, `97e1300` fix-up 2 brief, `bc53a24` its amendment,
+  `621c61f` fix-up 2, then this record's update. The owner picked V-Q28 (b). Code by Codex from every brief.
 - **What it does:** `load_member` checks each `fenced` path with one `lstat` of the path itself, never anything
   inside it. A link refuses the whole map (every command exits 2) with a message naming the fix; an error other
   than "not there" fails closed the same way. A fence path with a `..` part, or one fence inside another, is refused
@@ -35,8 +36,37 @@ One record per slice, newest first. Paraphrase only; no real person.
   another fence's; (2) the xattr kill subtest calls `os.getxattr`, absent on macOS: call `getxattr` through `ctypes`.
   Should-fix: compare the whole normalized item text for equality instead of a substring (a path containing
   `x the fenced folder <home>/secret` still collides).
-- **Owed:** fix-up 2 for those, the repeat Verifier on Opus, then the full gate and the land. The private member wiring
-  (its `todo_command` and its skill's exit-2 line) is on the private repo's `lane-v1/VF31`, merged once this lands.
+- **Fix-up 2** (the repeat Verifier's findings): before any fence `lstat`, each fence's parent is resolved with
+  `walk_resolve`, shortest spelling first, guarded by the other fences' spellings and the forms resolved so far; a
+  walk that meets another fence refuses the map ("reached through another fenced folder"), and nesting is checked on
+  both the written and the resolved forms. The one `lstat` per fence is then of the resolved form, in two rounds:
+  fences whose walk crossed no link below the fences' common folder first, and a link found there stops the load
+  before the others are checked. A link is reported by its first spelling in config order, with no new probe. The
+  xattr subtest calls `getxattr` through `ctypes`, with a case proving the call works outside a fence; the TODO
+  dedupe compares the whole item text. **Planning miss:** the first brief measured "crossed a link" from `/`, so on
+  macOS (`/var` and `/tmp` are links) every fence counted as linked; Codex reported the two failures instead of
+  bending the rule, and the amendment measures below the common folder.
+- **Residual, recorded:** no order of `lstat`s is sound against every config, because a link fence's target is not
+  known without reading the link (which (b) rules out). A fence whose walk crossed no link below the common folder
+  and that lies inside another link fence's target is still checked in round 1; it takes the owner fencing both a
+  link and a folder inside its target.
+- **Verified (fix-up 2):** Codex's red runs and a mutation per rule (five, each red, restored with `cmp`); here, with
+  Python 3.12.14 on Mimi and every kernel tripwire run, none skipped: `crew_decisions_test.py` 176 OK,
+  `crew_documents_test.py` 14 OK, `crew_hardening_test.py` 40 OK.
+- **Reviews of fix-up 2:** the security review (Opus) found one high: `["~/secret", "~/real/inner"]` with `~/secret -> ~/real`
+  lstats `~/real/inner` before it refuses (the residual above, one link, either order), and one low: a single fence
+  whose path resolves through a link inside its own folder loads after its walk reads inside it. The repeat Verifier
+  (Opus) on `621c61f`: **FAIL.** (1) to (3) are closed for their fixtures, but M1: a shorter fence spelled by its
+  real path is walked before a longer one spelled through a link into it (`["~/t/s/x/y", "~/p/q/al/s"]`, `al -> ~/t`:
+  the walk lstats `~/t/s/x`, then step 2 refuses; killed under the tripwire); M2: `["~/secret", "~/alias/inner/deep"]`
+  (both links to `~/real`): the parent walk lstats `~/real/inner` (closable: walk past a link below the common
+  folder only after round 1). Should-fix: two mutations survive (the resolved guards, the resolved spelling in the
+  nested check). She ran old and new on 3,625 configs: 0 regressions, 0 crashes; every probe she sampled is M1,
+  M2 or the residual, and **each of those configs is still refused**: what leaks is one metadata probe, never a load.
+- **Parked:** both reviews say no order of probes is safe for every config under (b), so how far to go is the
+  owner's call: V-Q29. Nothing landed.
+- **Owed:** V-Q29's answer, then its fix-up, a repeat Verifier, the full gate and the land. The private member wiring (its `todo_command` and its skill's exit-2 line) is
+  on the private repo's `lane-v1/VF31`, merged once this lands.
 
 ## PE3.3v: voice gets a full check on `main` after lands, and a release reads the green ref (2026-11-18, lane: V1)
 
