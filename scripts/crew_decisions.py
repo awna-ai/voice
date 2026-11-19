@@ -64,8 +64,9 @@ principal's pronouns, and the privacy filters (excluded folders, personal topics
       config's `queue_answerer`, for relay to its asking session. Uses the member privacy filters.
       Asks come only from headless sessions (a job run): one the principal opened, in the
       desktop app or a terminal, is attended and never reported.
-      --compartment prints and marks seen only that compartment's items; it requires compartments
-      configuration and refuses fenced. A member's watcher runs pending with no model.
+      --compartment prints and marks seen only that compartment's items; an unknown name exits 2.
+      Seen is kept per compartment. It requires compartments configuration and refuses fenced.
+      A member's watcher runs pending with no model.
 """
 import argparse
 import errno
@@ -97,6 +98,7 @@ MAX_MESSAGE_CHARS = 4000
 PART_WORDS = 500
 QUEUE_TAIL_BYTES = 512 * 1024
 HEADLESS_ENTRYPOINT = "sdk-cli"  # Claude Code's `entrypoint` for a `claude -p` run, which is how a job runs
+PROJECT_COMPARTMENT = re.compile(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*")
 TIERS = ("high", "medium", "low")
 REQUIRED = ("name", "slug", "principal", "principal_slug", "state_dir", "mark_word", "filters")
 REQUIRED_FILTERS = ("excluded_folders", "personal", "secret", "pasted_prefixes")
@@ -194,7 +196,7 @@ def check_compartments(c):
         for name, target in hub["routes"].items():
             if (not name or any(c in name for c in ("/", "\x00", "\n")) or name in (".", "..")
                     or not isinstance(target, str)
-                    or (target not in c["compartments"] and not re.fullmatch(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*", target))):
+                    or (target not in c["compartments"] and not PROJECT_COMPARTMENT.fullmatch(target))):
                 fail("hub.routes." + name)
     if "core" in c:
         core = c["core"]
@@ -217,7 +219,7 @@ def check_compartments(c):
                 fail("core.markers")
             for name, terms in core["markers"].items():
                 if (not isinstance(name, str)
-                        or name not in c["compartments"] and not re.fullmatch(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*", name)
+                        or name not in c["compartments"] and not PROJECT_COMPARTMENT.fullmatch(name)
                         or not isinstance(terms, list) or not terms
                         or any(not isinstance(s, str) or not s.strip()
                                or not s.isprintable()
@@ -489,9 +491,16 @@ def fallback_compartment(c, path, cwd):
     return "p:" + project_name(encode(path))
 
 
-def path_compartment(c, path, cwd, *, resolve=True):
+def path_compartment(c, path, cwd, *, resolve=True, follow_last=True):
     if resolve:
-        real, fenced = safe_resolve(c, path, cwd)
+        if follow_last:
+            real, fenced = safe_resolve(c, path, cwd)
+        else:
+            raw = absolute_path(path, cwd)
+            parent, parent_fenced = safe_resolve(c, raw.parent, cwd)
+            real = parent / raw.name
+            fenced = (parent_fenced or matches_fence(Path(os.path.abspath(raw)), lexical_fences(c, cwd))
+                      or matches_fence(real, fenced_forms(c, cwd)))
         forms = (real,)
     else:
         absolute = Path(os.path.abspath(absolute_path(path, cwd)))
@@ -510,7 +519,8 @@ def path_compartment(c, path, cwd, *, resolve=True):
                         if route is not None:
                             return route
     matches = [(len(root.parts), compartment) for compartment, folder in declared_folders(c)
-               for root in ((safe_resolve(c, folder, cwd)[0],) if resolve else (folder,))
+               for root in ((safe_resolve(c, folder, cwd)[0] if follow_last else
+                             safe_resolve(c, folder.parent, cwd)[0] / folder.name,) if resolve else (folder,))
                if any(under(form, root) for form in forms)]
     if matches:
         return max(matches)[1]
@@ -1041,7 +1051,18 @@ def queue_files(m, queues):
 def queue_compartment(m, path):
     if m.compartments is None:
         return {}
-    return {"compartment": path_compartment(m.compartments, path.parent, os.getcwd())}
+    c = m.compartments
+    root, name = path.parent.parent, path.parent.name
+    real_root, fenced = safe_resolve(c, root, os.getcwd())
+    if fenced:
+        return {"compartment": "fenced"}
+    hub = c.get("hub")
+    if hub:
+        for hub_path in hub["paths"]:
+            real_hub, blocked = safe_resolve(c, hub_path, os.getcwd())
+            if not blocked and fold(str(real_hub)) == fold(str(real_root)):
+                return {"compartment": route_compartment(hub, name)}
+    return {"compartment": path_compartment(c, real_root / name, os.getcwd(), follow_last=False)}
 
 
 def mining_filter(m, compartment, key):
@@ -1756,8 +1777,21 @@ def cmd_pending(m, args):
             raise Failed("pending: refusing compartment fenced")
         if m.compartments is None:
             raise Failed("pending: --compartment requires compartments configuration")
+        names = m.compartments["compartments"]
+        if args.compartment not in names and not PROJECT_COMPARTMENT.fullmatch(args.compartment):
+            raise CompartmentConfigError(f"pending: unknown compartment; known: {', '.join(sorted(names))}, or p:<project>")
     seen_path = Path(args.seen or m.state("autonomous/seen.json")).expanduser()
-    seen = set(json.loads(seen_path.read_text())) if seen_path.exists() else set()
+    try:
+        entries = json.loads(seen_path.read_text()) if seen_path.exists() else []
+    except (OSError, ValueError):
+        raise Failed("pending: the seen file is not readable") from None
+    if not isinstance(entries, list) or any(
+            not isinstance(entry, str) and not (isinstance(entry, list) and len(entry) == 2
+                                               and all(isinstance(value, str) for value in entry))
+            for entry in entries):
+        raise Failed("pending: the seen file is not readable")
+    seen = {entry for entry in entries if isinstance(entry, str)}
+    scoped_seen = {tuple(entry) for entry in entries if isinstance(entry, list)}
     cutoff = datetime.now(timezone.utc).timestamp() - args.since_hours * 3600
     items, projects = [], transcript_root(m, args.projects)
     for folder in sorted(projects.iterdir()) if projects.is_dir() else []:
@@ -1787,11 +1821,16 @@ def cmd_pending(m, args):
         items += [{**a, "id": f"{a['project']}:{a['key']}:A:{a['line']}"}
                   for a in answered_escalations(m, Path(queues).expanduser())]
     new = [i for i in items if i["id"] not in seen
+           and (m.compartments is None or (i["compartment"], i["id"]) not in scoped_seen)
            and (args.compartment is None or i.get("compartment") == args.compartment)]
     for i in new:
         print(json.dumps(i, ensure_ascii=False))
     if new:
-        private_write(seen_path, json.dumps(sorted(seen | {i["id"] for i in new})))
+        if m.compartments is None:
+            private_write(seen_path, json.dumps(sorted(seen | {i["id"] for i in new})))
+        else:
+            entries += [list(key) for key in {(i["compartment"], i["id"]) for i in new} - scoped_seen]
+            private_write(seen_path, json.dumps(sorted(entries, key=lambda entry: json.dumps(entry, ensure_ascii=False))))
     return 0
 
 
@@ -2589,7 +2628,10 @@ def live_record(m, line):
     label = f"{pick.strip()} (Recommended)"
     picks, own_words = ([label], "") if answer.strip() == pick.strip() else ([], answer.strip())
     record = {"id": record_id("question", "live", when, question), "kind": "question", "timestamp": when,
-              "project": "live", "header": "", "question": question, "multiSelect": False,
+              "project": "live",
+              **({"compartment": line["compartment"]}
+                 if isinstance(line.get("compartment"), str) and line["compartment"] else {}),
+              "header": "", "question": question, "multiSelect": False,
               "options": [{"label": label, "description": ""}], "recommended": label,
               "picks": picks, "own_words": own_words, "notes": "",
               "outcome": outcome(picks, own_words, label), "split": "train"}
