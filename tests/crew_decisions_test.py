@@ -88,11 +88,18 @@ class Harness:
         (self.root / name).write_text(json.dumps(value))
 
 
-def tripwire_crew(h, member, fences, *args):
-    """Kill the child on any fence content or metadata access, including through links."""
+def tripwire_crew(h, member, fences, *args, allow_root_metadata=False):
+    """Kill on fence reads, optionally allowing the load-time fence-root metadata probe."""
     profile = '(version 1)(allow default)' + ''.join(
         '(deny file-read* file-write* file-read-metadata (subpath ' + json.dumps(str(p.resolve()), ensure_ascii=False) +
         ') (with send-signal SIGKILL))' for p in fences)
+    if allow_root_metadata:
+        profile = '(version 1)(allow default)' + ''.join(
+            '(deny file-read-data file-write* (subpath ' + json.dumps(str(p.resolve())) +
+            ') (with send-signal SIGKILL))'
+            '(deny file-read-metadata (require-all (subpath ' + json.dumps(str(p.resolve())) +
+            ') (require-not (literal ' + json.dumps(str(p.resolve())) +
+            '))) (with send-signal SIGKILL))' for p in fences)
     return subprocess.run([shutil.which("sandbox-exec"), "-p", profile, sys.executable,
                            str(CREW), "--member", member, *args], capture_output=True, text=True,
                           cwd=h.root, env={**os.environ, "HOME": str(TEST_HOME)}, timeout=60)
@@ -628,6 +635,273 @@ class BadConfig(unittest.TestCase):
         proc = h.crew(member, "mine", "--out", "d.jsonl")
         self.assertEqual(proc.returncode, 1)
         self.assertIn("filters.personal", proc.stderr)
+
+
+class FenceLinks(unittest.TestCase):
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.dir.cleanup)
+        self.home = self.h.root / "home"
+        self.home.mkdir()
+        self.h.root = self.home
+        self.h.projects = self.home / "projects"
+        home_patch = patch.dict(os.environ, {"HOME": str(self.home)})
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
+        sys.path.insert(0, str(SCRIPTS))
+        import crew_decisions
+        self.c = crew_decisions
+        (self.home / "real/inner").mkdir(parents=True)
+        (self.home / "secret").symlink_to(self.home / "real", target_is_directory=True)
+        (self.home / "q").mkdir()
+        (self.home / "q/noor").symlink_to(self.home / "real", target_is_directory=True)
+        self.config = {"version": 1, "fenced": ["~/secret"],
+                       "compartments": {"noor": {"folders": ["~/q/noor"]}}}
+
+    def load(self, **extra):
+        return self.c.load_member({**ADA, "state_dir": str(self.home / "state"),
+                                   "compartments": self.config, **extra})
+
+    def refusal(self, **extra):
+        with self.assertRaises(self.c.CompartmentConfigError) as caught:
+            self.load(**extra)
+        self.assertIsInstance(caught.exception, self.c.FenceLinkError)
+        return caught.exception
+
+    def cli(self, *args, tripwire=False, **extra):
+        self.h.write("compartments.json", self.config)
+        member = self.h.member({**ADA, "compartments": "compartments.json", **extra})
+        # Harness and tripwire_crew use TEST_HOME for their child's HOME.
+        with patch.dict(globals(), {"TEST_HOME": self.home}):
+            proc = (tripwire_crew(self.h, member, [self.home / "real"], *args) if tripwire
+                    else self.h.crew(member, *args))
+        self.assertNotIn("water the invented ferns", proc.stdout + proc.stderr)
+        return proc
+
+    def test_card_refused_without_reading_fence_or_target(self):
+        with ExitStack() as stack:
+            probes = {name: stack.enter_context(patch.object(os, name, wraps=getattr(os, name)))
+                      for name in ("lstat", "stat", "readlink", "scandir")}
+            exc = self.refusal()
+        self.assertIn("~/secret", str(exc))
+        self.assertIn("put the folder it points to", str(exc))
+        self.assertNotIn(str(self.home / "real"), str(exc))
+        self.assertEqual(exc.links, [self.home / "secret"])
+        probes["readlink"].assert_not_called()
+        probes["scandir"].assert_not_called()
+        for name in ("lstat", "stat"):
+            paths = [Path(call.args[0]) for call in probes[name].call_args_list]
+            touched = [p for p in paths if any(p.is_relative_to(self.home / root)
+                                              for root in ("secret", "real"))]
+            self.assertEqual(touched, [self.home / "secret"] if name == "lstat" else [])
+
+    def test_cli_refuses_where_and_similar(self):
+        for args in (("where", "--cwd", str(self.home / "q/noor/inner")),
+                     ("similar", "--query", "x")):
+            with self.subTest(command=args[0]):
+                proc = self.cli(*args)
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertEqual(proc.stdout, "")
+                self.assertIn("the fenced folder ~/secret is a link", proc.stderr)
+
+    @unittest.skipUnless(sandbox_usable(), "sandbox-exec cannot apply a profile here")
+    def test_cli_tripwire_never_reads_target(self):
+        for args in (("where", "--cwd", str(self.home / "q/noor/inner")),
+                     ("similar", "--query", "x")):
+            proc = self.cli(*args, tripwire=True)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertEqual(proc.stdout, "")
+            self.assertIn("the fenced folder ~/secret is a link", proc.stderr)
+
+    def test_trailing_slash_refused(self):
+        self.config["fenced"] = ["~/secret/"]
+        self.assertEqual(self.refusal().links, [self.home / "secret"])
+
+    def test_real_missing_and_linked_parent_load(self):
+        (self.home / "elsewhere/secret").mkdir(parents=True)
+        (self.home / "links").symlink_to(self.home / "elsewhere", target_is_directory=True)
+        (self.home / "outside").mkdir()
+        for fence in ("~/real", "~/missing", "~/links/secret", "~/missing/child"):
+            with self.subTest(fence=fence):
+                self.config["fenced"] = [fence]
+                self.load()
+                proc = self.cli("where", "--cwd", str(self.home / "outside"))
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_unreadable_fence_fails_closed_without_todo(self):
+        original = os.lstat
+
+        def unreadable(path, *args, **kwargs):
+            if Path(path) == self.home / "secret":
+                raise PermissionError("invented denial")
+            return original(path, *args, **kwargs)
+
+        with patch.object(os, "lstat", side_effect=unreadable), \
+                patch.object(subprocess, "run") as run:
+            with self.assertRaisesRegex(self.c.CompartmentConfigError, "cannot check.*~/secret") as caught:
+                self.load(todo_command=[sys.executable])
+        self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+        run.assert_not_called()
+
+    def test_multiple_links_keep_order_and_dedupe_spellings(self):
+        (self.home / "other").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = ["~/other", "~/secret", str(self.home / "secret")]
+        exc = self.refusal()
+        self.assertEqual(exc.links, [self.home / "other", self.home / "secret"])
+        self.assertEqual(str(exc), '; '.join(
+            f'compartments: the fenced folder {value} is a link; put the folder it points to in '
+            '"fenced" instead, or remove the link' for value in ("~/other", "~/secret")))
+
+    def test_todo_command_validation_without_links(self):
+        self.config["fenced"] = []
+        self.load()
+        message = ("member config: todo_command must be a list of strings whose first is an "
+                   "absolute or ~/ path")
+        for value in ("x", [], [""], ["rel/tool"], [1], ["/bin/x", "a\nb"],
+                      ["/bin/x", "a\x00b"], ["/bin/x", ""], None):
+            with self.subTest(value=value):
+                with self.assertRaises(self.c.MemberConfigError) as caught:
+                    self.load(todo_command=value)
+                self.assertEqual(str(caught.exception), message)
+
+    def todo_tool(self):
+        tool = self.home / "todo.py"
+        self.store = self.home / "items.json"
+        self.store.write_text(json.dumps({"todos": [{"text": "water the invented ferns", "done": False}]}))
+        tool.write_text('''import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+store = root / "items.json"
+data = json.loads(store.read_text())
+command = sys.argv[1]
+if (root / ("fail-" + command)).exists():
+    print("water the invented ferns")
+    print("water the invented ferns", file=sys.stderr)
+    sys.exit(1)
+if command == "list":
+    assert sys.argv[2:] == ["--json"]
+    print(json.dumps({"open": [t for t in data["todos"] if not t["done"]],
+                      "done": [t for t in data["todos"] if t["done"]]}))
+else:
+    assert command == "add" and len(sys.argv) == 3
+    data["todos"].append({"text": " ".join(sys.argv[2].split()), "done": False})
+    store.write_text(json.dumps(data))
+''')
+        return [sys.executable, str(tool)]
+
+    def items(self):
+        return json.loads(self.store.read_text())["todos"]
+
+    def test_todo_two_refusals_one_open_item_with_collapsed_whitespace(self):
+        argv = self.todo_tool()
+        # A space in the link makes the tool's whitespace normalization observable.
+        link = self.home / "secret  garden"
+        link.symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = [str(link)]
+        for _ in range(2):
+            self.refusal(todo_command=argv)
+        self.assertEqual(self.items(), [
+            {"text": "water the invented ferns", "done": False},
+            {"text": f'Voice refused a compartment map: the fenced folder {self.home}/secret garden is a '
+                     'link. Put the folder it points to in "fenced" instead, or remove the link.', "done": False}])
+
+    def test_todo_two_links_and_duplicate_spelling(self):
+        argv = self.todo_tool()
+        (self.home / "other").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = ["~/secret", "~/other", str(self.home / "secret")]
+        self.refusal(todo_command=argv)
+        self.assertEqual(len(self.items()), 3)
+        for item, link in zip(self.items()[1:], ("secret", "other")):
+            self.assertIn(f"the fenced folder {self.home / link} is a link", item["text"])
+            self.assertFalse(item["done"])
+
+    def test_todo_done_item_does_not_dedupe(self):
+        argv = self.todo_tool()
+        self.refusal(todo_command=argv)
+        data = self.items()
+        data[-1]["done"] = True
+        self.store.write_text(json.dumps({"todos": data}))
+        self.refusal(todo_command=argv)
+        self.assertEqual([t["done"] for t in self.items()], [False, True, False])
+        self.assertEqual(self.items()[1]["text"], self.items()[2]["text"])
+
+    def test_todo_list_failure_keeps_refusal_and_private_output(self):
+        argv = self.todo_tool()
+        (self.home / "fail-list").touch()
+        proc = self.cli("where", todo_command=argv)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertTrue(proc.stderr.rstrip().endswith(
+            "(could not add a TODO item: todo_command list exited 1)"), proc.stderr)
+        self.assertEqual(len(self.items()), 1)
+
+    def test_todo_list_errors_add_nothing_and_hide_output(self):
+        argv = [sys.executable]
+        private = "water the invented ferns"
+        cases = [(OSError(private), "cannot run todo_command"),
+                 (subprocess.TimeoutExpired(argv, 10, output=private, stderr=private),
+                  "todo_command list timed out")]
+        for output in ("not JSON", "[]", '{}', '{"open": {}}'):
+            cases.append((subprocess.CompletedProcess(argv, 0, output, private),
+                          "todo_command list printed no open list"))
+        for result, reason in cases:
+            with self.subTest(reason=reason, result=type(result).__name__):
+                kwargs = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
+                with patch.object(subprocess, "run", **kwargs) as run:
+                    exc = self.refusal(todo_command=argv)
+                self.assertTrue(str(exc).endswith(f"(could not add a TODO item: {reason})"), str(exc))
+                self.assertNotIn(private, str(exc))
+                run.assert_called_once_with([*argv, "list", "--json"], stdin=subprocess.DEVNULL,
+                                            capture_output=True, text=True, timeout=10, check=False)
+
+    def test_todo_add_errors_still_try_next_link(self):
+        argv = [sys.executable]
+        (self.home / "other").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"].append("~/other")
+        private = "water the invented ferns"
+        for failure, reason in ((OSError(private), "cannot run todo_command"),
+                                (subprocess.TimeoutExpired(argv, 10, stderr=private), "todo_command add timed out"),
+                                (subprocess.CompletedProcess(argv, 7, private, private), "todo_command add exited 7")):
+            with self.subTest(reason=reason):
+                with patch.object(subprocess, "run", side_effect=[
+                        subprocess.CompletedProcess(argv, 0, '{"open": []}', ""), failure,
+                        subprocess.CompletedProcess(argv, 0, "", "")]) as run:
+                    exc = self.refusal(todo_command=argv)
+                self.assertTrue(str(exc).endswith(f"(could not add a TODO item: {reason})"), str(exc))
+                self.assertNotIn(private, str(exc))
+                self.assertEqual(len(run.call_args_list), 3)
+                for call, link in zip(run.call_args_list[1:], ("secret", "other")):
+                    self.assertEqual(call.args[0][1], "add")
+                    self.assertEqual(len(call.args[0]), 3)
+                    self.assertIn(f"the fenced folder {self.home / link} is a link", call.args[0][2])
+
+    def test_todo_private_config_and_home_arguments_through_cli(self):
+        argv = self.todo_tool()
+        self.h.write("private.json", {"todo_command": [argv[0], "~/todo.py"]})
+        for _ in range(2):
+            proc = self.cli("where")
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertEqual(proc.stdout, "")
+        self.assertEqual(len(self.items()), 2)
+        # All home-relative argv elements expand, including the executable.
+        (self.home / "python").symlink_to(sys.executable)
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(
+                [], 0, '{"open": []}', "")) as run:
+            self.refusal(todo_command=["~/python", "~/todo.py"])
+        self.assertEqual(run.call_args_list[0].args[0],
+                         [str(self.home / "python"), str(self.home / "todo.py"), "list", "--json"])
+
+    def test_without_todo_command_runs_nothing(self):
+        with patch.object(subprocess, "run") as run:
+            self.refusal()
+        run.assert_not_called()
+
+    def test_non_link_never_runs_todo_command(self):
+        argv = self.todo_tool()
+        self.config["fenced"] = ["~/real"]
+        with patch.object(subprocess, "run") as run:
+            self.load(todo_command=argv)
+        run.assert_not_called()
+        self.assertEqual(len(self.items()), 1)
 
 
 class Compartments(unittest.TestCase):
@@ -1962,7 +2236,9 @@ class Compartments(unittest.TestCase):
             self.assertIn(fenced, self.c.fenced_forms(m.compartments, self.h.root))
             self.assertEqual(self.c.claude_touched(m, self.h.projects), {})
             self.assertEqual(self.c.path_compartment(m.compartments, "~/lnk/c.md", self.h.root), "fenced")
-            with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+            # Loading has its own one-lstat contract; keep routing's no-probe guard strict.
+            with patch.object(self.c, "load_member", return_value=m), \
+                    redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
                 self.assertEqual(self.c.main(["--member", self.member, "record", "--work", "~/lnk/c.md",
                     "--kind", "decided", "--category", "scope", "--tier", "high", "--question", "q",
                     "--ada-pick", "keep"]), 4)
@@ -1986,6 +2262,10 @@ class Compartments(unittest.TestCase):
                 return original(path, *args, **kwargs)
             return checked
 
+        # Fresh maps per case, loaded before the strict routing probes are installed.
+        members = {(target, entry): self.c.load_member(self.c.read_member(self.member))
+                   for target in ("~/lnk", "~/deep/../fence", "~/climb")
+                   for entry in ("path", "work", "log", "cwd", "touched")}
         with ExitStack() as stack:
             stack.enter_context(patch.dict(os.environ, {"HOME": str(base)}))
             for owner, name in ((os, "lstat"), (os, "stat"), (os, "readlink"),
@@ -1995,7 +2275,7 @@ class Compartments(unittest.TestCase):
             for target in ("~/lnk", "~/deep/../fence", "~/climb"):
                 for entry in ("path", "work", "log", "cwd", "touched"):
                     with self.subTest(target=target, entry=entry):
-                        m = self.c.load_member(self.c.read_member(self.member))
+                        m = members[target, entry]
                         if entry == "path":
                             self.assertEqual(self.c.path_compartment(m.compartments, target + "/c.md", base), "fenced")
                         elif entry == "touched":
@@ -2008,7 +2288,8 @@ class Compartments(unittest.TestCase):
                                         "--question", "q", "--ada-pick", "keep"])
                             if entry == "log":
                                 command.extend(["--work", str(base / "allowed")])
-                            with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                            with patch.object(self.c, "load_member", return_value=m), \
+                                    redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
                                 self.assertEqual(self.c.main(["--member", self.member, *command]), 4)
         self.assertEqual(list(fenced.iterdir()), [])
 
@@ -2133,14 +2414,19 @@ class Compartments(unittest.TestCase):
         self.save_config()
         return fence, (fence, link, fence.with_name("FENCE"))
 
-    def trace_fence(self, fence):
+    def trace_fence(self, fence, allow_load=False):
         stack = ExitStack()
         roots = (fence, fence.resolve())
+        load_probes = [int(allow_load)]
+        stack.callback(lambda: self.assertEqual(load_probes[0], 0))
         for owner, name in ((os, "lstat"), (os, "stat"), (os, "readlink"), (os, "scandir"),
                             (os, "open"), (builtins, "open")):
             original = getattr(owner, name)
-            def guarded(path, *args, _original=original, **kwargs):
+            def guarded(path, *args, _original=original, _name=name, **kwargs):
                 if isinstance(path, (str, bytes, os.PathLike)):
+                    if _name == "lstat" and Path(os.fsdecode(path)) == fence and load_probes[0]:
+                        load_probes[0] -= 1
+                        return _original(path, *args, **kwargs)
                     self.assertFalse(any(self.c.under(Path(os.fsdecode(path)), root) for root in roots),
                                      "touched fence")
                 return _original(path, *args, **kwargs)
@@ -2181,7 +2467,8 @@ class Compartments(unittest.TestCase):
                     "path": str(root / filename), "consent": "2026-11-01",
                     **({"own_addresses": ["sam@example.com"]} if kind == "mbox" else {})}]})
                 with self.subTest(root=root, kind=kind):
-                    proc = tripwire_crew(self.h, self.member, [fence], "sources", "mine", "--name", "fixture")
+                    proc = tripwire_crew(self.h, self.member, [fence], "sources", "mine", "--name", "fixture",
+                                         allow_root_metadata=True)
                     self.assertEqual(proc.returncode, 4, proc.stderr)
 
     def test_export_opener_refuses_before_io(self):
@@ -2197,7 +2484,7 @@ class Compartments(unittest.TestCase):
         fence, paths = self.fenced_source_fixture()
         for root in paths:
             for command in (("record",), ("similar", "--query", "q"), ("pending",)):
-                with self.subTest(root=root, command=command), self.trace_fence(fence), \
+                with self.subTest(root=root, command=command), self.trace_fence(fence, allow_load=True), \
                         patch.dict(self.c.COMMANDS, {command[0]: lambda *args: self.fail("command ran")}):
                     with redirect_stderr(io.StringIO()):
                         rc = self.c.main(list(command), member={**ADA, "state_dir": str(root),
@@ -2211,7 +2498,7 @@ class Compartments(unittest.TestCase):
             member = self.h.member({**ADA, "state_dir": str(root), "compartments": "compartments.json"})
             for command in (("record",), ("similar", "--query", "q"), ("pending",)):
                 with self.subTest(root=root, command=command):
-                    proc = tripwire_crew(self.h, member, [fence], *command)
+                    proc = tripwire_crew(self.h, member, [fence], *command, allow_root_metadata=True)
                     self.assertEqual(proc.returncode, 4, proc.stderr)
 
     def test_hub_children_and_resolutions_cached_per_member(self):
@@ -2711,6 +2998,8 @@ class Core(unittest.TestCase):
             for module, name in ((os, "open"), (os, "stat"), (os, "lstat"), (os, "scandir"),
                                  (os, "listdir"), (builtins, "open"), (io, "open")):
                 stack.enter_context(patch.object(module, name, guard(getattr(module, name))))
+            # Member loading is covered separately; imports still get no fence probes.
+            stack.enter_context(patch.object(self.c, "load_member", return_value=m))
             stack.enter_context(patch.object(os, "isatty", return_value=True))
             confirm = stack.enter_context(patch.object(self.c, "confirm_import", return_value=True))
             out = stack.enter_context(redirect_stdout(io.StringIO()))
