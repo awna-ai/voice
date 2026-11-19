@@ -569,3 +569,11 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **One wording for every build:** Voice stops for the day at the person's daily limit or, signed
   in with a Claude subscription, when Claude Code says the plan is nearly used up (VF7b's stop).
 - **The wording changed, so it is version 3:** a yes given to version 1 or 2 is asked again, once.
+
+## 2026-11-19: the repo moved to `awna-ai/voice`
+
+- **The kit's home is `https://github.com/awna-ai/voice`**, transferred from a personal account.
+  GitHub redirects the old web and git URLs, so an existing clone keeps working; point it at the
+  new URL with `git remote set-url origin git@github.com:awna-ai/voice.git` (or `upstream`).
+- **Nothing else moved by hand:** the repo had no Actions secrets or variables, environments,
+  deploy keys, webhooks, Pages site, branch protection or rulesets to carry over.

@@ -41,13 +41,13 @@ It is safe to stop and re-run: the installer keeps what you have already marked.
    empty private repo on GitHub, then clone this repo wherever you like and point it at yours:
 
    ```bash
-   git clone https://github.com/ziazon/voice.git
+   git clone https://github.com/awna-ai/voice.git
    cd voice
    git remote set-url origin git@github.com:<you>/<your-private-repo>.git
    git push -u origin main
    ```
 
-   To pull later kit updates: `git remote add upstream https://github.com/ziazon/voice.git`, then
+   To pull later kit updates: `git remote add upstream https://github.com/awna-ai/voice.git`, then
    `git pull upstream main`.
 
 2. **Start the build.** Open Claude Code in that folder and say:
