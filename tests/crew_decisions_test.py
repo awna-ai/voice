@@ -1406,6 +1406,54 @@ class Compartments(unittest.TestCase):
             self.assertEqual(output.getvalue(), "")
             self.assertFalse((self.h.root / "seen.json").exists())
 
+    def test_pending_queue_under_declared_link_keeps_its_compartment(self):
+        home = self.h.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            client = home / "projects/client"
+            client.parent.mkdir(parents=True)
+            for destination in ("projects/work/sub", "data/client"):
+                with self.subTest(destination=destination):
+                    target = home / destination
+                    folder = target / "queues/app"
+                    folder.mkdir(parents=True)
+                    (folder / "queue.md").write_text("🎛️ CONTROL-Q APP-1 · t · lane ALL\n")
+                    client.symlink_to(target)
+                    m = self.save_config()
+                    for scope in ("work", "client"):
+                        with self.subTest(scope=scope):
+                            args = self.c.parser_for(m, "test").parse_args([
+                                "pending", "--compartment", scope,
+                                "--projects", str(self.h.projects), "--queues", str(client / "queues"),
+                                "--seen", str(self.h.root / "seen.json")])
+                            output = io.StringIO()
+                            with redirect_stdout(output):
+                                self.assertEqual(self.c.cmd_pending(m, args), 0)
+                            rows = [json.loads(line) for line in output.getvalue().splitlines()]
+                            self.assertEqual([(r["project"], r["compartment"]) for r in rows],
+                                             [("app", "client")] if scope == "client" else [])
+                    (self.h.root / "seen.json").unlink(missing_ok=True)
+                    client.unlink()
+
+    def test_queue_compartment_refuses_swapped_link_into_fence(self):
+        home = self.h.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            fence = home / "garden-club"
+            target = fence / "x"
+            target.mkdir(parents=True)
+            for hub in (True, False):
+                with self.subTest(hub=hub):
+                    queues = home / (".hub/projects" if hub else "queues")
+                    queues.mkdir(parents=True)
+                    (queues / "swapped").symlink_to(target)
+                    m = self.save_config()
+                    with patch.object(self.c.os, "lstat", wraps=os.lstat) as lstats, \
+                            patch.object(self.c.os, "stat", wraps=os.stat) as stats:
+                        result = self.c.queue_compartment(m, queues / "swapped/queue.md")
+                    self.assertEqual(result, {"compartment": "fenced"})
+                    for probes in (lstats, stats):
+                        self.assertTrue(all(not self.c.under(Path(call.args[0]), fence)
+                                            for call in probes.call_args_list))
+
     def test_live_record_keeps_the_lines_compartment(self):
         m = self.save_config()
         line = {"timestamp": "2026-09-01T00:00:00.000Z", "question": "Which queue?",

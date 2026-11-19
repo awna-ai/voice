@@ -519,8 +519,9 @@ def path_compartment(c, path, cwd, *, resolve=True, follow_last=True):
                         if route is not None:
                             return route
     matches = [(len(root.parts), compartment) for compartment, folder in declared_folders(c)
-               for root in ((safe_resolve(c, folder, cwd)[0] if follow_last else
-                             safe_resolve(c, folder.parent, cwd)[0] / folder.name,) if resolve else (folder,))
+               for root in (((safe_resolve(c, folder, cwd)[0],) if follow_last else
+                             (safe_resolve(c, folder, cwd)[0],
+                              safe_resolve(c, folder.parent, cwd)[0] / folder.name)) if resolve else (folder,))
                if any(under(form, root) for form in forms)]
     if matches:
         return max(matches)[1]
@@ -1055,6 +1056,8 @@ def queue_compartment(m, path):
     root, name = path.parent.parent, path.parent.name
     real_root, fenced = safe_resolve(c, root, os.getcwd())
     if fenced:
+        return {"compartment": "fenced"}
+    if safe_resolve(c, real_root / name, os.getcwd())[1]:
         return {"compartment": "fenced"}
     hub = c.get("hub")
     if hub:
