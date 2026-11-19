@@ -640,31 +640,65 @@ def refuse_fence_links(c):
         if ".." in Path(value).expanduser().parts:
             raise CompartmentConfigError(
                 f'compartments: the fenced folder {value} has a ".." part; write it without ".."')
-    for inner in c["fenced"]:
-        for outer in c["fenced"]:
-            inner_path, outer_path = Path(inner).expanduser(), Path(outer).expanduser()
-            if len(inner_path.parts) > len(outer_path.parts) and under(inner_path, outer_path):
+    values = c["fenced"]
+    lexical = [Path(os.path.abspath(absolute_path(value, Path.cwd()))) for value in values]
+    if not lexical:
+        return
+    try:
+        base = Path(os.path.commonpath([str(path.parent) for path in lexical]))
+        base_resolved, base_blocked = walk_resolve(base, FenceRoots(lexical))
+    except (OSError, ValueError):
+        raise CompartmentConfigError(
+            f"compartments: cannot check whether the fenced folder {values[0]} is a link")
+    resolved, linked = {}, {}
+    for i in sorted(range(len(values)), key=lambda i: len(lexical[i].parts)):
+        guards = FenceRoots([path for j, path in enumerate(lexical) if j != i] + list(resolved.values()))
+        try:
+            parent, blocked = walk_resolve(absolute_path(values[i], Path.cwd()).parent, guards)
+        except (OSError, ValueError):
+            raise CompartmentConfigError(
+                f"compartments: cannot check whether the fenced folder {values[i]} is a link")
+        if blocked:
+            raise CompartmentConfigError(
+                f"compartments: the fenced folder {values[i]} is reached through another fenced folder; "
+                "fence only that folder")
+        resolved[i] = parent / lexical[i].name
+        linked[i] = base_blocked or tuple(map(fold, parent.parts)) != tuple(map(
+            fold, (base_resolved / lexical[i].parent.relative_to(base)).parts))
+    for i, inner in enumerate(values):
+        for j, outer in enumerate(values):
+            if i == j or inner == outer:
+                continue
+            if any(len(inner_path.parts) > len(outer_path.parts) and under(inner_path, outer_path)
+                   for inner_path in (lexical[i], resolved[i])
+                   for outer_path in (lexical[j], resolved[j])):
                 raise CompartmentConfigError(
                     f"compartments: the fenced folder {inner} is inside the fenced folder {outer}; "
                     f"fence only {outer}")
-    links, clauses, identities = [], [], set()
-    for value in c["fenced"]:
-        path = Path(value).expanduser()
-        try:
-            info = os.lstat(path)
-        except (FileNotFoundError, NotADirectoryError):
-            continue
-        except (OSError, ValueError):
-            raise CompartmentConfigError(
-                f"compartments: cannot check whether the fenced folder {value} is a link")
-        identity = (info.st_dev, info.st_ino)
-        if stat.S_ISLNK(info.st_mode) and identity not in identities:
-            identities.add(identity)
-            links.append(path)
-            clauses.append(f'compartments: the fenced folder {value} is a link; '
-                           'put the folder it points to in "fenced" instead, or remove the link')
-    if links:
-        raise FenceLinkError("; ".join(clauses), links)
+    found, identities = {}, set()
+    for linked_parent in (False, True):
+        for i, value in enumerate(values):
+            if linked[i] != linked_parent:
+                continue
+            try:
+                info = os.lstat(resolved[i])
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except (OSError, ValueError):
+                raise CompartmentConfigError(
+                    f"compartments: cannot check whether the fenced folder {value} is a link")
+            identity = (info.st_dev, info.st_ino)
+            if stat.S_ISLNK(info.st_mode) and identity not in identities:
+                identities.add(identity)
+                k = next(k for k in range(len(values))
+                         if tuple(map(fold, resolved[k].parts)) == tuple(map(fold, resolved[i].parts)))
+                found[k] = values[k]
+        if found:
+            links = [Path(found[k]).expanduser() for k in sorted(found)]
+            clauses = [f'compartments: the fenced folder {found[k]} is a link; '
+                       'put the folder it points to in "fenced" instead, or remove the link'
+                       for k in sorted(found)]
+            raise FenceLinkError("; ".join(clauses), links)
 
 
 def post_fence_link_todos(argv, links):
@@ -693,11 +727,10 @@ def post_fence_link_todos(argv, links):
     texts = [" ".join(item["text"].split()) for item in data["open"]
              if isinstance(item, dict) and isinstance(item.get("text"), str)]
     for link in links:
-        marker = f"the fenced folder {link} is a link."
-        if any(" ".join(marker.split()) in text for text in texts):
-            continue
-        text = (f"Voice refused a compartment map: {marker} "
+        text = (f"Voice refused a compartment map: the fenced folder {link} is a link. "
                 'Put the folder it points to in "fenced" instead, or remove the link.')
+        if " ".join(text.split()) in texts:
+            continue
         _, failure = run("add", text)
         note = note or failure
     return note

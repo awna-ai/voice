@@ -668,17 +668,19 @@ class FenceLinks(unittest.TestCase):
         self.assertIsInstance(caught.exception, self.c.FenceLinkError)
         return caught.exception
 
-    def cli(self, *args, tripwire=False, **extra):
+    def cli(self, *args, tripwire=False, allow_root_metadata=False, **extra):
         self.h.write("compartments.json", self.config)
         member = self.h.member({**ADA, "compartments": "compartments.json", **extra})
         # Harness and tripwire_crew use TEST_HOME for their child's HOME.
         with patch.dict(globals(), {"TEST_HOME": self.home}):
-            proc = (tripwire_crew(self.h, member, [self.home / "real"], *args) if tripwire
+            proc = (tripwire_crew(self.h, member, [self.home / "real"], *args,
+                                  allow_root_metadata=allow_root_metadata) if tripwire
                     else self.h.crew(member, *args))
         self.assertNotIn("water the invented ferns", proc.stdout + proc.stderr)
         return proc
 
     def test_card_refused_without_reading_fence_or_target(self):
+        resolved_home = self.home.resolve()
         with ExitStack() as stack:
             probes = {name: stack.enter_context(patch.object(os, name, wraps=getattr(os, name)))
                       for name in ("lstat", "stat", "readlink", "scandir")}
@@ -687,13 +689,16 @@ class FenceLinks(unittest.TestCase):
         self.assertIn("put the folder it points to", str(exc))
         self.assertNotIn(str(self.home / "real"), str(exc))
         self.assertEqual(exc.links, [self.home / "secret"])
-        probes["readlink"].assert_not_called()
+        self.assertFalse(any(Path(call.args[0]).is_relative_to(root)
+                             for call in probes["readlink"].call_args_list
+                             for root in (self.home, resolved_home)))
         probes["scandir"].assert_not_called()
         for name in ("lstat", "stat"):
             paths = [Path(call.args[0]) for call in probes[name].call_args_list]
             touched = [p for p in paths if any(p.is_relative_to(self.home / root)
-                                              for root in ("secret", "real"))]
-            self.assertEqual(touched, [self.home / "secret"] if name == "lstat" else [])
+                                              for root in ("secret", "real"))
+                       or any(p.is_relative_to(resolved_home / root) for root in ("secret", "real"))]
+            self.assertEqual(touched, [resolved_home / "secret"] if name == "lstat" else [])
 
     def test_cli_refuses_where_and_similar(self):
         for args in (("where", "--cwd", str(self.home / "q/noor/inner")),
@@ -732,7 +737,7 @@ class FenceLinks(unittest.TestCase):
                 self.assertEqual(proc.stdout, "")
                 self.assertIn(message, proc.stderr)
 
-    def test_nested_fences_refused_before_any_lstat(self):
+    def test_nested_fences_refused_before_any_fence_lstat(self):
         pairs = [("~/secret", "~/secret/inner"), ("~/real", "~/real/inner"),
                  ("~/Real", "~/real/inner"), ("~/real/inner", "~/real")]
         for values in pairs:
@@ -740,15 +745,18 @@ class FenceLinks(unittest.TestCase):
                 self.config["fenced"] = list(values)
                 outer, inner = (values if values[0].endswith(("secret", "real", "Real"))
                                 else values[::-1])
-                message = (f"compartments: the fenced folder {inner} is inside the fenced folder "
-                           f"{outer}; fence only {outer}")
-                with patch.object(os, "lstat", side_effect=AssertionError("unexpected lstat")) as probe, \
+                message = (f"compartments: the fenced folder {inner} is reached through another fenced "
+                           "folder; fence only that folder")
+                roots = [Path(value).expanduser() for value in values]
+                roots += [self.home.resolve() / root.relative_to(self.home) for root in roots]
+                with patch.object(os, "lstat", wraps=os.lstat) as probe, \
                         patch.object(subprocess, "run") as run:
                     with self.assertRaises(self.c.CompartmentConfigError) as caught:
                         self.load(todo_command=[sys.executable])
                 self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
                 self.assertEqual(str(caught.exception), message)
-                probe.assert_not_called()
+                self.assertFalse(any(self.c.under(Path(call.args[0]), root)
+                                     for call in probe.call_args_list for root in roots))
                 run.assert_not_called()
                 proc = self.cli("where")
                 self.assertEqual(proc.returncode, 2, proc.stderr)
@@ -764,7 +772,65 @@ class FenceLinks(unittest.TestCase):
                 proc = self.cli("where", tripwire=True)
                 self.assertEqual(proc.returncode, 2, proc.stderr)
                 self.assertEqual(proc.stdout, "")
-                self.assertIn("is inside the fenced folder", proc.stderr)
+                self.assertIn("reached through another fenced folder", proc.stderr)
+
+    def test_alias_parent_into_real_fence_is_never_probed(self):
+        (self.home / "alias").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = ["~/real", "~/alias/inner"]
+        roots = (self.home / "real", self.home.resolve() / "real")
+        with patch.object(os, "lstat", wraps=os.lstat) as probe:
+            with self.assertRaisesRegex(self.c.CompartmentConfigError,
+                                        "reached through another fenced folder"):
+                self.load()
+        self.assertEqual([Path(call.args[0]) for call in probe.call_args_list
+                          if any(Path(call.args[0]).is_relative_to(root) for root in roots)], [])
+
+    def test_alias_parent_into_link_target_is_never_probed_deeper(self):
+        (self.home / "alias").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = ["~/secret", "~/alias/inner"]
+        roots = (self.home / "real", self.home.resolve() / "real")
+        with patch.object(os, "lstat", wraps=os.lstat) as probe:
+            exc = self.refusal()
+        self.assertEqual(exc.links, [self.home / "secret"])
+        self.assertEqual([Path(call.args[0]) for call in probe.call_args_list
+                          if any(Path(call.args[0]).is_relative_to(root)
+                                 and Path(call.args[0]) != root for root in roots)], [])
+        self.assertNotIn(self.home / "alias/inner", [Path(call.args[0]) for call in probe.call_args_list])
+
+    def test_resolved_parent_into_fence_is_never_probed(self):
+        resolved_home = self.home.resolve()
+        if str(resolved_home) == str(self.home):
+            self.skipTest("fixture home has no distinct resolved spelling")
+        self.config["fenced"] = ["~/real", str(resolved_home / "real/inner")]
+        with patch.object(os, "lstat", wraps=os.lstat) as probe:
+            with self.assertRaisesRegex(self.c.CompartmentConfigError,
+                                        "reached through another fenced folder"):
+                self.load()
+        self.assertEqual([Path(call.args[0]) for call in probe.call_args_list
+                          if Path(call.args[0]).is_relative_to(resolved_home / "real")], [])
+
+    @unittest.skipUnless(sandbox_usable(), "sandbox-exec cannot apply a profile here")
+    def test_alias_parents_cli_tripwire_never_probes_inside_target(self):
+        (self.home / "alias").symlink_to(self.home / "real", target_is_directory=True)
+        for outer, message in (("~/real", "reached through another fenced folder"),
+                               ("~/secret", "the fenced folder ~/secret is a link")):
+            with self.subTest(outer=outer):
+                self.config["fenced"] = [outer, "~/alias/inner"]
+                proc = self.cli("where", tripwire=True, allow_root_metadata=True)
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertEqual(proc.stdout, "")
+                self.assertIn(message, proc.stderr)
+
+    @unittest.skipUnless(sandbox_usable(), "sandbox-exec cannot apply a profile here")
+    def test_resolved_parent_cli_tripwire_never_probes_inside_fence(self):
+        resolved_home = self.home.resolve()
+        if str(resolved_home) == str(self.home):
+            self.skipTest("fixture home has no distinct resolved spelling")
+        self.config["fenced"] = ["~/real", str(resolved_home / "real/inner")]
+        proc = self.cli("where", tripwire=True, allow_root_metadata=True)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertIn("reached through another fenced folder", proc.stderr)
 
     def test_unencodable_fence_fails_closed(self):
         self.config["fenced"] = ["/tmp/\ud800x"]
@@ -807,17 +873,37 @@ class FenceLinks(unittest.TestCase):
         fence = self.home / "real"
         inside = fence / "unread.txt"
         inside.write_text("invented fenced text")
+        outside = self.home / "outside.txt"
+        outside.touch()
         child = self.home / "tripwire-child.py"
         cases = [(f"os.lstat({str(fence)!r})", 0),
                  (f"open({str(inside)!r}).read()", -9),
                  (f"os.lstat({str(inside)!r})", -9),
-                 (f"os.getxattr({str(fence)!r}, 'invented')", -9)]
+                 (self.xattr_call(fence), -9),
+                 (self.xattr_call(outside) + "; assert result == -1; assert ctypes.get_errno() == 93", 0)]
         for operation, expected in cases:
             with self.subTest(operation=operation):
                 child.write_text("import os\n" + operation + "\n")
                 with patch.dict(globals(), {"CREW": child}):
                     proc = tripwire_crew(self.h, "unused", [fence], allow_root_metadata=True)
                 self.assertEqual(proc.returncode, expected, proc.stderr)
+                self.assertEqual(proc.stdout, "")
+
+    def xattr_call(self, path):
+        return ("import ctypes, ctypes.util; "
+                "libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True); "
+                f"result = libc.getxattr({os.fsencode(path)!r}, b'invented', None, 0, 0, 0)")
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS getxattr signature and ENOATTR")
+    def test_xattr_call_outside_fence_returns_enoattr(self):
+        outside = self.home / "outside.txt"
+        outside.touch()
+        proc = subprocess.run([sys.executable, "-c", self.xattr_call(outside) +
+                               "; assert result == -1; assert ctypes.get_errno() == 93"],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertEqual(proc.stderr, "")
 
     def test_trailing_slash_refused(self):
         self.config["fenced"] = ["~/secret/"]
@@ -836,9 +922,10 @@ class FenceLinks(unittest.TestCase):
 
     def test_unreadable_fence_fails_closed_without_todo(self):
         original = os.lstat
+        fence = self.home.resolve() / "secret"
 
         def unreadable(path, *args, **kwargs):
-            if Path(path) == self.home / "secret":
+            if Path(path) == fence:
                 raise PermissionError("invented denial")
             return original(path, *args, **kwargs)
 
@@ -878,6 +965,40 @@ class FenceLinks(unittest.TestCase):
         if not same:
             self.skipTest("fixture volume is case-sensitive")
         self.assert_one_link_and_item(["~/secret", "~/SECRET"])
+
+    def test_common_link_above_fences_keeps_both_in_first_round(self):
+        (self.home / "top").mkdir()
+        (self.home / "via").symlink_to(self.home / "top", target_is_directory=True)
+        for name in ("a", "b"):
+            (self.home / "top" / name).symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = ["~/via/a", "~/via/b"]
+        with patch.object(os, "lstat", wraps=os.lstat) as probe:
+            exc = self.refusal()
+        self.assertEqual(exc.links, [self.home / "via/a", self.home / "via/b"])
+        self.assertEqual(str(exc), '; '.join(
+            f'compartments: the fenced folder {value} is a link; put the folder it points to in '
+            '"fenced" instead, or remove the link' for value in self.config["fenced"]))
+        paths = [Path(call.args[0]) for call in probe.call_args_list]
+        for name in ("a", "b"):
+            self.assertEqual(paths.count(self.home.resolve() / "top" / name), 1)
+        # A below-base link would put b in round 2: the refusal after a must skip it.
+        self.config["fenced"] = ["~/top/a", "~/via/b"]
+        with patch.object(os, "lstat", wraps=os.lstat) as probe:
+            exc = self.refusal()
+        self.assertEqual(exc.links, [self.home / "top/a"])
+        self.assertNotIn(self.home.resolve() / "top/b",
+                         [Path(call.args[0]) for call in probe.call_args_list])
+
+    def test_commonpath_errors_fail_closed_naming_first_fence(self):
+        self.config["fenced"] = ["~/secret", "~/missing"]
+        for failure in (ValueError("invented"), OSError("invented")):
+            with self.subTest(failure=type(failure).__name__), \
+                    patch.object(os.path, "commonpath", side_effect=failure), \
+                    patch.object(os, "lstat", wraps=os.lstat) as probe:
+                with self.assertRaisesRegex(self.c.CompartmentConfigError,
+                                            "cannot check whether the fenced folder ~/secret is a link"):
+                    self.load()
+                probe.assert_not_called()
 
     def test_resolved_home_alias_is_one_link_and_item(self):
         alias = str(self.home.resolve() / "secret")
@@ -961,6 +1082,15 @@ else:
             "text": f"Voice refused a compartment map: the fenced folder {self.home / 'secret'} is a link. "
                     'Put the folder it points to in "fenced" instead, or remove the link.',
             "done": False})
+
+    def test_todo_prefixed_full_item_does_not_dedupe(self):
+        argv = self.todo_tool()
+        text = (f"Voice refused a compartment map: the fenced folder {self.home / 'secret'} is a link. "
+                'Put the folder it points to in "fenced" instead, or remove the link.')
+        seeded = {"text": "extra invented words " + text, "done": False}
+        self.store.write_text(json.dumps({"todos": [seeded]}))
+        self.refusal(todo_command=argv)
+        self.assertEqual(self.items(), [seeded, {"text": text, "done": False}])
 
     def test_todo_done_item_does_not_dedupe(self):
         argv = self.todo_tool()
@@ -2572,7 +2702,7 @@ class Compartments(unittest.TestCase):
             original = getattr(owner, name)
             def guarded(path, *args, _original=original, _name=name, **kwargs):
                 if isinstance(path, (str, bytes, os.PathLike)):
-                    if _name == "lstat" and Path(os.fsdecode(path)) == fence and load_probes[0]:
+                    if _name == "lstat" and Path(os.fsdecode(path)) == roots[1] and load_probes[0]:
                         load_probes[0] -= 1
                         return _original(path, *args, **kwargs)
                     self.assertFalse(any(self.c.under(Path(os.fsdecode(path)), root) for root in roots),
