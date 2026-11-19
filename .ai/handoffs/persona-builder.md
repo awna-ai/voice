@@ -2,6 +2,42 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF31: a fenced folder that is a link refuses the compartment map (2026-11-19, lane: V1)
+
+- **Status:** in progress on `lane-v1/VF31` (fix-up 2 owed), not landed: `790139e` brief, `960cda7` tests, `974a18f` code, `d1bd709`
+  fix-up 1 brief, `741a705` fix-up 1, then this record. The owner picked V-Q28 (b). Code by Codex from both briefs.
+- **What it does:** `load_member` checks each `fenced` path with one `lstat` of the path itself, never anything
+  inside it. A link refuses the whole map (every command exits 2) with a message naming the fix; an error other
+  than "not there" fails closed the same way. A fence path with a `..` part, or one fence inside another, is refused
+  before any `lstat`, because checking either could read through a link or inside a fence. An optional member key
+  `todo_command` (an argv list, run without a shell; `list --json` then `add <text>`) gets one TODO item per linked
+  fence, none while an open item for that link exists; links dedupe by device and inode; the tool's output is never
+  shown. Decision: `.ai/DECISIONS.md` § 2026-11-19.
+- **The older no-probe guards:** they now allow exactly the one load-time `lstat` of each fence root and nothing
+  else. The in-process guard counts it (it must happen once), and the kernel tripwire's `allow_root_metadata` still
+  kills every other read under the fence, xattrs included (`test_tripwire_root_metadata_allowance_still_kills_reads`).
+- **Reviews:** the security review (sub-agent) found the `..` bypass (medium), the nested-fence probe and the
+  non-UTF-8 crash (low). The Verifier (Fable, first pass, FAIL) found the same two must-fixes and five should-fixes.
+  Fix-up 1 takes all of them but her finding 7's note that the kernel tripwires can't count probes (the in-process
+  twins do). Her finding 8, for the owner: where an OS sandbox denies reading a fenced folder, its `lstat` fails and
+  every command exits 2. Checked on the gate machine: its Claude Code settings have no sandbox block and name no
+  fence, so nothing changes there today.
+- **Verified:** Codex's red runs and a mutation per claim (13 mutations, each red, restored with `cmp`); this run,
+  with Python 3.12.14 on Mimi: `crew_documents_test.py` 14 OK and `crew_hardening_test.py` 40 OK, the kernel
+  tripwires run, not skipped; `crew_decisions_test.py` 167 run, 1 red (`test_tripwire_root_metadata_allowance_still_kills_reads`,
+  the xattr subtest: CPython on macOS has no `os.getxattr`).
+- **Repeat Verifier (Opus) on `741a705`: FAIL.** Findings 1 to 6 closed, each test red with its fix mutated out.
+  Must-fix: (1) the nested check compares spellings only, so a fence reached through a link in another fence's
+  parent is still probed: `["~/real", "~/alias/inner"]` with `~/alias -> ~/real` lstats `~/real/inner` (-9 under the
+  tripwire), and so do `["~/secret", "~/alias/inner"]` and an absolute `/tmp` spelling of a fence under the home
+  one; direction: resolve each fence's parent with `walk_resolve(raw.parent, <the other fences' lexical roots>)`
+  before its `lstat`, as `fenced_forms` does, and refuse when the walk is blocked or the resolved form is under
+  another fence's; (2) the xattr kill subtest calls `os.getxattr`, absent on macOS: call `getxattr` through `ctypes`.
+  Should-fix: compare the whole normalized item text for equality instead of a substring (a path containing
+  `x the fenced folder <home>/secret` still collides).
+- **Owed:** fix-up 2 for those, the repeat Verifier on Opus, then the full gate and the land. The private member wiring
+  (its `todo_command` and its skill's exit-2 line) is on the private repo's `lane-v1/VF31`, merged once this lands.
+
 ## PE3.3v: voice gets a full check on `main` after lands, and a release reads the green ref (2026-11-18, lane: V1)
 
 - **Status:** built and verified on `lane-v1/PE3.3v` (rebased on `main` this run): `d3f6e76` brief, `e89ff28`

@@ -569,3 +569,21 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **One wording for every build:** Voice stops for the day at the person's daily limit or, signed
   in with a Claude subscription, when Claude Code says the plan is nearly used up (VF7b's stop).
 - **The wording changed, so it is version 3:** a yes given to version 1 or 2 is asked again, once.
+
+## 2026-11-19: a fenced folder that is a link refuses the whole compartment map (VF31)
+
+- **Refuse, never follow:** when a path under `fenced` is itself a symbolic link, the member does not load
+  and every command exits 2, naming the link and the fix (fence the folder it points to, or remove the link).
+  The owner picked this over reading the link's target and fencing both spellings: refusing needs only one
+  `lstat` of the fence path itself, never anything inside it or the target, and it fails closed. A fence path
+  that can't be checked (any error but "not there") refuses the map too.
+- **A link in the fence's parent is fine:** `fenced_forms` already fences both spellings of that.
+- **Nothing that would need a look inside a fence:** a fence path with a `..` part, or a fence inside
+  another fence, refuses the map before any `lstat`, since checking either could read through a link or
+  inside a fence. Write fence paths plainly and list only the outer folder.
+- **An OS read-deny on a fence stops the tool too:** where a sandbox denies reading a fenced folder, its
+  `lstat` fails and every command exits 2. That is the fail-closed choice; a setup that needs both would
+  have to allow reading the fence's own metadata.
+- **One TODO item per link:** a member config may name a `todo_command` (an argv list, run without a shell).
+  A refusal adds one item per linked fence, and none while an open item for that link exists; a done item
+  doesn't count. The tool's own output is never shown, since it is the person's private list.
