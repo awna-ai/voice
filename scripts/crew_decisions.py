@@ -10,6 +10,11 @@ Every command reads a member config: `crew_decisions.py --member crew/<name>/mem
 (or $CREW_MEMBER); a gitignored private.json beside it adds filters or replaces keys. It names the
 member and the principal, the state dir, the gate mark word (`(Recommended · <Name>)`), the
 principal's pronouns, and the privacy filters (excluded folders, personal topics, secrets, pasted prompts).
+A fenced folder that is itself a link refuses the whole compartment map (exit 2).
+The optional `todo_command` (an argv list whose first element is an absolute or ~/ path) gets one
+TODO item per linked fence, never two open at once: `<todo_command> list --json` prints a JSON
+object whose `"open"` is a list of objects with string `"text"`, and `<todo_command> add <text>`
+adds one open item, with the text as one argv element.
 
   mine  --projects DIR --out decisions.jsonl [--holdout 0.15 | --cutoff TS]
       Every answered AskUserQuestion question (options, the recommended label and the member's
@@ -116,6 +121,12 @@ class MemberConfigError(Failed):
 
 class CompartmentConfigError(MemberConfigError):
     pass
+
+
+class FenceLinkError(CompartmentConfigError):
+    def __init__(self, message, links):
+        super().__init__(message)
+        self.links = links
 
 
 def fold(s):
@@ -613,12 +624,77 @@ def validate_config(config, source):
         raise Failed(f"member config: {source}: queue_answerer must be a non-empty string")
 
 
+def refuse_fence_links(c):
+    links, clauses = [], []
+    for value in c["fenced"]:
+        path = Path(value).expanduser()
+        try:
+            mode = os.lstat(path).st_mode
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            raise CompartmentConfigError(
+                f"compartments: cannot check whether the fenced folder {value} is a link")
+        if stat.S_ISLNK(mode) and path not in links:
+            links.append(path)
+            clauses.append(f'compartments: the fenced folder {value} is a link; '
+                           'put the folder it points to in "fenced" instead, or remove the link')
+    if links:
+        raise FenceLinkError("; ".join(clauses), links)
+
+
+def post_fence_link_todos(argv, links):
+    def run(*args):
+        command = args[0]
+        try:
+            result = subprocess.run([*argv, *args], stdin=subprocess.DEVNULL, capture_output=True,
+                                    text=True, timeout=10, check=False)
+        except subprocess.TimeoutExpired:
+            return None, f"could not add a TODO item: todo_command {command} timed out"
+        except OSError:
+            return None, "could not add a TODO item: cannot run todo_command"
+        if result.returncode:
+            return None, f"could not add a TODO item: todo_command {command} exited {result.returncode}"
+        return result, None
+
+    result, note = run("list", "--json")
+    if note:
+        return note
+    try:
+        data = json.loads(result.stdout)
+    except (ValueError, RecursionError):
+        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("open"), list):
+        return "could not add a TODO item: todo_command list printed no open list"
+    texts = [" ".join(item["text"].split()) for item in data["open"]
+             if isinstance(item, dict) and isinstance(item.get("text"), str)]
+    for link in links:
+        marker = f"the fenced folder {link} is a link"
+        if any(" ".join(marker.split()) in text for text in texts):
+            continue
+        text = (f"Voice refused a compartment map: {marker}. "
+                'Put the folder it points to in "fenced" instead, or remove the link.')
+        _, failure = run("add", text)
+        note = note or failure
+    return note
+
+
 def load_member(config):
     validate_config(config, "member.json")
     missing = [k for k in REQUIRED if k not in config]
     missing += [f"filters.{k}" for k in REQUIRED_FILTERS if k not in (config.get("filters") or {})]
     if missing:
         raise Failed(f"member config: missing {', '.join(missing)}")
+    todo_command = config.get("todo_command")
+    if "todo_command" in config:
+        if (not isinstance(todo_command, list) or not todo_command
+                or any(not isinstance(value, str) or not value or "\x00" in value or "\n" in value
+                       for value in todo_command)
+                or not todo_command[0].startswith(("/", "~/"))):
+            raise MemberConfigError("member config: todo_command must be a list of strings whose first is an "
+                                    "absolute or ~/ path")
+        todo_command = [os.path.expanduser(value) if value.startswith("~/") else value
+                        for value in todo_command]
     f = config["filters"]
     word = re.escape(config["mark_word"])
     # Gate labels use (Recommended), (Recommended · <Name>), or (<Name>).
@@ -629,6 +705,14 @@ def load_member(config):
         if isinstance(value, str) and not value.startswith(("/", "~/")):
             raise Failed("compartments: a path given to load_member must be absolute or start with ~/")
         compartments = read_compartments(value, Path.cwd()) if isinstance(value, str) else check_compartments(value)
+        try:
+            refuse_fence_links(compartments)
+        except FenceLinkError as exc:
+            if todo_command:
+                note = post_fence_link_todos(todo_command, exc.links)
+                if note:
+                    exc.args = (f"{exc} ({note})",)
+            raise
     return Member(name=config["name"], slug=config["slug"], principal=config["principal"],
                   principal_slug=config["principal_slug"], state_dir=Path(config["state_dir"]).expanduser(),
                   mark_word=config["mark_word"],
