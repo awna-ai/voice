@@ -447,6 +447,21 @@ def asking(when, tool_id, question, entrypoint):
 
 
 class Pending(unittest.TestCase):
+    def test_pending_without_compartments_keeps_legacy_seen_and_pairs(self):
+        h = Harness()
+        self.addCleanup(h.dir.cleanup)
+        h.session(ENCODED_HOME + "-projects-app", "a",
+                  asking("2026-09-01T00:00:00Z", "t", "Which?", "sdk-cli"))
+        member = h.member(ADA)
+        for before, after in (({}, ["a:t"]),
+                              (["x:1", ["work", "a:t"]], ["a:t", "x:1", ["work", "a:t"]])):
+            with self.subTest(before=before):
+                h.write("seen.json", before)
+                proc = h.crew(member, "pending", "--projects", str(h.projects), "--seen", "seen.json")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual([json.loads(line)["id"] for line in proc.stdout.splitlines()], ["a:t"])
+                self.assertEqual(h.read("seen.json"), json.dumps(after))
+
     def test_only_headless_sessions_are_reported(self):
         h = Harness()
         member = h.member(ADA)
@@ -1282,14 +1297,14 @@ class Compartments(unittest.TestCase):
                 (True, "fenced", 1, "pending: refusing compartment fenced"),
                 (False, "X", 1, "pending: --compartment requires compartments configuration"),
                 *((True, scope, 2, "pending: unknown compartment; known: client, work, or p:<project>")
-                  for scope in ("nope", "all", "hub-mixed", "p:", "p:-x"))):
+                  for scope in ("nope", "all", "hub-mixed", "p:", "p:-x", "p:x y"))):
             member = self.member if configured else self.h.member(ADA, "unscoped.json")
             for existing in (False, True):
                 with self.subTest(configured=configured, scope=scope, existing=existing):
                     seen = self.h.root / "seen.json"
                     seen.unlink(missing_ok=True)
                     if existing:
-                        seen.write_text('[ "already-seen" ]\n')
+                        seen.write_text('{}' if scope == "nope" else '[ "already-seen" ]\n')
                     before = seen.read_bytes() if existing else None
                     proc = self.h.crew(member, "pending", "--compartment", scope,
                                        "--projects", str(self.h.projects), "--seen", str(seen))
@@ -1348,6 +1363,31 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(proc.stderr, "crew_decisions: pending: the seen file is not readable\n")
                 self.assertEqual(seen.read_bytes(), before)
 
+    def test_pending_deeply_nested_seen_is_unreadable_and_unchanged(self):
+        seen = self.h.root / "seen.json"
+        seen.write_text("[" * 100000 + "]" * 100000)
+        before = seen.read_bytes()
+        proc = self.h.crew(self.member, "pending", "--projects", str(self.h.projects), "--seen", "seen.json")
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertEqual(proc.stderr, "crew_decisions: pending: the seen file is not readable\n")
+        self.assertEqual(seen.read_bytes(), before)
+
+    def test_pending_drops_fenced_queue_items(self):
+        queues = self.h.root / "queues"
+        folder = queues / "app"
+        folder.mkdir(parents=True)
+        (folder / "queue.md").write_text("🎛️ CONTROL-Q APP-1 · t · lane ALL\n")
+        m = self.save_config()
+        args = self.c.parser_for(m, "test").parse_args([
+            "pending", "--projects", str(self.h.projects), "--queues", str(queues),
+            "--seen", str(self.h.root / "seen.json")])
+        output = io.StringIO()
+        with redirect_stdout(output), patch.object(self.c, "queue_compartment", return_value={"compartment": "fenced"}):
+            self.assertEqual(self.c.cmd_pending(m, args), 0)
+        self.assertEqual(output.getvalue(), "")
+        self.assertFalse((self.h.root / "seen.json").exists())
+
     def test_pending_queue_labels_logical_folders_and_skips_fenced_links(self):
         home = self.h.root / "home"
         with patch.dict(os.environ, {"HOME": str(home)}):
@@ -1399,12 +1439,95 @@ class Compartments(unittest.TestCase):
                 "pending", "--projects", str(self.h.projects), "--queues", str(queues),
                 "--seen", str(self.h.root / "seen.json")])
             output = io.StringIO()
-            with redirect_stdout(output), patch.object(self.c.os, "lstat", wraps=os.lstat) as probes, \
+            fence_paths = (Path(os.path.abspath(fence)), Path(os.path.realpath(fence)))
+            with redirect_stdout(output), patch.object(self.c.os, "lstat", wraps=os.lstat) as lstats, \
+                    patch.object(self.c.os, "stat", wraps=os.stat) as stats, \
                     patch.object(Path, "read_bytes", side_effect=AssertionError("read fenced queue")):
                 self.assertEqual(self.c.cmd_pending(m, args), 0)
-            self.assertTrue(all(not self.c.under(Path(call.args[0]), fence) for call in probes.call_args_list))
+            for probes in (lstats, stats):
+                self.assertTrue(all(not self.c.under(Path(os.path.abspath(call.args[0])), root)
+                                    for call in probes.call_args_list for root in fence_paths))
             self.assertEqual(output.getvalue(), "")
             self.assertFalse((self.h.root / "seen.json").exists())
+
+    def test_pending_linked_queue_under_non_hub_root_is_labelled_logically(self):
+        home = self.h.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            queues = home / "projects/work/queues"
+            queues.mkdir(parents=True)
+            target = home / "projects/client/q"
+            target.mkdir(parents=True)
+            (target / "queue.md").write_text("🎛️ CONTROL-Q APP-1 · t · lane ALL\n")
+            (queues / "app").symlink_to(target)
+            m = self.save_config()
+            for scope in ("client", "work"):
+                with self.subTest(scope=scope):
+                    args = self.c.parser_for(m, "test").parse_args([
+                        "pending", "--compartment", scope, "--projects", str(self.h.projects),
+                        "--queues", str(queues), "--seen", str(self.h.root / "seen.json")])
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        self.assertEqual(self.c.cmd_pending(m, args), 0)
+                    rows = [json.loads(line) for line in output.getvalue().splitlines()]
+                    self.assertEqual([(r["project"], r["compartment"]) for r in rows],
+                                     [("app", "work")] if scope == "work" else [])
+                    self.assertEqual((self.h.root / "seen.json").exists(), scope == "work")
+
+    def test_path_compartment_without_following_last_checks_each_fence_form(self):
+        home = self.h.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            (home / "real").mkdir(parents=True)
+            (home / "alias").symlink_to(home / "real")
+            (home / "loop").symlink_to(home / "loop")
+            self.config["fenced"].append(str(home / "alias/secret"))
+            m = self.save_config()
+            for path in (home / "garden-club/x", home / "garden-club", home / "real/secret", home / "loop/x"):
+                with self.subTest(path=path):
+                    self.assertEqual(self.c.path_compartment(m.compartments, path, os.getcwd(),
+                                                            follow_last=False), "fenced")
+
+    def test_path_compartment_keeps_lexical_fence_after_parent_link_changes(self):
+        home = self.h.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            for name in ("real", "other"):
+                (home / name).mkdir(parents=True)
+            alias = home / "alias"
+            alias.symlink_to(home / "real")
+            self.config["fenced"].append(str(alias / "secret"))
+            m = self.save_config()
+            self.c.fenced_forms(m.compartments, os.getcwd())
+            alias.unlink()
+            alias.symlink_to(home / "other")
+            self.assertEqual(self.c.path_compartment(m.compartments, alias / "secret", os.getcwd(),
+                                                    follow_last=False), "fenced")
+
+    def test_queue_compartment_refuses_fenced_root(self):
+        home = self.h.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            m = self.save_config()
+            self.assertEqual(self.c.queue_compartment(m, home / "garden-club/queues/app/queue.md"),
+                             {"compartment": "fenced"})
+
+    def test_queue_compartment_folds_hub_paths(self):
+        home = self.h.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            folder = home / ".hub/projects/my app"
+            folder.mkdir(parents=True)
+            (folder / "queue.md").write_text("🎛️ CONTROL-Q APP-1 · t · lane ALL\n")
+            self.config["hub"]["paths"] = [str(home / ".HUB/PROJECTS")]
+            m = self.save_config()
+            self.assertEqual(self.c.queue_compartment(m, folder / "queue.md"), {"compartment": "p:my app"})
+
+    def test_queue_compartment_does_not_route_a_blocked_hub(self):
+        home = self.h.root / "home"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            queues = home / ".hub/projects"
+            self.config["hub"]["paths"] = [str(queues)]
+            m = self.save_config()
+            with patch.object(self.c, "safe_resolve", side_effect=[
+                    (queues, False), (queues / "app", False), (queues, True)]), \
+                    patch.object(self.c, "path_compartment", return_value="fenced"):
+                self.assertEqual(self.c.queue_compartment(m, queues / "app/queue.md"), {"compartment": "fenced"})
 
     def test_pending_queue_under_declared_link_keeps_its_compartment(self):
         home = self.h.root / "home"
@@ -1446,13 +1569,14 @@ class Compartments(unittest.TestCase):
                     queues.mkdir(parents=True)
                     (queues / "swapped").symlink_to(target)
                     m = self.save_config()
+                    fence_paths = (Path(os.path.abspath(fence)), Path(os.path.realpath(fence)))
                     with patch.object(self.c.os, "lstat", wraps=os.lstat) as lstats, \
                             patch.object(self.c.os, "stat", wraps=os.stat) as stats:
                         result = self.c.queue_compartment(m, queues / "swapped/queue.md")
                     self.assertEqual(result, {"compartment": "fenced"})
                     for probes in (lstats, stats):
-                        self.assertTrue(all(not self.c.under(Path(call.args[0]), fence)
-                                            for call in probes.call_args_list))
+                        self.assertTrue(all(not self.c.under(Path(os.path.abspath(call.args[0])), root)
+                                            for call in probes.call_args_list for root in fence_paths))
 
     def test_live_record_keeps_the_lines_compartment(self):
         m = self.save_config()

@@ -1784,17 +1784,22 @@ def cmd_pending(m, args):
         if args.compartment not in names and not PROJECT_COMPARTMENT.fullmatch(args.compartment):
             raise CompartmentConfigError(f"pending: unknown compartment; known: {', '.join(sorted(names))}, or p:<project>")
     seen_path = Path(args.seen or m.state("autonomous/seen.json")).expanduser()
-    try:
-        entries = json.loads(seen_path.read_text()) if seen_path.exists() else []
-    except (OSError, ValueError):
-        raise Failed("pending: the seen file is not readable") from None
-    if not isinstance(entries, list) or any(
-            not isinstance(entry, str) and not (isinstance(entry, list) and len(entry) == 2
-                                               and all(isinstance(value, str) for value in entry))
-            for entry in entries):
-        raise Failed("pending: the seen file is not readable")
-    seen = {entry for entry in entries if isinstance(entry, str)}
-    scoped_seen = {tuple(entry) for entry in entries if isinstance(entry, list)}
+    if m.compartments is None:
+        data = json.loads(seen_path.read_text()) if seen_path.exists() else []
+        seen = {entry for entry in data if not isinstance(entry, list)} if isinstance(data, list) else set(data)
+        pairs = [entry for entry in data if isinstance(entry, list)] if isinstance(data, list) else []
+    else:
+        try:
+            entries = json.loads(seen_path.read_text()) if seen_path.exists() else []
+        except (OSError, ValueError, RecursionError):
+            raise Failed("pending: the seen file is not readable") from None
+        if not isinstance(entries, list) or any(
+                not isinstance(entry, str) and not (isinstance(entry, list) and len(entry) == 2
+                                                   and all(isinstance(value, str) for value in entry))
+                for entry in entries):
+            raise Failed("pending: the seen file is not readable")
+        seen = {entry for entry in entries if isinstance(entry, str)}
+        scoped_seen = {tuple(entry) for entry in entries if isinstance(entry, list)}
     cutoff = datetime.now(timezone.utc).timestamp() - args.since_hours * 3600
     items, projects = [], transcript_root(m, args.projects)
     for folder in sorted(projects.iterdir()) if projects.is_dir() else []:
@@ -1824,13 +1829,14 @@ def cmd_pending(m, args):
         items += [{**a, "id": f"{a['project']}:{a['key']}:A:{a['line']}"}
                   for a in answered_escalations(m, Path(queues).expanduser())]
     new = [i for i in items if i["id"] not in seen
+           and i.get("compartment") != "fenced"
            and (m.compartments is None or (i["compartment"], i["id"]) not in scoped_seen)
            and (args.compartment is None or i.get("compartment") == args.compartment)]
     for i in new:
         print(json.dumps(i, ensure_ascii=False))
     if new:
         if m.compartments is None:
-            private_write(seen_path, json.dumps(sorted(seen | {i["id"] for i in new})))
+            private_write(seen_path, json.dumps(sorted(seen | {i["id"] for i in new}) + pairs))
         else:
             entries += [list(key) for key in {(i["compartment"], i["id"]) for i in new} - scoped_seen]
             private_write(seen_path, json.dumps(sorted(entries, key=lambda entry: json.dumps(entry, ensure_ascii=False))))
