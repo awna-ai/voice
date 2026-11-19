@@ -95,11 +95,11 @@ def tripwire_crew(h, member, fences, *args, allow_root_metadata=False):
         ') (with send-signal SIGKILL))' for p in fences)
     if allow_root_metadata:
         profile = '(version 1)(allow default)' + ''.join(
-            '(deny file-read-data file-write* (subpath ' + json.dumps(str(p.resolve())) +
+            '(deny file-read* file-write* (require-all (subpath ' + literal +
+            ') (require-not (literal ' + literal + '))) (with send-signal SIGKILL))'
+            '(deny file-read-data file-read-xattr file-write* (literal ' + literal +
             ') (with send-signal SIGKILL))'
-            '(deny file-read-metadata (require-all (subpath ' + json.dumps(str(p.resolve())) +
-            ') (require-not (literal ' + json.dumps(str(p.resolve())) +
-            '))) (with send-signal SIGKILL))' for p in fences)
+            for literal in (json.dumps(str(p.resolve()), ensure_ascii=False) for p in fences))
     return subprocess.run([shutil.which("sandbox-exec"), "-p", profile, sys.executable,
                            str(CREW), "--member", member, *args], capture_output=True, text=True,
                           cwd=h.root, env={**os.environ, "HOME": str(TEST_HOME)}, timeout=60)
@@ -698,6 +698,112 @@ class FenceLinks(unittest.TestCase):
             self.assertEqual(proc.stdout, "")
             self.assertIn("the fenced folder ~/secret is a link", proc.stderr)
 
+    def test_dotdot_fences_refused_before_any_lstat(self):
+        for value in ("~/nope/../secret", "~/secret/inner/.."):
+            with self.subTest(value=value):
+                self.config["fenced"] = ["~/real", value]
+                message = (f'compartments: the fenced folder {value} has a ".." part; '
+                           'write it without ".."')
+                with patch.object(os, "lstat", side_effect=AssertionError("unexpected lstat")) as probe, \
+                        patch.object(subprocess, "run") as run:
+                    with self.assertRaises(self.c.CompartmentConfigError) as caught:
+                        self.load(todo_command=[sys.executable])
+                self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+                self.assertEqual(str(caught.exception), message)
+                probe.assert_not_called()
+                run.assert_not_called()
+                proc = self.cli("where")
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertEqual(proc.stdout, "")
+                self.assertIn(message, proc.stderr)
+
+    def test_nested_fences_refused_before_any_lstat(self):
+        pairs = [("~/secret", "~/secret/inner"), ("~/real", "~/real/inner"),
+                 ("~/Real", "~/real/inner"), ("~/real/inner", "~/real")]
+        for values in pairs:
+            with self.subTest(values=values):
+                self.config["fenced"] = list(values)
+                outer, inner = (values if values[0].endswith(("secret", "real", "Real"))
+                                else values[::-1])
+                message = (f"compartments: the fenced folder {inner} is inside the fenced folder "
+                           f"{outer}; fence only {outer}")
+                with patch.object(os, "lstat", side_effect=AssertionError("unexpected lstat")) as probe, \
+                        patch.object(subprocess, "run") as run:
+                    with self.assertRaises(self.c.CompartmentConfigError) as caught:
+                        self.load(todo_command=[sys.executable])
+                self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+                self.assertEqual(str(caught.exception), message)
+                probe.assert_not_called()
+                run.assert_not_called()
+                proc = self.cli("where")
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertEqual(proc.stdout, "")
+                self.assertIn(message, proc.stderr)
+
+    @unittest.skipUnless(sandbox_usable(), "sandbox-exec cannot apply a profile here")
+    def test_nested_fences_cli_tripwire_never_probes_fence(self):
+        for values in (("~/secret", "~/secret/inner"), ("~/real", "~/real/inner"),
+                       ("~/Real", "~/real/inner")):
+            with self.subTest(values=values):
+                self.config["fenced"] = list(values)
+                proc = self.cli("where", tripwire=True)
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertEqual(proc.stdout, "")
+                self.assertIn("is inside the fenced folder", proc.stderr)
+
+    def test_unencodable_fence_fails_closed(self):
+        self.config["fenced"] = ["/tmp/\ud800x"]
+        with patch.object(subprocess, "run") as run:
+            with self.assertRaises(Exception) as caught:
+                self.load(todo_command=[sys.executable])
+        self.assertIsInstance(caught.exception, self.c.CompartmentConfigError)
+        self.assertIn("cannot check", str(caught.exception))
+        self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+        run.assert_not_called()
+
+    def test_todo_non_utf8_list_cli_keeps_refusal(self):
+        tool = self.home / "non-utf8-todo.py"
+        payload = b'{"open": [{"text": "caf\xe9"}]}'
+        tool.write_text("import sys\n"
+                        'assert sys.argv[1:] == ["list", "--json"]\n'
+                        f"sys.stdout.buffer.write({payload!r})\n")
+        proc = self.cli("where", todo_command=[sys.executable, str(tool)])
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertEqual(proc.stdout, "")
+        self.assertNotIn("Traceback", proc.stderr)
+        self.assertTrue(proc.stderr.rstrip().endswith(
+            "(could not add a TODO item: todo_command list printed no open list)"), proc.stderr)
+
+    def test_tripwire_root_metadata_profile_is_narrow(self):
+        fence = self.home / "Café"
+        fence.mkdir()
+        literal = json.dumps(str(fence.resolve()), ensure_ascii=False)
+        with patch.object(subprocess, "run") as run:
+            tripwire_crew(self.h, "unused", [fence], "where", allow_root_metadata=True)
+        profile = run.call_args.args[0][2]
+        self.assertEqual(profile, '(version 1)(allow default)'
+                         '(deny file-read* file-write* (require-all (subpath ' + literal +
+                         ') (require-not (literal ' + literal + '))) (with send-signal SIGKILL))'
+                         '(deny file-read-data file-read-xattr file-write* (literal ' + literal +
+                         ') (with send-signal SIGKILL))')
+
+    @unittest.skipUnless(sandbox_usable(), "sandbox-exec cannot apply a profile here")
+    def test_tripwire_root_metadata_allowance_still_kills_reads(self):
+        fence = self.home / "real"
+        inside = fence / "unread.txt"
+        inside.write_text("invented fenced text")
+        child = self.home / "tripwire-child.py"
+        cases = [(f"os.lstat({str(fence)!r})", 0),
+                 (f"open({str(inside)!r}).read()", -9),
+                 (f"os.lstat({str(inside)!r})", -9),
+                 (f"os.getxattr({str(fence)!r}, 'invented')", -9)]
+        for operation, expected in cases:
+            with self.subTest(operation=operation):
+                child.write_text("import os\n" + operation + "\n")
+                with patch.dict(globals(), {"CREW": child}):
+                    proc = tripwire_crew(self.h, "unused", [fence], allow_root_metadata=True)
+                self.assertEqual(proc.returncode, expected, proc.stderr)
+
     def test_trailing_slash_refused(self):
         self.config["fenced"] = ["~/secret/"]
         self.assertEqual(self.refusal().links, [self.home / "secret"])
@@ -736,6 +842,33 @@ class FenceLinks(unittest.TestCase):
         self.assertEqual(str(exc), '; '.join(
             f'compartments: the fenced folder {value} is a link; put the folder it points to in '
             '"fenced" instead, or remove the link' for value in ("~/other", "~/secret")))
+
+    def assert_one_link_and_item(self, spellings):
+        argv = self.todo_tool()
+        self.config["fenced"] = spellings
+        exc = self.refusal(todo_command=argv)
+        self.assertEqual(exc.links, [self.home / "secret"])
+        self.assertEqual(str(exc).count("compartments: the fenced folder"), 1)
+        self.assertIn(f"the fenced folder {spellings[0]} is a link", str(exc))
+        self.assertEqual(len(self.items()), 2)
+        self.assertIn(f"the fenced folder {self.home / 'secret'} is a link.", self.items()[1]["text"])
+
+    def test_case_alias_is_one_link_and_item(self):
+        probe = self.home / "case-probe"
+        probe.touch()
+        try:
+            same = os.path.samefile(probe, self.home / "CASE-PROBE")
+        except FileNotFoundError:
+            same = False
+        if not same:
+            self.skipTest("fixture volume is case-sensitive")
+        self.assert_one_link_and_item(["~/secret", "~/SECRET"])
+
+    def test_resolved_home_alias_is_one_link_and_item(self):
+        alias = str(self.home.resolve() / "secret")
+        if alias == str(self.home / "secret"):
+            self.skipTest("fixture home has no distinct resolved spelling")
+        self.assert_one_link_and_item(["~/secret", alias])
 
     def test_todo_command_validation_without_links(self):
         self.config["fenced"] = []
@@ -799,6 +932,21 @@ else:
             self.assertIn(f"the fenced folder {self.home / link} is a link", item["text"])
             self.assertFalse(item["done"])
 
+    def test_todo_marker_ends_at_sentence(self):
+        argv = self.todo_tool()
+        longer = self.home / "secret is a link/x"
+        seeded = {"text": f"Voice refused a compartment map: the fenced folder {longer} is a link. "
+                         'Put the folder it points to in "fenced" instead, or remove the link.',
+                  "done": False}
+        self.store.write_text(json.dumps({"todos": [seeded]}))
+        self.refusal(todo_command=argv)
+        self.assertEqual(len(self.items()), 2)
+        self.assertEqual(self.items()[0], seeded)
+        self.assertEqual(self.items()[1], {
+            "text": f"Voice refused a compartment map: the fenced folder {self.home / 'secret'} is a link. "
+                    'Put the folder it points to in "fenced" instead, or remove the link.',
+            "done": False})
+
     def test_todo_done_item_does_not_dedupe(self):
         argv = self.todo_tool()
         self.refusal(todo_command=argv)
@@ -826,7 +974,7 @@ else:
                  (subprocess.TimeoutExpired(argv, 10, output=private, stderr=private),
                   "todo_command list timed out")]
         for output in ("not JSON", "[]", '{}', '{"open": {}}'):
-            cases.append((subprocess.CompletedProcess(argv, 0, output, private),
+            cases.append((subprocess.CompletedProcess(argv, 0, output.encode("utf-8"), private),
                           "todo_command list printed no open list"))
         for result, reason in cases:
             with self.subTest(reason=reason, result=type(result).__name__):
@@ -836,7 +984,7 @@ else:
                 self.assertTrue(str(exc).endswith(f"(could not add a TODO item: {reason})"), str(exc))
                 self.assertNotIn(private, str(exc))
                 run.assert_called_once_with([*argv, "list", "--json"], stdin=subprocess.DEVNULL,
-                                            capture_output=True, text=True, timeout=10, check=False)
+                                            capture_output=True, timeout=10, check=False)
 
     def test_todo_add_errors_still_try_next_link(self):
         argv = [sys.executable]
@@ -848,7 +996,7 @@ else:
                                 (subprocess.CompletedProcess(argv, 7, private, private), "todo_command add exited 7")):
             with self.subTest(reason=reason):
                 with patch.object(subprocess, "run", side_effect=[
-                        subprocess.CompletedProcess(argv, 0, '{"open": []}', ""), failure,
+                        subprocess.CompletedProcess(argv, 0, b'{"open": []}', ""), failure,
                         subprocess.CompletedProcess(argv, 0, "", "")]) as run:
                     exc = self.refusal(todo_command=argv)
                 self.assertTrue(str(exc).endswith(f"(could not add a TODO item: {reason})"), str(exc))
@@ -870,7 +1018,7 @@ else:
         # All home-relative argv elements expand, including the executable.
         (self.home / "python").symlink_to(sys.executable)
         with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess(
-                [], 0, '{"open": []}', "")) as run:
+                [], 0, b'{"open": []}', "")) as run:
             self.refusal(todo_command=["~/python", "~/todo.py"])
         self.assertEqual(run.call_args_list[0].args[0],
                          [str(self.home / "python"), str(self.home / "todo.py"), "list", "--json"])
