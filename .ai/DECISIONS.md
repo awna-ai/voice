@@ -690,3 +690,10 @@ for this one key (V-Q15 answer 2, 2026-11-09).
   3.12 raises on a 10,000-deep list, while 3.14 and 3.15 parse it. The cap of 64 levels is checked on
   the text before parsing, so the answer no longer depends on the interpreter. Real configs are
   4 levels deep.
+
+## 2026-11-20: a fence's spelling folds before it is encoded (VF39)
+
+Encoding first lost long s and sharp s, letting their Mac data-volume spellings evade a fence.
+`fence_encode` folds non-ASCII characters before encoding; this only adds fence matches and fails closed.
+`encode` stays unchanged to match real project-folder names, and routing stays unchanged to avoid moving records between compartments.
+The Kelvin sign stays fenced through the existing NFC normalization.

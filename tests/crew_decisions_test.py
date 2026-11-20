@@ -724,6 +724,40 @@ class FenceLinks(unittest.TestCase):
             "/System/Volumes/Data" + str(outside.resolve() / "real"), target_is_directory=True)
         return outside
 
+    def folded_data_volume_fence(self, name, spelling):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        fence = outside / name
+        fence.mkdir()
+        self.require_data_volume_spelling(fence)
+        look = Path("/System/Volumes/Data" + str(outside.resolve() / spelling))
+        try:
+            same = os.path.samefile(look, fence)
+        except OSError:
+            same = False
+        if not same:
+            self.skipTest(f"temporary folder has no {spelling} spelling")
+        return fence.resolve(), look
+
+    def test_long_s_look_in_data_volume_spelling_is_fenced(self):
+        for name, spelling in (("secret-notes", "ſecret-notes"), ("glass-jar", "glaß-jar")):
+            with self.subTest(spelling=spelling):
+                fence, look = self.folded_data_volume_fence(name, spelling)
+                self.assertTrue(self.c.matches_fence(look / "file.txt", self.c.FenceRoots([fence])))
+
+    def test_where_long_s_look_in_data_volume_spelling_is_fenced(self):
+        for name, spelling in (("secret-notes", "ſecret-notes"), ("glass-jar", "glaß-jar")):
+            with self.subTest(spelling=spelling):
+                fence, look = self.folded_data_volume_fence(name, spelling)
+                self.config["fenced"] = [str(fence)]
+                proc = self.cli("where", "--cwd", str(look))
+                self.assertEqual(proc.returncode, 4, proc.stderr)
+
+    def test_kelvin_sign_look_stays_fenced(self):
+        roots = self.c.FenceRoots([self.home / "kelp-notes"])
+        look = Path("/System/Volumes/Data" + str(self.home / "Kelp-notes/file.txt"))
+        self.assertTrue(self.c.matches_fence(look, roots))
+
     def test_data_volume_spelling_refused_before_any_look(self):
         for kind, value, prefix in (
                 ("fenced", "/System/Volumes/Data" + str(self.home / "real/inner"), "/System/Volumes/Data"),
@@ -2084,6 +2118,15 @@ class Compartments(unittest.TestCase):
         sys.path.insert(0, str(SCRIPTS))
         import crew_decisions
         self.c = crew_decisions
+
+    def test_fence_spelled_with_long_s_matches_folder_and_record(self):
+        self.config["fenced"] = ["~/garden-club", "~/ſecret-notes"]
+        c = self.c.check_compartments(self.config)
+        folder = self.c.encode("~/secret-notes")
+        with self.subTest(comparison="folder"):
+            self.assertEqual(self.c.folder_compartment(c, folder), "fenced")
+        with self.subTest(comparison="record"):
+            self.assertEqual(self.c.record_compartment(c, {"project": self.c.project_name(folder)}), "fenced")
 
     def garden_filters(self, overrides):
         self.config["compartments"]["garden"] = {

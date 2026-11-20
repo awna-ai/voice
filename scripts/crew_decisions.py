@@ -146,6 +146,12 @@ def encode(path):
     return re.sub(r"[^A-Za-z0-9]", "-", unicodedata.normalize("NFC", str(Path(path).expanduser())))
 
 
+def fence_encode(path):
+    """encode(path), each non-ASCII character case-folded first: APFS opens ſ as s and ß as ss."""
+    path = unicodedata.normalize("NFC", str(Path(path).expanduser()))
+    return encode("".join(c if c.isascii() else c.casefold() for c in path))
+
+
 class CompartmentMap(dict):
     """Validated config with lazily resolved fence roots, private to one member."""
     _fenced_roots = None
@@ -308,7 +314,7 @@ class FenceRoots(tuple):
     """Fence spellings and their folded comparisons, prepared once per member."""
     def __new__(cls, roots):
         value = super().__new__(cls, roots)
-        value.comparisons = tuple((tuple(map(fold, root.parts)), fold(encode(root))) for root in value)
+        value.comparisons = tuple((tuple(map(fold, root.parts)), fold(fence_encode(root))) for root in value)
         return value
 
 
@@ -317,7 +323,7 @@ def matches_fence(path, roots):
         return False
     comparisons = roots.comparisons if isinstance(roots, FenceRoots) else FenceRoots(roots).comparisons
     parts = tuple(map(fold, path.parts))
-    encoded = fold(encode(path))
+    encoded = fold(fence_encode(path))
     return any(parts[:len(root)] == root or spelling in encoded for root, spelling in comparisons)
 
 
@@ -470,7 +476,7 @@ def folder_children(c, folder):
 
 def folder_compartment(c, folder_name):
     folded = fold(folder_name)
-    if any(fold(encode(f)) in folded for f in c["fenced"]):
+    if any(fold(fence_encode(f)) in folded for f in c["fenced"]):
         return "fenced"
     name = re.sub(r"--claude-worktrees-.*", "", folder_name, flags=re.I)
     hub = c.get("hub")
@@ -574,7 +580,7 @@ def record_compartment(c, record):
     def matches(folder):
         prefix = fold(project_name(encode(folder)))
         return fold(project) == prefix or fold(project).startswith(prefix + "-")
-    if any(fold(project_name(encode(f))) in fold(project) for f in c["fenced"]):
+    if any(fold(project_name(fence_encode(f))) in fold(project) for f in c["fenced"]):
         return "fenced"
     found = [(len(project_name(encode(folder))), name) for name, folder in declared_folders(c) if matches(folder)]
     return max(found)[1] if found else "p:" + project
