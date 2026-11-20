@@ -476,7 +476,7 @@ def folder_children(c, folder):
 
 def folder_compartment(c, folder_name):
     folded = fold(folder_name)
-    if any(fold(fence_encode(f)) in folded for f in c["fenced"]):
+    if any(fold(encode(f)) in folded or fold(fence_encode(f)) in folded for f in c["fenced"]):
         return "fenced"
     name = re.sub(r"--claude-worktrees-.*", "", folder_name, flags=re.I)
     hub = c.get("hub")
@@ -580,7 +580,8 @@ def record_compartment(c, record):
     def matches(folder):
         prefix = fold(project_name(encode(folder)))
         return fold(project) == prefix or fold(project).startswith(prefix + "-")
-    if any(fold(project_name(fence_encode(f))) in fold(project) for f in c["fenced"]):
+    if any(fold(project_name(encode(f))) in fold(project) or
+           fold(project_name(fence_encode(f))) in fold(project) for f in c["fenced"]):
         return "fenced"
     found = [(len(project_name(encode(folder))), name) for name, folder in declared_folders(c) if matches(folder)]
     return max(found)[1] if found else "p:" + project

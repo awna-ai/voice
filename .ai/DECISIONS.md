@@ -694,6 +694,9 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 ## 2026-11-20: a fence's spelling folds before it is encoded (VF39)
 
 Encoding first lost long s and sharp s, letting their Mac data-volume spellings evade a fence.
-`fence_encode` folds non-ASCII characters before encoding; this only adds fence matches and fails closed.
-`encode` stays unchanged to match real project-folder names, and routing stays unchanged to avoid moving records between compartments.
+`matches_fence` compares the folded spelling, which never unfences a spelling that opens the fence.
+Folder and record checks compare both the plain and folded spelling, because Claude Code builds folder names
+the plain way; every check fails closed. `fence_encode` folds non-ASCII characters before encoding.
+`encode` stays unchanged to match real project-folder names, and routing stays unchanged to avoid moving
+records between compartments.
 The Kelvin sign stays fenced through the existing NFC normalization.

@@ -2119,7 +2119,7 @@ class Compartments(unittest.TestCase):
         import crew_decisions
         self.c = crew_decisions
 
-    def test_fence_spelled_with_long_s_matches_folder_and_record(self):
+    def test_fence_with_folded_letters_matches_folder_and_record(self):
         self.config["fenced"] = ["~/garden-club", "~/ſecret-notes"]
         c = self.c.check_compartments(self.config)
         folder = self.c.encode("~/secret-notes")
@@ -2127,6 +2127,14 @@ class Compartments(unittest.TestCase):
             self.assertEqual(self.c.folder_compartment(c, folder), "fenced")
         with self.subTest(comparison="record"):
             self.assertEqual(self.c.record_compartment(c, {"project": self.c.project_name(folder)}), "fenced")
+        for fence in ("~/straße-notes", "~/ſecret-notes", "~/ﬁle-box"):
+            self.config["fenced"] = ["~/garden-club", fence]
+            c = self.c.check_compartments(self.config)
+            folder = self.c.encode(fence)
+            with self.subTest(fence=fence, comparison="folder"):
+                self.assertEqual(self.c.folder_compartment(c, folder), "fenced")
+            with self.subTest(fence=fence, comparison="record"):
+                self.assertEqual(self.c.record_compartment(c, {"project": self.c.project_name(folder)}), "fenced")
 
     def garden_filters(self, overrides):
         self.config["compartments"]["garden"] = {
@@ -3314,6 +3322,22 @@ class Compartments(unittest.TestCase):
                 "mine", "--projects", str(self.h.projects), "--out", str(self.h.root / "mine.jsonl")])
             self.c.cmd_mine(m, args)
         proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+        self.assertIn("1 fenced folders", proc.stdout)
+        self.assertEqual(self.h.read("out.jsonl"), "")
+
+    def test_folded_letter_fence_mine_skips_plain_encoded_folder(self):
+        self.config["fenced"] = ["~/straße-notes"]
+        m = self.save_config()
+        folder = self.c.encode("~/straße-notes").lower()
+        record = said("2026-09-01T00:00:00Z", "never read this")
+        del record["cwd"]
+        self.h.session(folder, "s", record)
+        with patch.object(self.c, "read_session", side_effect=AssertionError("read fenced transcript")):
+            args = self.c.parser_for(m, "test").parse_args([
+                "mine", "--projects", str(self.h.projects), "--out", str(self.h.root / "mine.jsonl")])
+            self.c.cmd_mine(m, args)
+        proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("1 fenced folders", proc.stdout)
         self.assertEqual(self.h.read("out.jsonl"), "")
 
