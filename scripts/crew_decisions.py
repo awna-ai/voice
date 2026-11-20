@@ -77,6 +77,7 @@ adds one open item, with the text as one argv element.
 """
 import argparse
 import errno
+import functools
 import hashlib
 import json
 import math
@@ -150,6 +151,32 @@ def fence_encode(path):
     """encode(path), each non-ASCII character case-folded first: APFS opens ſ as s and ß as ss."""
     path = unicodedata.normalize("NFC", str(Path(path).expanduser()))
     return encode("".join(c if c.isascii() else c.casefold() for c in path))
+
+
+# fold(c) of every non-ASCII character c whose fold is ASCII letters: ſ→s, K (Kelvin)→k, ß and ẞ→ss,
+# ﬀ→ff, ﬁ→fi, ﬂ→fl, ﬃ→ffi, ﬄ→ffl, ﬅ and ﬆ→st (a scan of every code point; the test rescans it).
+FOLDS_TO_ASCII = frozenset({"ff", "ffi", "ffl", "fi", "fl", "k", "s", "ss", "st"})
+
+
+@functools.lru_cache(maxsize=4096)
+def dashed_in(spelling, name):
+    """True when spelling occurs in name, where a "-" in name may stand for any run of spelling in
+    FOLDS_TO_ASCII: Claude Code writes ſ in a cwd as a lone "-". Both arguments are already folded."""
+    if not spelling:
+        return True
+    positions = set()
+    for char in name:
+        positions.add(0)
+        reached = set()
+        for i in positions:
+            if spelling[i] == char:
+                reached.add(i + 1)
+            if char == "-":
+                reached.update(i + len(t) for t in FOLDS_TO_ASCII if spelling.startswith(t, i))
+        if len(spelling) in reached:
+            return True
+        positions = reached
+    return False
 
 
 class CompartmentMap(dict):
@@ -476,7 +503,7 @@ def folder_children(c, folder):
 
 def folder_compartment(c, folder_name):
     folded = fold(folder_name)
-    if any(fold(encode(f)) in folded or fold(fence_encode(f)) in folded for f in c["fenced"]):
+    if any(dashed_in(fold(encode(f)), folded) or dashed_in(fold(fence_encode(f)), folded) for f in c["fenced"]):
         return "fenced"
     name = re.sub(r"--claude-worktrees-.*", "", folder_name, flags=re.I)
     hub = c.get("hub")
@@ -580,8 +607,11 @@ def record_compartment(c, record):
     def matches(folder):
         prefix = fold(project_name(encode(folder)))
         return fold(project) == prefix or fold(project).startswith(prefix + "-")
-    if any(fold(project_name(encode(f))) in fold(project) or
-           fold(project_name(fence_encode(f))) in fold(project) for f in c["fenced"]):
+    def comparable(project):
+        project = fold(project)
+        return "-" + project[1:] if project.startswith(".") else project
+    if any(dashed_in(comparable(project_name(encode(f))), comparable(project)) or
+           dashed_in(comparable(project_name(fence_encode(f))), comparable(project)) for f in c["fenced"]):
         return "fenced"
     found = [(len(project_name(encode(folder))), name) for name, folder in declared_folders(c) if matches(folder)]
     return max(found)[1] if found else "p:" + project

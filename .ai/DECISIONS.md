@@ -703,3 +703,12 @@ past the data-volume check: VF42. `fence_encode` folds non-ASCII characters befo
 `encode` stays unchanged to match real project-folder names, and routing stays unchanged to avoid moving
 records between compartments.
 The Kelvin sign stays fenced through the existing NFC normalization.
+
+## 2026-11-20: a "-" in a transcript folder's name may stand for a folded letter (VF43)
+
+Claude Code names folders with `e.replace(/[^a-zA-Z0-9]/g, "-")`, without normalization and on UTF-16 units,
+so ſ and the Kelvin sign leave a lone `-`; names over 200 characters are cut and given a hash.
+A folder's `-` may stand for any non-ASCII character's fold to ASCII letters; fence checks fail closed.
+The accepted over-match fences a real `~/.ecret-notes` under `~/secret-notes`, since its folder name is identical;
+a fence whose last name is only fold letters, such as `~/s`, fences every hidden folder in home.
+VF39's Kelvin line holds for looks, but not for folder names; this rule covers those names.
