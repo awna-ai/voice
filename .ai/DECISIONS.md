@@ -640,3 +640,18 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **Not covered here, filed separately:** a fence reached through a link into the `/System/Volumes/Data`
   spelling, or written in it, is fenced after the load only by that spelling (VF35), and a fence written with two leading
   slashes fences nothing (VF36). Both predate VF31.
+
+## 2026-11-20: a fence or follow folder in the Mac's data-volume spelling refuses the map (VF35)
+
+- **The rule:** a `fenced` or `follow` value that starts with `/System/Volumes/Data` (any case) refuses the
+  compartment map (exit 2) before Voice looks at anything on disk, and so does a fence whose path, once its links
+  are followed, lands there. Each message names the value and the fix: write it without `/System/Volumes/Data`.
+  It is a plain config error, never the fenced-link error, so no TODO item is added.
+- **Why refuse, not compare both spellings:** on a Mac, `/System/Volumes/Data/<path>` and `<path>` are one folder,
+  and Voice compares spellings. A plainly written fence already catches a look by the data-volume spelling, but a
+  fence written in that spelling is never matched by a plain look. Refusing leaves only plain fences, which match
+  both ways. It fails closed, like rule (b) for a fence that is a link, and needs no list of the Mac's folder
+  aliases. The checks are by spelling only, so they run the same on every system.
+- **What still needs the backstop's one-way match:** a link that enters the data-volume spelling inside a fence and
+  climbs back out with `..` ends at a plain path, so this rule lets it through. The backstop still refuses that
+  list for its look inside the fence. A test pins it.
