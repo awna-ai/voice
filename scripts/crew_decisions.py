@@ -681,8 +681,9 @@ def refuse_fence_links(c):
         if prefix:
             raise CompartmentConfigError(
                 f"compartments: the follow folder {shown(value)} starts with {shown(prefix)}, "
-                "which a Mac can use as a second name for other folders; "
-                f"write it without {shown(prefix)}")
+                "a second name the Mac uses for other folders; "
+                f"write its path without {shown(prefix)}, or, if it has no path without it, "
+                "move the folder into your home folder")
         for fence_value in c["fenced"]:
             fence = Path(os.path.abspath(absolute_path(fence_value, Path.cwd())))
             if under(follow, fence):
@@ -698,8 +699,9 @@ def refuse_fence_links(c):
         if prefix:
             raise CompartmentConfigError(
                 f"compartments: the fenced folder {shown(value)} starts with {shown(prefix)}, "
-                "which a Mac can use as a second name for other folders; "
-                f"write it without {shown(prefix)}")
+                "a second name the Mac uses for other folders; "
+                f"write its path without {shown(prefix)}, or, if it has no path without it, "
+                "move the folder into your home folder")
     values = c["fenced"]
     lexical = [Path(os.path.abspath(absolute_path(value, Path.cwd()))) for value in values]
     if not lexical:
@@ -760,8 +762,9 @@ def refuse_fence_links(c):
         if prefix:
             raise CompartmentConfigError(
                 f"compartments: the fenced folder {shown(values[i])} is reached through a link "
-                f"into {shown(prefix)}, which a Mac can use as a second name for other folders; "
-                f"write the fence by its path without {shown(prefix)}")
+                f"into {shown(prefix)}, a second name the Mac uses for other folders; "
+                f"Voice can only fence a folder it can name without {shown(prefix)}, so move the folder "
+                "into your home folder or fence the folder the link stands in for")
     for i, inner in enumerate(values):
         for j, outer in enumerate(values):
             if i == j or inner == outer:

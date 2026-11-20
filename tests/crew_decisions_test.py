@@ -682,6 +682,7 @@ class FenceLinks(unittest.TestCase):
     def outside_backstop_fences(self):
         outside = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, outside)
+        self.require_data_volume_spelling(outside)
         (outside / "o").mkdir()
         (outside / "r2/z/s1/s2").mkdir(parents=True)
         (outside / "elsewhere/deep").mkdir(parents=True)
@@ -697,12 +698,18 @@ class FenceLinks(unittest.TestCase):
         probes["open"] = stack.enter_context(patch.object(builtins, "open", wraps=builtins.open))
         return probes
 
+    def require_data_volume_spelling(self, folder):
+        try:
+            same = os.path.samefile("/System/Volumes/Data" + str(folder.resolve()), folder.resolve())
+        except OSError:
+            same = False
+        if not same:
+            self.skipTest("temporary folder has no /System/Volumes/Data spelling")
+
     def data_volume_folder(self):
         outside = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, outside)
-        if not (Path("/System/Volumes/Data").is_dir()
-                and os.path.samefile("/System/Volumes/Data" + str(outside.resolve()), outside.resolve())):
-            self.skipTest("temporary folder has no /System/Volumes/Data spelling")
+        self.require_data_volume_spelling(outside)
         (outside / "real/a/f").mkdir(parents=True)
         (outside / "L").symlink_to(
             "/System/Volumes/Data" + str(outside.resolve() / "real"), target_is_directory=True)
@@ -713,6 +720,8 @@ class FenceLinks(unittest.TestCase):
                 ("fenced", "/System/Volumes/Data" + str(self.home / "real/inner"), "/System/Volumes/Data"),
                 ("fenced", "/system/volumes/data" + str(self.home / "real/inner"), "/System/Volumes/Data"),
                 ("follow", "/System/Volumes/Data" + str(self.home), "/System/Volumes/Data"),
+                ("follow", "/system/volumes/data" + str(self.home), "/System/Volumes/Data"),
+                ("follow", "/.nofollow" + str(self.home), "/.nofollow"),
                 ("fenced", "/.nofollow" + str(self.home / "real/inner"), "/.nofollow"),
                 ("fenced", "/.resolve/1" + str(self.home / "real/inner"), "/.resolve"),
                 ("fenced", "/.nofollow/System/Volumes/Data" + str(self.home / "real/inner"), "/.nofollow"),
@@ -727,16 +736,16 @@ class FenceLinks(unittest.TestCase):
                 self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
                 self.assertEqual(str(caught.exception),
                                  f"compartments: the {kind} folder {value} starts with {prefix}, "
-                                 "which a Mac can use as a second name for other folders; "
-                                 f"write it without {prefix}")
+                                 "a second name the Mac uses for other folders; "
+                                 f"write its path without {prefix}, or, if it has no path without it, "
+                                 "move the folder into your home folder")
                 for name, probe in probes.items():
                     for call in probe.call_args_list:
                         try:
                             path = Path(call.args[0])
                         except TypeError:
                             continue
-                        self.assertFalse(self.c.under(path, Path("/System/Volumes/Data")), (name, path))
-                        self.assertFalse(len(path.parts) > 1 and path.parts[1].startswith("."), (name, path))
+                        self.fail((name, path))
 
     def test_fence_through_link_into_data_volume_refused(self):
         outside = self.data_volume_folder()
@@ -747,8 +756,92 @@ class FenceLinks(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
         self.assertEqual(str(caught.exception),
                          f"compartments: the fenced folder {outside / 'L/a/f'} is reached through a link "
-                         "into /System/Volumes/Data, which a Mac can use as a second name for other folders; "
-                         "write the fence by its path without /System/Volumes/Data")
+                         "into /System/Volumes/Data, a second name the Mac uses for other folders; "
+                         "Voice can only fence a folder it can name without /System/Volumes/Data, so move the folder "
+                         "into your home folder or fence the folder the link stands in for")
+
+    def test_fence_through_link_into_lower_case_data_volume_refused(self):
+        outside = self.data_volume_folder()
+        target = "/system/volumes/data" + str(outside.resolve() / "real")
+        try:
+            same = os.path.samefile(target, outside / "real")
+        except OSError:
+            same = False
+        if not same:
+            self.skipTest("temporary folder has no /system/volumes/data spelling")
+        (outside / "L").unlink()
+        (outside / "L").symlink_to(target, target_is_directory=True)
+        self.config["follow"] = [str(outside.resolve())]
+        self.config["fenced"] = [str(outside / "L/a/f")]
+        with self.assertRaises(self.c.CompartmentConfigError) as caught:
+            self.load()
+        self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+        self.assertEqual(str(caught.exception),
+                         f"compartments: the fenced folder {outside / 'L/a/f'} is reached through a link "
+                         "into /System/Volumes/Data, a second name the Mac uses for other folders; "
+                         "Voice can only fence a folder it can name without /System/Volumes/Data, so move the folder "
+                         "into your home folder or fence the folder the link stands in for")
+
+    def test_home_in_data_volume_spelling_refused_before_any_look(self):
+        self.require_data_volume_spelling(self.home)
+        self.config["fenced"] = ["~/real/inner"]
+        with patch.dict(os.environ, {"HOME": "/System/Volumes/Data" + str(self.home.resolve())}):
+            with ExitStack() as stack:
+                probes = self.fence_looks(stack)
+                with self.assertRaises(self.c.CompartmentConfigError) as caught:
+                    self.load()
+        self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+        self.assertEqual(str(caught.exception),
+                         "compartments: the fenced folder ~/real/inner starts with /System/Volumes/Data, "
+                         "a second name the Mac uses for other folders; "
+                         "write its path without /System/Volumes/Data, or, if it has no path without it, "
+                         "move the folder into your home folder")
+        for name, probe in probes.items():
+            for call in probe.call_args_list:
+                try:
+                    path = Path(call.args[0])
+                except TypeError:
+                    continue
+                self.fail((name, path))
+
+    def test_home_link_into_data_volume_refused(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        h = outside / "h"
+        h.mkdir()
+        self.require_data_volume_spelling(h)
+        hl = outside / "hl"
+        hl.symlink_to("/System/Volumes/Data" + str(h.resolve()), target_is_directory=True)
+        self.config["fenced"] = ["~/sec"]
+        self.config["follow"] = ["~/sec/inside"]
+        with patch.dict(os.environ, {"HOME": str(hl)}):
+            with self.assertRaises(self.c.CompartmentConfigError) as caught:
+                self.load()
+        # The written follow is inside the written fence, before HOME's link is resolved.
+        self.assertEqual(str(caught.exception),
+                         "compartments: the follow folder ~/sec/inside is inside the fenced folder ~/sec; "
+                         "a fenced folder's links are never followed")
+
+    def test_data_volume_only_folder_refusals_end_in_a_working_fix(self):
+        outside = self.data_volume_folder()
+        self.config["follow"] = [str(outside.resolve())]
+        for value, explanation, fix in (
+                (str(outside / "L/a/f"),
+                 "is reached through a link into /System/Volumes/Data, "
+                 "a second name the Mac uses for other folders; "
+                 "Voice can only fence a folder it can name without /System/Volumes/Data, so ",
+                 "move the folder into your home folder or fence the folder the link stands in for"),
+                ("/System/Volumes/Data" + str(outside.resolve() / "real/a/f"),
+                 "starts with /System/Volumes/Data, a second name the Mac uses for other folders; "
+                 "write its path without /System/Volumes/Data, or, if it has no path without it, ",
+                 "move the folder into your home folder")):
+            with self.subTest(value=value):
+                self.config["fenced"] = [value]
+                with self.assertRaises(self.c.CompartmentConfigError) as caught:
+                    self.load()
+                self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+                self.assertEqual(str(caught.exception), f"compartments: the fenced folder {value} {explanation}{fix}")
+                self.assertTrue(str(caught.exception).endswith(fix))
 
     def test_fence_through_link_into_nofollow_refused(self):
         outside = Path(tempfile.mkdtemp())
@@ -769,8 +862,9 @@ class FenceLinks(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
         self.assertEqual(str(caught.exception),
                          f"compartments: the fenced folder {outside / 'L/a/f'} is reached through a link "
-                         "into /.nofollow, which a Mac can use as a second name for other folders; "
-                         "write the fence by its path without /.nofollow")
+                         "into /.nofollow, a second name the Mac uses for other folders; "
+                         "Voice can only fence a folder it can name without /.nofollow, so move the folder "
+                         "into your home folder or fence the folder the link stands in for")
 
     def test_plain_fence_still_fences_data_volume_spelling(self):
         outside = self.data_volume_folder()
@@ -809,9 +903,7 @@ class FenceLinks(unittest.TestCase):
     def test_backstop_refuses_firmlink_spelling_inside_fence(self):
         outside = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, outside)
-        if not (Path("/System/Volumes/Data").is_dir()
-                and os.path.samefile("/System/Volumes/Data" + str(outside.resolve()), outside.resolve())):
-            self.skipTest("temporary folder has no /System/Volumes/Data spelling")
+        self.require_data_volume_spelling(outside)
         (outside / "fol").mkdir()
         (outside / "l1").mkdir()
         (outside / "real/f1/sub").mkdir(parents=True)
