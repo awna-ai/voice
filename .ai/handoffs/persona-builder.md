@@ -2,6 +2,35 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF39: a fence's spelling folds before it is encoded (2026-11-20, lane: V1)
+
+- **Status: built, verified, land started** (full `ci-local.sh`, detached; V-Q26's rule). Rebased on `33e2bbd`
+  (VF40) with the two DECISIONS entries kept side by side.
+- **The gap (from VF35's security review):** `matches_fence` compared `fold(encode(path))`, and `encode` turns a
+  long s, sharp s or ligature into `-` before `fold` can map it, so a look in the Mac data-volume spelling
+  (`/System/Volumes/Data<home>/ſecret/…`) slipped past a fence.
+- **Commits:** brief `8514dac`, code `2ee94ff` (`fence_encode` folds non-ASCII letters before encoding;
+  `FenceRoots` and `matches_fence` use it). Fix-up 1: brief `4cf35ba`, code `25da5f8`. Fix-up 2: brief
+  `cea5a11`, tests and decision `1629503`. Code by Codex; fix-up 2's mutation check and test runs were mine
+  (Codex hit my 10-minute limit after editing). Rebased again onto `be7173c` (VF41) before the land, every code
+  commit `=` in `git range-diff`: now `4031d25`, `665aa4c`, `fe7aab9`, `aeb524d`, `75f9d00`, `8034aac`, in that
+  order. The shas in the lines below are the pre-rebase ones the reviews and test runs saw.
+- **Verifier (Fable) on `891f968` (pre-rebase `2ee94ff`): FAIL**, and the security review agreed: the folder and
+  record checks compared only the folded spelling against folder names Claude Code builds the plain way, so a fence
+  spelled with ß, ſ or a ligature stopped matching its own folder. Fix-up 1 checks both spellings there.
+- **Repeat Verifier (Opus) on `25da5f8`: PASS.** A 200k random differential found no folder name or record
+  `origin/main` fences and HEAD does not; 40k respellings that really open a fence lost none. Should-fixes: the
+  `FenceRoots` half was unpinned (fix-up 2 adds a non-ASCII fence looked at in its own and in a capital ASCII
+  spelling; reverting the `FenceRoots` fold turns 4 subtests red, measured), and the `J̌`-for-`ǰ` residual, which
+  is VF42.
+- **Security review (Opus) on `25da5f8`:** no fail-open in the diff. Lows: the `J̌` family (VF42) and the folded
+  half's substring over-match, which fails closed and is now accepted in the decision. One older medium, filed as
+  **VF43**: a cwd typed with a long s gives a folder name like `…--ecret`, which `folder_compartment` routes
+  `p:.ecret`, not `fenced` (reproduced at `25da5f8`); records with a `cwd` are still dropped by the cwd check.
+- **Verified (measured, Python 3.12.14 on Mimi):** Compartments and FenceLinks 179 OK (1 skip) at `25da5f8` and
+  again at `1629503`.
+- **Not verified:** a case-sensitive APFS volume, a non-Mac filesystem, a real non-ASCII home folder.
+
 ## VF40: a member config Voice cannot read as a JSON object exits 2 on every Python (2026-11-20, attended)
 
 - **Status: landed** on `main` at `33e2bbd` (2026-11-20, `ci-local.sh` tier full, 39 steps, all passed under
