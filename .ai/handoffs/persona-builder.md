@@ -4,7 +4,7 @@ One record per slice, newest first. Paraphrase only; no real person.
 
 ## VF31: a fenced folder that is a link refuses the compartment map (2026-11-19, lane: V1)
 
-- **Status:** built on `lane-v1/VF31`, not landed, parked on V-Q29 (lane-v.md): `790139e` brief, `960cda7` tests, `974a18f` code, `d1bd709`
+- **Status:** Verifier PASS on `47a938b` (fix-up 7), landing from `lane-v1/VF31` (run `014927-r1`); the earlier parks (V-Q29, V-Q30, V-Q31) are answered. Commits: `790139e` brief, `960cda7` tests, `974a18f` code, `d1bd709`
   fix-up 1 brief, `741a705` fix-up 1, `e9374ba` this record, `97e1300` fix-up 2 brief, `bc53a24` its amendment,
   `621c61f` fix-up 2, then this record's update. The owner picked V-Q28 (b). Code by Codex from every brief.
 - **What it does:** `load_member` checks each `fenced` path with one `lstat` of the path itself, never anything
@@ -121,6 +121,52 @@ One record per slice, newest first. Paraphrase only; no real person.
 - **Owed:** V-Q31's answer, then its fix-up (with the M9 test and the should-fixes it keeps), the full three
   suites (never beside a Verifier in the same worktree), the repeat Verifier on Opus, the full gate and the land.
   The DECISIONS draft marks the open points "V-Q31".
+
+- **Fix-up 6 (2026-11-20, run `014927-r1`; V-Q31 A):** `e7a0d5c` brief, `40977b8`, `5bd3753` and `db60397` its
+  three amendments, `919ef9a` code (Codex). A backstop: every look `refuse_fence_links` makes (the home walk and
+  every fence walk, each round's own `lstat` excepted) is recorded, and once the rounds find no link, a look at or
+  inside any fence refuses the map with its own message, so no such list loads. Links are followed only inside a
+  `follow` folder, inside home or outside it, except the paths the home walk itself looked at (home's own path);
+  the folder-identity check and its `stat`s are gone. M9 pinned (the resolved-forms guard), control characters
+  shown as `?` in every message and the TODO text, the R1 home-link pin exact
+  (`[data, data/me, data, data/me, data/me/secret]`). Exempt tests changed to the new rule: a fence under `/tmp` or
+  behind an outside link now needs `follow`; four tests that pinned the removed home `stat` keep their outcome
+  assertions. **Planning misses (four passes):** the brief removed the home `stat`s without exempting the four tests
+  that count them; it defined home's own path by the configured spelling (`/var/...`) while the walk meets
+  `/private/var/...`, and wrote the new tests' `follow` in the configured spelling against the decision's own "real
+  path" rule; two test-plumbing tests keyed on the home walk's empty kwargs; and Codex was told to skip the full
+  suites, so `Compartments.test_fence_parent_link_and_link_hop_limit` showed only in my run. Codex stopped and
+  reported each time.
+  **Verified (measured, Python 3.12.14 on Mimi, kernel tripwires run):** documents 14 OK, hardening 40 OK,
+  decisions 230 run, 1 error (that test), 1 skip.
+  **Security review (Opus) on `919ef9a`:** both earlier highs closed without `follow`; with `follow`, high 1 is
+  refused by the backstop and high 2 is refused after a readlink of the other fence's own link (the accepted limit
+  below). Mediums: a fence reached through a link into the `/System/Volumes/Data` spelling loads after looks inside a
+  fence and is fenced afterwards only by that spelling; a fence written with two leading slashes fences nothing (the
+  check predates VF31). Lows: a refusal can name a folder inside another fence; home's-path matching was case-folded.
+  **Repeat Verifier (Opus) on `919ef9a`: FAIL.** Must-fix: the backstop compared by parts only, so the firmlink
+  spelling loaded (her tested fix: `matches_fence`); high 2 with `follow` reads the fenced link, "must-fix or the
+  owner accepts it in writing". Should-fixes: the DECISIONS wording (rule (b), "at or inside", home's own path) and
+  the case-folded match. Mutations: all killed by non-tripwire tests. No regressions.
+- **Fix-up 7:** `29e93b1` brief, `c8cfb85` code (Codex): the backstop compares with `matches_fence` (her firmlink
+  fixture as a test), home's own path matches exactly (NFC, no casefold; a `/VAR` test), the `Compartments` test gets
+  `follow`. `47a938b` the decision: **the accepted limit now names the read of the other fence's own link**, and the
+  home walk's looks and read along a path through a fenced link. My reading, for the owner to overrule: V-Q31 put
+  exactly this case to her ("A fenced link can be read", item 3, the security review's high 2 fixture) before she
+  picked A, whose "what stays" includes reading a link; the case is inside a `follow` folder and is always refused.
+  Rule (b) is now stated as holding outside that limit. Filed: **VF35** `2xLWsw1K` (the data-volume spelling after
+  load) and **VF36** `CZf2Szeh` (the `//` anchor), both To Do, both predating VF31.
+  **Repeat Verifier (Opus) on `47a938b`: PASS.** Must-fix 1 fixed (her fixture refused; fix-up 6 loaded it). She
+  agrees the decision now states must-fix 2 truthfully and with the reading of V-Q31 above. Both mutations killed by
+  non-tripwire tests (each the only failure in 76). No regressions: plain fences, a followed link inside home, a
+  missing home, a `/var/...` fence with home under `/var` and a home that is a link all load; NFC and NFD spellings
+  of a home link load. Should-fixes, taken into the decision and VF35, not into code: a fence written in the
+  data-volume spelling still fails open after looks (the match is one way; VF35 widened); a fence whose name
+  begins another's (`real/f` beside `real/f2`) is refused with a false "looked inside" message in a list that also
+  follows a link, fail-closed (fix-up 6 loaded that list); the firmlink and `/VAR` tests skip off macOS.
+  **Verified at `c8cfb85` (measured, Python 3.12.14 on Mimi, kernel tripwires run):** decisions 232 OK (1 skip,
+  the case-folding volume), documents 14 OK, hardening 40 OK. The security review ran on fix-up 6 (`919ef9a`);
+  fix-up 7's three changed code lines were reviewed by the Verifier's pass, not by a second security review.
 
 ## VF30: `pending --compartment` refuses an unknown name, and keeps compartments apart (2026-11-19, lane: V1)
 

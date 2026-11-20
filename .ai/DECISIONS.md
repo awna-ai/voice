@@ -618,8 +618,11 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **No list that looks inside a fence loads (V-Q31 A):** while it checks, Voice keeps a list of every
   folder it looked at. Once every fence's real place is known, a look at or inside any fence, other than
   that fence's own single check, refuses the map (exit 2), with a message naming the fence. The
-  comparison is the one the walk's own guards use, so a Mac's `/System/Volumes/Data/...` spelling of a
-  fence counts as the fence.
+  comparison is the one the walk's own guards use, so a look by a Mac's `/System/Volumes/Data/...`
+  spelling inside a plainly written fence counts as inside it. It matches one way only: a fence written
+  in the data-volume spelling is not matched by a plain look (VF35). And because the guards' match also
+  takes the folder name as text, a fence whose name begins another folder's name (`notes` beside
+  `notes-old`) can be refused with this message in a list that also follows a link; that fails closed.
 - **The accepted limit (V-Q31 A, replacing V-Q30's "one look"):** in a list that sends one fence through
   a link into another inside a `follow` folder (R1, a fenced link plus a fence inside the folder it
   points to; R2, a fence written through a link into another fence), Voice may look at several folders'
@@ -635,5 +638,5 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **Rule (b), outside that limit:** a fenced folder that is itself a link refuses the map, and Voice
   never reads that link, except in the cases the accepted limit above names.
 - **Not covered here, filed separately:** a fence reached through a link into the `/System/Volumes/Data`
-  spelling is fenced after the load only by that spelling (VF35), and a fence written with two leading
+  spelling, or written in it, is fenced after the load only by that spelling (VF35), and a fence written with two leading
   slashes fences nothing (VF36). Both predate VF31.
