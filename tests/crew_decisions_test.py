@@ -88,8 +88,8 @@ class Harness:
         (self.root / name).write_text(json.dumps(value))
 
 
-def tripwire_crew(h, member, fences, *args, allow_root_metadata=False):
-    """Kill on fence reads, optionally allowing the load-time fence-root metadata probe."""
+def tripwire_profile(fences, allow_root_metadata=False):
+    """The sandbox profile that kills on fence reads, optionally allowing the fence-root metadata probe."""
     profile = '(version 1)(allow default)' + ''.join(
         '(deny file-read* file-write* file-read-metadata (subpath ' + json.dumps(str(p.resolve()), ensure_ascii=False) +
         ') (with send-signal SIGKILL))' for p in fences)
@@ -100,6 +100,12 @@ def tripwire_crew(h, member, fences, *args, allow_root_metadata=False):
             '(deny file-read-data file-read-xattr file-write* (literal ' + literal +
             ') (with send-signal SIGKILL))'
             for literal in (json.dumps(str(p.resolve()), ensure_ascii=False) for p in fences))
+    return profile
+
+
+def tripwire_crew(h, member, fences, *args, allow_root_metadata=False):
+    """Kill on fence reads, optionally allowing the load-time fence-root metadata probe."""
+    profile = tripwire_profile(fences, allow_root_metadata)
     return subprocess.run([shutil.which("sandbox-exec"), "-p", profile, sys.executable,
                            str(CREW), "--member", member, *args], capture_output=True, text=True,
                           cwd=h.root, env={**os.environ, "HOME": str(TEST_HOME)}, timeout=60)
@@ -1769,35 +1775,22 @@ class FenceLinks(unittest.TestCase):
         inside.write_text("invented fenced text")
         outside = self.home / "outside.txt"
         outside.touch()
-        child = self.home / "tripwire-child.py"
-        cases = [(f"os.lstat({str(fence)!r})", 0),
-                 (f"open({str(inside)!r}).read()", -9),
-                 (f"os.lstat({str(inside)!r})", -9),
-                 (self.xattr_call(fence), -9),
-                 (self.xattr_call(outside) + "; assert result == -1; assert ctypes.get_errno() == 93", 0)]
-        for operation, expected in cases:
-            with self.subTest(operation=operation):
-                child.write_text("import os\n" + operation + "\n")
-                with patch.dict(globals(), {"CREW": child}):
-                    proc = tripwire_crew(self.h, "unused", [fence], allow_root_metadata=True)
+        # Use platform binaries because a killed Python.app makes macOS show a crash dialog.
+        cases = [(["/usr/bin/stat", str(fence)], 0),
+                 (["/bin/cat", str(inside)], -9),
+                 (["/usr/bin/stat", str(inside)], -9),
+                 (["/usr/bin/xattr", "-p", "invented", str(fence)], -9),
+                 (["/usr/bin/xattr", "-p", "invented", str(outside)], 1)]
+        for argv, expected in cases:
+            with self.subTest(argv=argv):
+                proc = subprocess.run([shutil.which("sandbox-exec"), "-p",
+                                       tripwire_profile([fence], allow_root_metadata=True), *argv],
+                                      capture_output=True, text=True, timeout=60)
                 self.assertEqual(proc.returncode, expected, proc.stderr)
-                self.assertEqual(proc.stdout, "")
-
-    def xattr_call(self, path):
-        return ("import ctypes, ctypes.util; "
-                "libc = ctypes.CDLL(ctypes.util.find_library('c'), use_errno=True); "
-                f"result = libc.getxattr({os.fsencode(path)!r}, b'invented', None, 0, 0, 0)")
-
-    @unittest.skipUnless(sys.platform == "darwin", "macOS getxattr signature and ENOATTR")
-    def test_xattr_call_outside_fence_returns_enoattr(self):
-        outside = self.home / "outside.txt"
-        outside.touch()
-        proc = subprocess.run([sys.executable, "-c", self.xattr_call(outside) +
-                               "; assert result == -1; assert ctypes.get_errno() == 93"],
-                              capture_output=True, text=True, timeout=60)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(proc.stdout, "")
-        self.assertEqual(proc.stderr, "")
+                if expected == -9:
+                    self.assertEqual(proc.stdout, "")
+                if argv[-1] == str(outside):
+                    self.assertIn("No such xattr: invented", proc.stderr)
 
     def test_trailing_slash_refused(self):
         self.config["fenced"] = ["~/secret/"]
