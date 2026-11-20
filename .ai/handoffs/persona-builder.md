@@ -68,9 +68,35 @@ One record per slice, newest first. Paraphrase only; no real person.
 - **Owed:** V-Q29's answer, then its fix-up, a repeat Verifier, the full gate and the land. The private member wiring (its `todo_command` and its skill's exit-2 line) is
   on the private repo's `lane-v1/VF31`, merged once this lands.
 
+- **Fix-up 3 (2026-11-20, run `191638-r1`; V-Q30 A):** the compartment map's optional `follow` list (decision:
+  `.ai/DECISIONS.md` § 2026-11-20, a draft until the land). `4821c77` brief, `eb9a867` 3b brief, `9d9f0ac` code
+  (Codex). **Planning misses:** brief 3 kept an unguarded common-folder walk that read `~/hop` before the rule could
+  refuse it, and its R1 test missed the walk's look at `~/real` itself; Codex reported both instead of bending the
+  tests, and 3b settled them. At `9d9f0ac`, Python 3.12.14: decisions 206 OK, documents 14 OK, hardening 40 OK.
+  **Security review (Opus) on `9d9f0ac`:** one high: a fence spelled outside home that leads into home
+  (`/private<home>/...`, the firmlink spelling, or a link outside home into home) skips the rule, reopening R3 and
+  R4. One medium, filed as VF34 (`usAGO2mB`): the runtime walk in `fenced_forms` re-walks unguarded after load.
+  Lows: casefolded `follow` matching, the follow-inside-fence check by spelling only, control characters in the
+  refusal, and `/tmp` refused when two outside fences share `/`. **Repeat Verifier (Opus) on `9d9f0ac`: FAIL.**
+  Must-fixes: (1) the review's high; (2) `["~/secret", "<tmp>/o/al/inner/deep"]` with both links to `~/real` makes
+  one new `lstat` of `<home>/real/inner/deep`, because links followed outside home set no `linked[i]`; (3) the
+  start walk was guarded only by written spellings (`follow: ["~/fl"]`, `~/fl/ln -> ~/real`,
+  `["~/fl/ln/sec", "<tmp>/o/l/q/f2"]`, `<tmp>/o/l -> <home>/real/sec` looks at `real/sec/q`); (4) the home walk
+  looks inside a fenced link's target when home itself is a link into it. Should-fixes: pin part-wise follow
+  matching (a `startswith` mutant survived), exact follow matching, the misleading "cannot check" message for
+  `~/`-style fences, and follow-inside-fence by resolved spelling.
+- **Fix-up 4 (`f40f6fe` brief, `e777e9a` code, Codex): red, not landable.** One guarded walk per fence from `/`, home
+  found by spelling or folder identity, exact NFC follow matching, `?` for control characters. It closes the
+  review's high and the Verifier's (1) and (3) by design, but the full decisions suite has 13 errors and 3 failures
+  and two documents tripwire subtests fail: `os.stat(home_resolved)` raises when the test home doesn't exist, so
+  every load fails closed (Codex ran only `FenceLinks`). **Owed (fix-up 5):** treat a missing home as having no
+  identity; the Verifier's (2) (set `linked[i]` for any followed link not on home's own path, with her fixture as a
+  test); (4) (skip the home walk's look when a fence could hold home, or record it with the owner); the
+  should-fixes; then the full three suites, the repeat Verifier on Opus, the full gate and the land.
+
 ## VF30: `pending --compartment` refuses an unknown name, and keeps compartments apart (2026-11-19, lane: V1)
 
-- **Status: built, not landed.** Branch `lane-v1/VF30` (pushed): `c7f32eb` brief, `e28eb6e` tests, `cc20fb9` code,
+- **Status: landed** on `main` at `9c1ed52` (2026-11-19, `ci-local.sh` all passed); the private half merged as ai-personas PR #43 (`9cd5936`). Branch `lane-v1/VF30` (removed): `c7f32eb` brief, `e28eb6e` tests, `cc20fb9` code,
   `98c0a78` fix-up 1 brief, `063cf1c` fix-up 1, `d0523d7` record, `9702d3b` fix-up 2 brief, `532ded8` fix-up 2,
   then this record. Private half: ai-personas `lane-v1/VF30` `7ece0b1`
   (local), one expectation in the private member's seen-file test.
@@ -118,7 +144,7 @@ One record per slice, newest first. Paraphrase only; no real person.
   no-map-pairs mutants and her `sandbox-exec` probe were not run (stopped for the land window; the tests read as
   covering them). Notes: a queues *root* that is a link is labelled by its target, a queue *folder* by where it sits;
   fix-up 1's narrow race (the fallback's `is_dir`/`.git` calls after the swap check) is unchanged.
-- **Owed:** the full `scripts/ci-local.sh` land (V-Q26 A), then the ai-personas PR.
+- **Owed:** nothing; both were done on 2026-11-20 (run `191638-r1`).
 
 ## PE3.3v: voice gets a full check on `main` after lands, and a release reads the green ref (2026-11-18, lane: V1)
 

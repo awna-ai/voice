@@ -595,3 +595,25 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **One TODO item per link:** a member config may name a `todo_command` (an argv list, run without a shell).
   A refusal adds one item per linked fence, and none while an open item for that link exists; a done item
   doesn't count. The tool's own output is never shown, since it is the person's private list.
+
+## 2026-11-20: a member's `follow` list names the folders whose links Voice may follow (VF31)
+
+- **The rule is the member's own config:** the compartment map's optional `follow` lists folders (a
+  shared projects folder, a wiki). On a fenced folder's path, a link below the home folder is followed
+  only when it sits at or below a follow folder; any other link stops the load (exit 2) before Voice
+  reads it, and the message names the link and the two fixes (add its folder to `follow`, or write the
+  fence by its real path). With no `follow`, no such link is followed. Voice never builds in a folder
+  layout, and a member never has to regroup their folders.
+- **Links on the home folder's own path stay free:** the ones the system puts there (such as `/var`
+  and `/tmp` on a Mac). For a fence outside the home folder, links at or above the fences' common
+  folder stay free too, as before.
+- **Follow folders are compared by spelling, never probed:** write one by its real path or under `~/`.
+  A follow folder inside a fence is refused, since a fence's links are never followed.
+- **Two leftovers are accepted, refused with one look (the owner's pick, V-Q30 A):** R1, a fenced link
+  plus a fence inside the folder it points to; R2, a fence written through a link into another fence.
+  In both, the load is still refused (exit 2), and before it is, Voice may look once at one folder's
+  name, size and dates inside the other fence (at most two such looks), never its files. Avoiding it would mean reading the
+  fenced link first, which the 2026-11-19 rule forbids. Both need a fence list that contradicts
+  itself. Tests pin both.
+- **Rule (b) is unchanged:** a fenced folder that is itself a link refuses the map, and Voice never
+  reads that link.
