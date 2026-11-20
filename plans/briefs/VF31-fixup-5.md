@@ -124,3 +124,27 @@ Then do sections 2 to 5 and section 6.
 The kernel tripwires cannot start inside your sandbox (`sandbox_apply` is refused there); their skips
 in your runs are expected, and the Claude reviewer reruns all three suites outside it. Count a suite
 as passing when every failure left is a skip of that kind, and list each skipped test by name.
+
+## Amendment 2 (after the second pass stopped at section 3)
+
+The pre-pass of section 3 is withdrawn: it `lstat`s plain fences before the nesting check and before
+the R3 refusals, which ten existing tests correctly forbid. **Remove the pre-pass and its helper
+entirely**; the rounds go back to fix-up 4's shape (with section 2's predicate change kept). Section 3
+becomes only its last bullet: keep `test_r1_home_link_into_fenced_link_target_refused_one_look_accepted`
+as it is (refused, the look at home's own folder pinned as R1's), and add the same pin for the
+first spelling (`fenced: [<tmp>/fz/secret]`, `<tmp>/fz/secret -> <tmp>/data`, home `<tmp>/u/me ->
+<tmp>/data/me`): refused naming that fence, the looks under `<tmp>/data` (both spellings) equal to
+the home walk's, asserted as an exact list the way `test_r1_fenced_link_and_fence_inside_its_target_refused_one_look_accepted`
+does. Drop section 3's tripwire test and its mutation.
+
+Section 2's test is too strict: the parent walk of `<tmp>/o/al/inner/deep` looks at `<home>/real` and
+`<home>/real/inner` while following `al`, and that is R1's accepted look (a fenced link, and a fence
+inside the folder it points to). What section 2 closes is the **fence root's own `lstat`** in round 1.
+Assert it the way the R1 test does: the `lstat` looks under `<home>/real` (both spellings) are exactly
+the walk's (`[<resolved home>/real, <resolved home>/real/inner]`), with no look at
+`<home>/real/inner/deep`; no `stat`, `readlink`, `scandir` or `open` under it; refused naming
+`~/secret`. Replace its tripwire test with nothing (the walk's look would be killed, as R1's is). The
+mutation (set `linked[i]` only inside home again) must make the exact-list assertion go red.
+
+Then sections 4, 5 and 6 as written. Every other existing test passes unchanged (the first
+amendment's three exempt tests aside); if one cannot, stop and report.
