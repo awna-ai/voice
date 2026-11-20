@@ -665,6 +665,8 @@ DATA_VOLUME = Path("/System/Volumes/Data")
 def mac_alias(path):
     """The start of path that a Mac may use as a second name for other folders, or None."""
     if len(path.parts) > 1 and path.parts[1].startswith("."):
+        if fold(path.parts[1]) == ".resolve" and len(path.parts) > 2:
+            return "/" + path.parts[1] + "/" + path.parts[2]
         return "/" + path.parts[1]
     if under(path, DATA_VOLUME):
         return str(DATA_VOLUME)

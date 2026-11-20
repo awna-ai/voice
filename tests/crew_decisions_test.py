@@ -723,7 +723,7 @@ class FenceLinks(unittest.TestCase):
                 ("follow", "/system/volumes/data" + str(self.home), "/System/Volumes/Data"),
                 ("follow", "/.nofollow" + str(self.home), "/.nofollow"),
                 ("fenced", "/.nofollow" + str(self.home / "real/inner"), "/.nofollow"),
-                ("fenced", "/.resolve/1" + str(self.home / "real/inner"), "/.resolve"),
+                ("fenced", "/.resolve/1" + str(self.home / "real/inner"), "/.resolve/1"),
                 ("fenced", "/.nofollow/System/Volumes/Data" + str(self.home / "real/inner"), "/.nofollow"),
                 ("follow", "/.vol", "/.vol")):
             with self.subTest(kind=kind, value=value):
@@ -746,6 +746,17 @@ class FenceLinks(unittest.TestCase):
                         except TypeError:
                             continue
                         self.fail((name, path))
+
+    def test_mac_alias_names_whole_alias_start(self):
+        for value, prefix in (
+                ("/.resolve/1/a/b", "/.resolve/1"),
+                ("/.RESOLVE/2/a", "/.RESOLVE/2"),
+                ("/.resolve", "/.resolve"),
+                ("/.nofollow/a", "/.nofollow"),
+                ("/System/Volumes/Data/a", "/System/Volumes/Data"),
+                ("/Users/a", None)):
+            with self.subTest(value=value):
+                self.assertEqual(self.c.mac_alias(Path(value)), prefix)
 
     def test_fence_through_link_into_data_volume_refused(self):
         outside = self.data_volume_folder()
