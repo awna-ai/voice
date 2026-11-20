@@ -696,7 +696,10 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 Encoding first lost long s and sharp s, letting their Mac data-volume spellings evade a fence.
 `matches_fence` compares the folded spelling, which never unfences a spelling that opens the fence.
 Folder and record checks compare both the plain and folded spelling, because Claude Code builds folder names
-the plain way; every check fails closed. `fence_encode` folds non-ASCII characters before encoding.
+the plain way; every check fails closed. The folded half also fences folders and projects that hold the folded
+letters (a fence `~/straße` also fences `strasse-photos`); that over-match is accepted, as the plain half's
+substring match already over-matches. A capital ASCII letter with a combining mark (`J̌` for `ǰ`) still slips
+past the data-volume check: VF42. `fence_encode` folds non-ASCII characters before encoding.
 `encode` stays unchanged to match real project-folder names, and routing stays unchanged to avoid moving
 records between compartments.
 The Kelvin sign stays fenced through the existing NFC normalization.

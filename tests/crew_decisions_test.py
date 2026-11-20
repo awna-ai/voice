@@ -740,13 +740,15 @@ class FenceLinks(unittest.TestCase):
         return fence.resolve(), look
 
     def test_long_s_look_in_data_volume_spelling_is_fenced(self):
-        for name, spelling in (("secret-notes", "ſecret-notes"), ("glass-jar", "glaß-jar")):
+        for name, spelling in (("secret-notes", "ſecret-notes"), ("glass-jar", "glaß-jar"),
+                               ("straße-notes", "straße-notes"), ("glaß-jar", "GLASS-JAR")):
             with self.subTest(spelling=spelling):
                 fence, look = self.folded_data_volume_fence(name, spelling)
                 self.assertTrue(self.c.matches_fence(look / "file.txt", self.c.FenceRoots([fence])))
 
     def test_where_long_s_look_in_data_volume_spelling_is_fenced(self):
-        for name, spelling in (("secret-notes", "ſecret-notes"), ("glass-jar", "glaß-jar")):
+        for name, spelling in (("secret-notes", "ſecret-notes"), ("glass-jar", "glaß-jar"),
+                               ("straße-notes", "straße-notes"), ("glaß-jar", "GLASS-JAR")):
             with self.subTest(spelling=spelling):
                 fence, look = self.folded_data_volume_fence(name, spelling)
                 self.config["fenced"] = [str(fence)]
