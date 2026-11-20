@@ -429,16 +429,19 @@ class PrivateOverlay(unittest.TestCase):
     def test_a_broken_overlay_is_named(self):
         self.overlay("{not json")
         proc = self.h.crew(self.member, "mine", "--out", "d.jsonl")
-        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.returncode, 2)
         self.assertIn("private.json is not JSON", proc.stderr)
 
     def test_an_overlay_of_the_wrong_shape_is_named(self):
-        for value, named in (([1, 2], "private.json must be a JSON object"),
-                             ({"filters": {"personal": ["a", "b"]}}, "private.json: filters.personal must be a string")):
-            self.overlay(value)
-            proc = self.h.crew(self.member, "mine", "--out", "d.jsonl")
-            self.assertEqual(proc.returncode, 1, value)
-            self.assertIn(named, proc.stderr)
+        self.overlay([1, 2])
+        proc = self.h.crew(self.member, "mine", "--out", "d.jsonl")
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("private.json must be a JSON object", proc.stderr)
+
+        self.overlay({"filters": {"personal": ["a", "b"]}})
+        proc = self.h.crew(self.member, "mine", "--out", "d.jsonl")
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("private.json: filters.personal must be a string", proc.stderr)
 
 
 FILLED = {"NAME": "Ari", "SLUG": "ari", "PRONOUNS": "they/them", "PRINCIPAL": "Robin", "PRINCIPAL_SLUG": "robin",
@@ -3540,9 +3543,16 @@ class Compartments(unittest.TestCase):
                     self.assertEqual(len(proc.stderr.splitlines()), 1)
 
     def test_member_and_private_bad_encoding_or_nesting(self):
+        inputs = (("deep-list", b"[" * 10000 + b"0" + b"]" * 10000),
+                  ("over-max-depth", b"[" * (self.c.MAX_CONFIG_DEPTH + 1) + b"]" * (self.c.MAX_CONFIG_DEPTH + 1)),
+                  ("bad-encoding", b"\xff"),
+                  ("empty-list", b"[]"),
+                  ("number", b"0"),
+                  ("invalid-json", b"{not json"),
+                  ("deep-object", b'{"filters": ' + b"[" * 10000 + b"0" + b"]" * 10000 + b"}"))
         for name in ("member.json", "private.json"):
-            for data in (b"[" * 10000 + b"0" + b"]" * 10000, b"\xff"):
-                with self.subTest(name=name, data=data[:1]):
+            for label, data in inputs:
+                with self.subTest(name=name, input=label):
                     self.h.member(ADA)
                     path = self.h.root / name
                     path.write_bytes(data)
@@ -3552,6 +3562,19 @@ class Compartments(unittest.TestCase):
                     self.assertEqual(len(errors.getvalue().splitlines()), 1)
                     self.assertIn("member config:", errors.getvalue())
                     path.unlink()
+
+    def test_private_config_at_max_depth_is_allowed(self):
+        depth = self.c.MAX_CONFIG_DEPTH - 1
+        (self.h.root / "private.json").write_bytes(
+            b'{"extra": ' + b"[" * depth + b"0" + b"]" * depth + b"}")
+        proc = self.h.crew(self.member, "where", "--cwd", str(TEST_HOME / "projects/work"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_json_depth_ignores_strings_and_does_not_recurse(self):
+        for text, expected in (('{"a": "[[[\\"[["}', 1), ("[]", 1), ("0", 0), ("[{}]", 2),
+                               ("[" * 100000 + "0" + "]" * 100000, 100000)):
+            with self.subTest(depth=expected):
+                self.assertEqual(self.c.json_depth(text), expected)
 
     def test_touched_no_config_base_parity(self):
         m = self.c.load_member(ADA)

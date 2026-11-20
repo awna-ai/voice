@@ -48,14 +48,14 @@ class Hardening(unittest.TestCase):
         self.assertEqual(crew.read_jsonl(output)[0]['text'], record['text'])
 
     def test_bad_config_shapes_are_one_line_errors(self):
-        for filename, value in [('member.json', []), ('member.json', None), ('private.json', []),
-                                ('private.json', {'filters': {'pasted_prefixes': [3]}})]:
+        for filename, value, expected_code in [('member.json', [], 2), ('member.json', None, 2), ('private.json', [], 2),
+                                               ('private.json', {'filters': {'pasted_prefixes': [3]}}, 1)]:
             with self.subTest(filename=filename, value=value):
                 self.h.member(ADA)
                 (self.h.root / 'private.json').unlink(missing_ok=True)
                 self.h.write(filename, value)
                 proc = self.h.crew(self.member, 'folders', '--projects', str(self.h.projects))
-                self.assertEqual(proc.returncode, 1)
+                self.assertEqual(proc.returncode, expected_code)
                 assert_cli_error(self, proc.stderr, "crew_decisions:")
         for value in ['Pasted: ', [4], None]:
             with self.subTest(prefixes=value):

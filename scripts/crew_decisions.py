@@ -109,6 +109,7 @@ PROJECT_COMPARTMENT = re.compile(r"p:[A-Za-z0-9.][A-Za-z0-9._-]*")
 TIERS = ("high", "medium", "low")
 REQUIRED = ("name", "slug", "principal", "principal_slug", "state_dir", "mark_word", "filters")
 REQUIRED_FILTERS = ("excluded_folders", "personal", "secret", "pasted_prefixes")
+MAX_CONFIG_DEPTH = 64
 
 
 class Failed(Exception):
@@ -643,7 +644,7 @@ def compile_pattern(key, pattern):
 
 def validate_config(config, source):
     if not isinstance(config, dict):
-        raise Failed(f"member config: {source} must be a JSON object")
+        raise MemberConfigError(f"member config: {source} must be a JSON object")
     filters = config.get("filters", {})
     if not isinstance(filters, dict):
         raise Failed(f"member config: {source}: filters must be a JSON object")
@@ -904,13 +905,38 @@ def load_member(config):
                   compartments=compartments)
 
 
+def json_depth(text):
+    """Count nesting without parsing JSON or counting brackets inside strings."""
+    depth = deepest = 0
+    in_string = escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif char in "]}":
+            depth -= 1
+    return deepest
+
+
 def read_json(path):
     try:
-        return json.loads(path.read_text())
+        text = path.read_text()
+        if json_depth(text) > MAX_CONFIG_DEPTH:
+            raise MemberConfigError(f"member config: {path.name}: nested deeper than {MAX_CONFIG_DEPTH} levels")
+        return json.loads(text)
     except (RecursionError, UnicodeDecodeError):
         raise MemberConfigError(f"member config: {path.name}: cannot read JSON file")
     except ValueError as exc:
-        raise Failed(f"member config: {path} is not JSON ({exc})")
+        raise MemberConfigError(f"member config: {path} is not JSON ({exc})")
 
 
 def read_member(path):

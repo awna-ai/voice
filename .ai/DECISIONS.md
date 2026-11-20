@@ -677,3 +677,16 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **What still needs the backstop's one-way match:** a link that enters an alias spelling inside a fence and climbs
   back out with `..` ends at a plain path, so this rule lets it through. The backstop still refuses that list for
   its look inside the fence. A test pins it.
+
+## 2026-11-20: a member config Voice cannot read as a JSON object exits 2, on every Python (VF40)
+
+- **The rule:** a member config that is not UTF-8, is not JSON, is nested deeper than
+  `MAX_CONFIG_DEPTH`, or has a top level that is not an object raises `MemberConfigError` and exits 2.
+  A readable object with a wrong or missing value (a missing key, a bad regex, `filters` that is not
+  an object, bad `pasted_prefixes`, bad `queue_answerer`, or `sources` in `member.json`) still raises
+  `Failed` and exits 1. The existing exit-2 refusals for `todo_command` and compartment maps stay
+  unchanged, as does the exit-1 non-object report from `privacy-check --dir`.
+- **Why a depth cap:** the JSON decoder's recursion limit differs between Python versions: Python
+  3.12 raises on a 10,000-deep list, while 3.14 and 3.15 parse it. The cap of 64 levels is checked on
+  the text before parsing, so the answer no longer depends on the interpreter. Real configs are
+  4 levels deep.
