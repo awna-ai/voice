@@ -605,26 +605,35 @@ for this one key (V-Q15 answer 2, 2026-11-09).
   With no `follow`, no such link is followed. Voice never builds in a folder layout, and a member never
   has to regroup their folders.
 - **Inside the home folder or outside it, the same rule (the owner's pick, V-Q31 A):** the only links
-  followed without a `follow` entry are those on the home folder's own path: the folders above it (such
-  as `/var` on a Mac, when the home folder sits under it) and the home folder itself. A fence under
-  another system link (`/tmp` on a Mac, say) needs that link in `follow` (`"follow": ["/tmp"]`). So a
-  fence written by another spelling of home, or through a link outside home that leads into it, meets
-  the same rule, with no check of which folder is which on disk.
+  followed without a `follow` entry are those on the home folder's own path, meaning every folder Voice
+  passes on the way to the home folder: the folders above it (such as `/var` on a Mac, when the home
+  folder sits under it), the home folder itself, and, when the home folder is a link, the folders on
+  the way to where it points. They are matched exactly (no case folding). A fence under another system
+  link (`/tmp` on a Mac, say) needs that link in `follow` (`"follow": ["/tmp"]`). So a fence written by
+  another spelling of home, or through a link outside home that leads into it, meets the same rule,
+  with no check of which folder is which on disk.
 - **Follow folders are compared by spelling, never probed:** part by part and exactly (no case
   folding), written by their real path or under `~/`. A follow folder inside a fence, by either
   spelling of the fence, is refused, since a fence's links are never followed.
 - **No list that looks inside a fence loads (V-Q31 A):** while it checks, Voice keeps a list of every
   folder it looked at. Once every fence's real place is known, a look at or inside any fence, other than
-  that fence's own single check, refuses the map (exit 2), with a message naming the fence.
+  that fence's own single check, refuses the map (exit 2), with a message naming the fence. The
+  comparison is the one the walk's own guards use, so a Mac's `/System/Volumes/Data/...` spelling of a
+  fence counts as the fence.
 - **The accepted limit (V-Q31 A, replacing V-Q30's "one look"):** in a list that sends one fence through
   a link into another inside a `follow` folder (R1, a fenced link plus a fence inside the folder it
   points to; R2, a fence written through a link into another fence), Voice may look at several folders'
   names, sizes and dates inside the other fence (one per folder down to the inner fence), and read where
-  a link inside it points, and then it refuses. Never a file's contents, and the list never loads.
-  Avoiding those looks would mean reading the fenced link first, which the 2026-11-19 rule forbids.
-  The same holds when the home folder is itself a link into the folder a fenced link points to: Voice
-  looks along the home folder's own path before it finds the fence is a link, then refuses. Every case
-  needs a fence list that routes one fence into another through a link; no config we know of does.
-  Tests pin each case.
-- **Rule (b) is unchanged:** a fenced folder that is itself a link refuses the map, and Voice never
-  reads that link.
+  a link at or inside it points, the other fence's own link included when that fence is itself a link
+  (V-Q31's "a fenced link can be read"), and then it refuses. The same holds when the home folder's own
+  path runs into a fence, or through a fenced link written by another spelling: Voice looks, and may read
+  that link, along the home folder's path before it finds the fence, then refuses. Never a file's
+  contents, and the list never loads. Avoiding those looks would mean knowing where a fence written
+  through a link really is before walking to it, which needs reading the fenced link first. Every case
+  needs a fence list that routes one fence, or the home folder, into another fence through a link; no
+  config we know of does. Tests pin each case.
+- **Rule (b), outside that limit:** a fenced folder that is itself a link refuses the map, and Voice
+  never reads that link, except in the cases the accepted limit above names.
+- **Not covered here, filed separately:** a fence reached through a link into the `/System/Volumes/Data`
+  spelling is fenced after the load only by that spelling (VF35), and a fence written with two leading
+  slashes fences nothing (VF36). Both predate VF31.
