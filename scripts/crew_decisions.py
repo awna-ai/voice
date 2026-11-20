@@ -717,6 +717,12 @@ def refuse_fence_links(c):
     except (OSError, ValueError):
         raise CompartmentConfigError(
             "compartments: cannot check the home folder, so the fenced folders cannot be checked")
+    prefix = mac_alias(home_resolved)
+    if prefix:
+        raise CompartmentConfigError(
+            f"compartments: the home folder is reached through a link into {shown(prefix)}, "
+            "a second name the Mac uses for other folders; "
+            f"Voice can only fence folders when the home folder has a path without {shown(prefix)}")
     follow_forms = {}
     for value in c.get("follow", []):
         path = Path(os.path.abspath(absolute_path(value, Path.cwd())))

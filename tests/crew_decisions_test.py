@@ -807,20 +807,71 @@ class FenceLinks(unittest.TestCase):
     def test_home_link_into_data_volume_refused(self):
         outside = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, outside)
-        h = outside / "h"
-        h.mkdir()
-        self.require_data_volume_spelling(h)
+        self.require_data_volume_spelling(outside)
+        (outside / "home/x/links").mkdir(parents=True)
         hl = outside / "hl"
-        hl.symlink_to("/System/Volumes/Data" + str(h.resolve()), target_is_directory=True)
-        self.config["fenced"] = ["~/sec"]
-        self.config["follow"] = ["~/sec/inside"]
+        self.config["fenced"] = [str(outside / "home/x")]
+        self.config["follow"] = ["~/x/links"]
+        for prefix in ("/System/Volumes/Data", "/.nofollow"):
+            with self.subTest(prefix=prefix):
+                target = prefix + str(outside.resolve() / "home")
+                if prefix == "/.nofollow":
+                    try:
+                        same = os.path.samefile(target, outside / "home")
+                    except OSError:
+                        same = False
+                    if not same:
+                        self.skipTest("temporary folder has no /.nofollow spelling")
+                if hl.is_symlink():
+                    hl.unlink()
+                hl.symlink_to(target, target_is_directory=True)
+                with patch.dict(os.environ, {"HOME": str(hl)}):
+                    with ExitStack() as stack:
+                        probes = self.fence_looks(stack)
+                        with self.assertRaises(self.c.CompartmentConfigError) as caught:
+                            self.load()
+                self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+                self.assertEqual(str(caught.exception),
+                                 "compartments: the home folder is reached through a link "
+                                 f"into {prefix}, a second name the Mac uses for other folders; "
+                                 "Voice can only fence folders when the home folder has a path "
+                                 f"without {prefix}")
+                roots = (outside / "home/x", outside.resolve() / "home/x",
+                         Path(prefix + str(outside.resolve() / "home/x")))
+                for name, probe in probes.items():
+                    for call in probe.call_args_list:
+                        try:
+                            path = Path(call.args[0])
+                        except TypeError:
+                            continue
+                        self.assertFalse(any(self.c.under(path, root) for root in roots), (name, path))
+
+    def test_home_link_follow_inside_plain_fence_refused(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        (outside / "home/x/links").mkdir(parents=True)
+        hl = outside / "hl"
+        hl.symlink_to(outside / "home", target_is_directory=True)
+        self.config["fenced"] = [str(outside / "home/x")]
+        self.config["follow"] = ["~/x/links"]
         with patch.dict(os.environ, {"HOME": str(hl)}):
             with self.assertRaises(self.c.CompartmentConfigError) as caught:
                 self.load()
-        # The written follow is inside the written fence, before HOME's link is resolved.
+        self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
         self.assertEqual(str(caught.exception),
-                         "compartments: the follow folder ~/sec/inside is inside the fenced folder ~/sec; "
-                         "a fenced folder's links are never followed")
+                         "compartments: the follow folder ~/x/links is inside the fenced folder "
+                         f"{outside / 'home/x'}; a fenced folder's links are never followed")
+
+    def test_home_link_into_data_volume_without_fences_loads(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        self.require_data_volume_spelling(outside)
+        (outside / "home/x/links").mkdir(parents=True)
+        hl = outside / "hl"
+        hl.symlink_to("/System/Volumes/Data" + str(outside.resolve() / "home"), target_is_directory=True)
+        self.config["fenced"] = []
+        with patch.dict(os.environ, {"HOME": str(hl)}):
+            self.load()
 
     def test_data_volume_only_folder_refusals_end_in_a_working_fix(self):
         outside = self.data_volume_folder()
