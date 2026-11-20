@@ -184,3 +184,25 @@ Rule for any further case: a test that fails **only** because it counts, patches
 home or identity `stat`s keeps its outcome assertions (loads, or refused with its message) and loses only
 the `stat` part; where its purpose is "the home check fails closed", move the injected failure onto
 `os.lstat`. Name each such test in the summary. Any other failure: stop and report.
+
+## Amendment 2 (after the second pass stopped on two spelling failures)
+
+Both failures are the brief's planning miss: the walk meets paths by the spelling it has resolved so far
+(`/private/var/...` on a Mac), never by the configured one (`/var/...`).
+
+- **"On home's own path" is what the home walk looked at.** Give the home walk its own list,
+  `home_path = []` (`walk_resolve(home, FenceRoots(lexical), looked=home_path)`), then
+  `looked.extend(home_path)` so the backstop still sees those looks. In `may_follow`, a link is on home's
+  own path when `tuple(map(fold, candidate.parts))` is one of the home walk's looks (compare folded
+  parts; build the set once). Such a link is followed; anything else is followed only under a follow
+  folder, as written. This replaces both the strict-ancestor test and the equal-to-home test in the
+  follow decision. **`linked[i]` keeps fix-up 5's rule unchanged** (`linked[i] = True` for every followed
+  link unless `len(candidate.parts) < len(home.parts) and under(home, candidate)`), so the R1 exact
+  look lists stay as they are.
+- **Follow folders are written by their real path in the new tests**, as the 2026-11-20 decision says
+  (`written by their real path or under ~/`): wherever section 1 or 2 writes `follow: [str(<D>)]`, write
+  `follow: [str(<D>.resolve())]`. Nothing in the code tries to resolve a follow folder; they are never
+  probed.
+- Then finish: section 5's exact list as you found it (`[data, data/me, data, data/me, data/me/secret]`,
+  resolved spelling) is right; keep it. Run one mutation per section, then the three full suites (section
+  6), and summarise. Any other failure: stop and report.
