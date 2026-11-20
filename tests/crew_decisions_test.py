@@ -709,10 +709,14 @@ class FenceLinks(unittest.TestCase):
         return outside
 
     def test_data_volume_spelling_refused_before_any_look(self):
-        for kind, value in (
-                ("fenced", "/System/Volumes/Data" + str(self.home / "real/inner")),
-                ("fenced", "/system/volumes/data" + str(self.home / "real/inner")),
-                ("follow", "/System/Volumes/Data" + str(self.home))):
+        for kind, value, prefix in (
+                ("fenced", "/System/Volumes/Data" + str(self.home / "real/inner"), "/System/Volumes/Data"),
+                ("fenced", "/system/volumes/data" + str(self.home / "real/inner"), "/System/Volumes/Data"),
+                ("follow", "/System/Volumes/Data" + str(self.home), "/System/Volumes/Data"),
+                ("fenced", "/.nofollow" + str(self.home / "real/inner"), "/.nofollow"),
+                ("fenced", "/.resolve/1" + str(self.home / "real/inner"), "/.resolve"),
+                ("fenced", "/.nofollow/System/Volumes/Data" + str(self.home / "real/inner"), "/.nofollow"),
+                ("follow", "/.vol", "/.vol")):
             with self.subTest(kind=kind, value=value):
                 self.config["fenced"] = [value] if kind == "fenced" else ["~/real/inner"]
                 self.config["follow"] = [value] if kind == "follow" else []
@@ -722,8 +726,9 @@ class FenceLinks(unittest.TestCase):
                         self.load()
                 self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
                 self.assertEqual(str(caught.exception),
-                                 f"compartments: the {kind} folder {value} starts with /System/Volumes/Data, "
-                                 "the Mac's second name for the same folder; write it without /System/Volumes/Data")
+                                 f"compartments: the {kind} folder {value} starts with {prefix}, "
+                                 "which a Mac can use as a second name for other folders; "
+                                 f"write it without {prefix}")
                 for name, probe in probes.items():
                     for call in probe.call_args_list:
                         try:
@@ -731,6 +736,7 @@ class FenceLinks(unittest.TestCase):
                         except TypeError:
                             continue
                         self.assertFalse(self.c.under(path, Path("/System/Volumes/Data")), (name, path))
+                        self.assertFalse(len(path.parts) > 1 and path.parts[1].startswith("."), (name, path))
 
     def test_fence_through_link_into_data_volume_refused(self):
         outside = self.data_volume_folder()
@@ -741,8 +747,30 @@ class FenceLinks(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
         self.assertEqual(str(caught.exception),
                          f"compartments: the fenced folder {outside / 'L/a/f'} is reached through a link "
-                         "into /System/Volumes/Data, the Mac's second name for the same folder; "
+                         "into /System/Volumes/Data, which a Mac can use as a second name for other folders; "
                          "write the fence by its path without /System/Volumes/Data")
+
+    def test_fence_through_link_into_nofollow_refused(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        try:
+            same = os.path.samefile("/.nofollow" + str(outside.resolve()), outside.resolve())
+        except OSError:
+            same = False
+        if not same:
+            self.skipTest("temporary folder has no /.nofollow spelling")
+        (outside / "real/a/f").mkdir(parents=True)
+        (outside / "L").symlink_to(
+            "/.nofollow" + str(outside.resolve() / "real"), target_is_directory=True)
+        self.config["follow"] = [str(outside.resolve())]
+        self.config["fenced"] = [str(outside / "L/a/f")]
+        with self.assertRaises(self.c.CompartmentConfigError) as caught:
+            self.load()
+        self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+        self.assertEqual(str(caught.exception),
+                         f"compartments: the fenced folder {outside / 'L/a/f'} is reached through a link "
+                         "into /.nofollow, which a Mac can use as a second name for other folders; "
+                         "write the fence by its path without /.nofollow")
 
     def test_plain_fence_still_fences_data_volume_spelling(self):
         outside = self.data_volume_folder()

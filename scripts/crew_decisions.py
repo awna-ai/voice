@@ -662,16 +662,27 @@ def shown(text):
 DATA_VOLUME = Path("/System/Volumes/Data")
 
 
+def mac_alias(path):
+    """The start of path that a Mac may use as a second name for other folders, or None."""
+    if len(path.parts) > 1 and path.parts[1].startswith("."):
+        return "/" + path.parts[1]
+    if under(path, DATA_VOLUME):
+        return str(DATA_VOLUME)
+    return None
+
+
 def refuse_fence_links(c):
     for value in c.get("follow", []):
         if ".." in Path(value).expanduser().parts:
             raise CompartmentConfigError(
                 f'compartments: the follow folder {shown(value)} has a ".." part; write it without ".."')
         follow = Path(os.path.abspath(absolute_path(value, Path.cwd())))
-        if under(follow, DATA_VOLUME):
+        prefix = mac_alias(follow)
+        if prefix:
             raise CompartmentConfigError(
-                f"compartments: the follow folder {shown(value)} starts with /System/Volumes/Data, "
-                "the Mac's second name for the same folder; write it without /System/Volumes/Data")
+                f"compartments: the follow folder {shown(value)} starts with {shown(prefix)}, "
+                "which a Mac can use as a second name for other folders; "
+                f"write it without {shown(prefix)}")
         for fence_value in c["fenced"]:
             fence = Path(os.path.abspath(absolute_path(fence_value, Path.cwd())))
             if under(follow, fence):
@@ -683,10 +694,12 @@ def refuse_fence_links(c):
             raise CompartmentConfigError(
                 f'compartments: the fenced folder {shown(value)} has a ".." part; write it without ".."')
         fence = Path(os.path.abspath(absolute_path(value, Path.cwd())))
-        if under(fence, DATA_VOLUME):
+        prefix = mac_alias(fence)
+        if prefix:
             raise CompartmentConfigError(
-                f"compartments: the fenced folder {shown(value)} starts with /System/Volumes/Data, "
-                "the Mac's second name for the same folder; write it without /System/Volumes/Data")
+                f"compartments: the fenced folder {shown(value)} starts with {shown(prefix)}, "
+                "which a Mac can use as a second name for other folders; "
+                f"write it without {shown(prefix)}")
     values = c["fenced"]
     lexical = [Path(os.path.abspath(absolute_path(value, Path.cwd()))) for value in values]
     if not lexical:
@@ -743,11 +756,12 @@ def refuse_fence_links(c):
                 f"compartments: the fenced folder {shown(values[i])} is reached through another fenced folder; "
                 "fence only that folder")
         resolved[i] = parent / lexical[i].name
-        if under(resolved[i], DATA_VOLUME):
+        prefix = mac_alias(resolved[i])
+        if prefix:
             raise CompartmentConfigError(
                 f"compartments: the fenced folder {shown(values[i])} is reached through a link "
-                "into /System/Volumes/Data, the Mac's second name for the same folder; "
-                "write the fence by its path without /System/Volumes/Data")
+                f"into {shown(prefix)}, which a Mac can use as a second name for other folders; "
+                f"write the fence by its path without {shown(prefix)}")
     for i, inner in enumerate(values):
         for j, outer in enumerate(values):
             if i == j or inner == outer:
