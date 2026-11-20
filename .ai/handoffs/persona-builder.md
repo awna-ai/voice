@@ -2,6 +2,38 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF40: a member config Voice cannot read as a JSON object exits 2 on every Python (2026-11-20, attended)
+
+- **Status: landed** on `main` at `33e2bbd` (2026-11-20, `ci-local.sh` tier full, 39 steps, all passed under
+  Homebrew's Python 3.15.0, the version that was red). Built in an attended session, not by a lane V runner: the owner
+  asked for one session per red gate. Card `dgkjwFzf` is Done.
+- **The bug (measured):** `test_member_and_private_bad_encoding_or_nesting` wrote a member or private config nested
+  10,000 lists deep. Python 3.9, 3.10 and 3.12 raise `RecursionError` on it, which exits 2; 3.14 and 3.15 parse it,
+  so the non-object check exited 1. The test was red on 3.14.8 and 3.15.0 and green on the other three. A deep list
+  inside an object split the versions the same way.
+- **Decision (made at pickup, as the spec allows):** a member config Voice cannot read as a JSON object exits 2:
+  not UTF-8, not JSON, nested deeper than 64 levels (checked on the text before parsing, without recursion), or a
+  top level that is not an object. A readable object with a wrong or missing value still exits 1. No caller tells
+  1 from 2 (a member's skill acts only on exit 4). `.ai/DECISIONS.md` § 2026-11-20 (VF40).
+- **Commit:** `33e2bbd` holds the brief (`plans/briefs/VF40-config-depth.md`), the code, the tests and the decision.
+  The code is by Codex, with two small fix-ups: the test loop was folded, and `crew_hardening_test.py`'s non-object
+  cases were moved to exit 2. The brief asked for that grep, but Codex missed it, and my own run of every suite
+  caught it.
+- **Verification (measured, at `33e2bbd`):** the full gate under 3.15.0. All 13 Python suites (499 tests) are green
+  on 3.9.6, 3.10.22, 3.12.14 and 3.14.8.
+- **Security review (Opus):** no high or medium findings; four lows, none blocking. The first is that the depth
+  scan is linear and costs about 0.2 s on a 10 MB file. A fuzz of 300k inputs found no way past it. The second is
+  that `compartments.json` has no depth cap, but it exits 2 either way. The third is that `privacy-check --dir`
+  still exits 1 on an unreadable `member.json`, which is intended. Verifier: no, as the spec says.
+- **Land notes:** the first land stopped on a rebase conflict in `.ai/DECISIONS.md`, because VF35 landed at
+  `cd27883` meanwhile; both sections were kept. The second was refused by the names pre-push guard, because the
+  brief spelled out a home-relative path. It now says the path in repo terms.
+- **VF35:** it no longer waits on VF40. Its land needed no retry, since it landed at `cd27883` (record `386e0fd`)
+  under 3.12. Until now a land had to put Python 3.12 first on `PATH`; it no longer does.
+- **Not covered here:** the other JSON readers that catch `RecursionError` (compartments, seen files, logs) still
+  depend on the decoder's limit for very deep input. Each one already maps to a single exit code either way, so
+  the gate agrees on every version.
+
 ## VF35: a fence in a Mac alias spelling refuses the compartment map (2026-11-20, lane: V1)
 
 - **Status: landed** on `main` at `cd27883` (2026-11-20, `ci-local.sh` all passed under Python 3.12.14; see the
