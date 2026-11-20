@@ -697,10 +697,10 @@ def refuse_fence_links(c):
         if under_follow(path, home):
             follow_forms[home_resolved.joinpath(*path.parts[len(home.parts):])] = value
 
-    home_parts = {tuple(map(fold, path.parts)) for path in home_path}
+    home_parts = {tuple(unicodedata.normalize("NFC", part) for part in path.parts) for path in home_path}
 
     def may_follow(candidate):
-        if (tuple(map(fold, candidate.parts)) in home_parts
+        if (tuple(unicodedata.normalize("NFC", part) for part in candidate.parts) in home_parts
                 or any(under_follow(candidate, folder) for folder in follow_forms)):
             if not (len(candidate.parts) < len(home.parts) and under(home, candidate)):
                 linked[i] = True
@@ -773,7 +773,7 @@ def refuse_fence_links(c):
             raise FenceLinkError("; ".join(clauses), links)
 
     for j, value in enumerate(values):
-        if any(under(path, root) for path in looked for root in (resolved[j], lexical[j])):
+        if any(matches_fence(path, FenceRoots([resolved[j], lexical[j]])) for path in looked):
             raise CompartmentConfigError(
                 f"compartments: checking the fenced folders looked inside the fenced folder {shown(value)}, "
                 "because another path leads into it through a link; write each fenced folder by its real path")

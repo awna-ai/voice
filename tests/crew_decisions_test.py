@@ -720,6 +720,34 @@ class FenceLinks(unittest.TestCase):
         self.assertIn(message, proc.stderr)
         self.assertEqual(proc.stdout, "")
 
+    def test_backstop_refuses_firmlink_spelling_inside_fence(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        if not (Path("/System/Volumes/Data").is_dir()
+                and os.path.samefile("/System/Volumes/Data" + str(outside.resolve()), outside.resolve())):
+            self.skipTest("temporary folder has no /System/Volumes/Data spelling")
+        (outside / "fol").mkdir()
+        (outside / "l1").mkdir()
+        (outside / "real/f1/sub").mkdir(parents=True)
+        (outside / "l1/l2").symlink_to(outside / "real", target_is_directory=True)
+        (outside / "fol/al").symlink_to(
+            "/System/Volumes/Data" + str(outside.resolve() / "real/f1/sub"), target_is_directory=True)
+        self.config["follow"] = [str(outside.resolve())]
+        self.config["fenced"] = [str(outside / "fol/al/x"), str(outside / "l1/l2/f1")]
+        with self.assertRaises(self.c.CompartmentConfigError) as caught:
+            self.load()
+        self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+        self.assertEqual(str(caught.exception),
+                         "compartments: checking the fenced folders looked inside the fenced folder "
+                         f"{self.config['fenced'][1]}, because another path leads into it through a link; "
+                         "write each fenced folder by its real path")
+
+    def test_home_path_different_case_requires_follow(self):
+        if not (os.path.islink("/var") and str(self.home).startswith("/var/")):
+            self.skipTest("fixture home is not under the /var link")
+        self.config["fenced"] = ["/VAR" + str(self.home)[4:] + "/f"]
+        self.assert_unfollowed("/VAR")
+
     def test_r2_with_follow_refused_in_both_home_spellings(self):
         (self.home / "t/s/x").mkdir(parents=True)
         (self.home / "p/q").mkdir(parents=True)
@@ -3205,6 +3233,7 @@ class Compartments(unittest.TestCase):
         alias = base / "alias"
         alias.symlink_to(real, target_is_directory=True)
         self.config["fenced"] = [str(alias / "private")]
+        self.config["follow"] = [str(base)]
         m = self.save_config()
         with patch.object(os, "lstat", wraps=os.lstat) as calls:
             self.assertEqual(self.c.path_compartment(m.compartments, real / "private/c.md", self.h.root), "fenced")
