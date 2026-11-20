@@ -678,39 +678,41 @@ def refuse_fence_links(c):
         home_resolved, home_blocked = walk_resolve(home, FenceRoots(lexical))
         if home_blocked:
             raise ValueError("home is fenced")
-        home_info = os.stat(home_resolved)
-        home_identity = (home_info.st_dev, home_info.st_ino)
+        try:
+            home_info = os.stat(home_resolved)
+            home_identity = (home_info.st_dev, home_info.st_ino)
+        except (FileNotFoundError, NotADirectoryError):
+            home_identity = None
     except (OSError, ValueError):
         raise CompartmentConfigError(
-            f"compartments: cannot check whether the fenced folder {values[0]} is a link")
-    follow_forms = []
+            "compartments: cannot check the home folder, so the fenced folders cannot be checked")
+    follow_forms = {}
     for value in c.get("follow", []):
         path = Path(os.path.abspath(absolute_path(value, Path.cwd())))
-        follow_forms.append(path)
+        follow_forms[path] = value
         if under_follow(path, home):
-            follow_forms.append(home_resolved.joinpath(*path.parts[len(home.parts):]))
-    follow_forms = tuple(follow_forms)
+            follow_forms[home_resolved.joinpath(*path.parts[len(home.parts):])] = value
 
     def inside_home(candidate):
         if any(len(candidate.parts) > len(root.parts) and under(candidate, root)
                for root in (home, home_resolved)):
             return True
-        try:
-            for ancestor in candidate.parents:
-                info = os.stat(ancestor)
-                if (info.st_dev, info.st_ino) == home_identity:
-                    return True
-        except OSError:
-            return True
+        if home_identity is not None:
+            try:
+                for ancestor in candidate.parents:
+                    info = os.stat(ancestor)
+                    if (info.st_dev, info.st_ino) == home_identity:
+                        return True
+            except OSError:
+                return True
         return False
 
     def may_follow(candidate):
-        if not inside_home(candidate):
-            return True
-        if any(under_follow(candidate, folder) for folder in follow_forms):
+        if inside_home(candidate) and not any(under_follow(candidate, folder) for folder in follow_forms):
+            return False
+        if not (len(candidate.parts) < len(home.parts) and under(home, candidate)):
             linked[i] = True
-            return True
-        return False
+        return True
 
     resolved, linked = {}, {}
     for i in sorted(range(len(values)), key=lambda i: len(lexical[i].parts)):
@@ -748,6 +750,12 @@ def refuse_fence_links(c):
                 raise CompartmentConfigError(
                     f"compartments: the fenced folder {inner} is inside the fenced folder {outer}; "
                     f"fence only {outer}")
+    for path, value in follow_forms.items():
+        for j, fence_value in enumerate(values):
+            if under(path, resolved[j]):
+                raise CompartmentConfigError(
+                    f"compartments: the follow folder {value} is inside the fenced folder {fence_value}; "
+                    "a fenced folder's links are never followed")
     found, identities = {}, set()
     for linked_parent in (False, True):
         for i, value in enumerate(values):
