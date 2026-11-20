@@ -110,3 +110,17 @@ All three must exit 0, with no new skip (the decisions suite has 1 skip today). 
 section (copy aside, mutate, run the one test, restore with `cp`, check with `cmp`). Summarise the
 diff, each red you saw, each mutation and its result, and the three suites' final counts and exit
 codes.
+
+## Amendment (after the first pass stopped at section 5)
+
+Section 1's new home message conflicts with three existing tests that pin the old one:
+`test_home_stat_error_fails_closed`, `test_home_walk_errors_fail_closed_naming_first_fence` (two
+subtests) and `test_home_walk_fails_closed` (three subtests). **They are exempt:** change only their
+expected message to `compartments: cannot check the home folder, so the fenced folders cannot be
+checked`, and rename `test_home_walk_errors_fail_closed_naming_first_fence` to
+`test_home_walk_errors_fail_closed_naming_home`. Nothing else in them changes. Section 1 as built stays.
+Then do sections 2 to 5 and section 6.
+
+The kernel tripwires cannot start inside your sandbox (`sandbox_apply` is refused there); their skips
+in your runs are expected, and the Claude reviewer reruns all three suites outside it. Count a suite
+as passing when every failure left is a skip of that kind, and list each skipped test by name.
