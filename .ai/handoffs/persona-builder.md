@@ -94,6 +94,34 @@ One record per slice, newest first. Paraphrase only; no real person.
   test); (4) (skip the home walk's look when a fence could hold home, or record it with the owner); the
   should-fixes; then the full three suites, the repeat Verifier on Opus, the full gate and the land.
 
+- **Fix-up 5 (2026-11-20, run `204940-r1`): built, both reviews against it, parked on V-Q31.** `1121750` brief,
+  `fe49441` and `7f4a4d2` its two amendments, `86b3396` code (Codex). It fixes the reds (a home that does not
+  exist has no identity; any other error still fails closed, and the message names the home), marks every
+  followed link off home's own path as linked (Verifier (2): the fence root's own `lstat` is gone), refuses a
+  follow folder inside a fence's resolved form, and pins part-wise follow matching. Verifier (4) is pinned as
+  refused, not fixed. **Planning misses:** brief 5 changed the home message without exempting the three tests
+  that pin it, and its section 3 (check plain fences before the home walk) added looks before the nesting and
+  R3 refusals; Codex stopped and reported both times, and the amendments withdrew them.
+  **Verified (measured, Python 3.12.14 on Mimi, outside Codex's sandbox so the kernel tripwires ran):**
+  `crew_documents_test.py` 14 OK, `crew_hardening_test.py` 40 OK, `crew_decisions_test.py` 224 run, 1 skip,
+  1 failure that was the Verifier's mutation landing mid-run (a `SyntaxError` while she mutated the same
+  worktree); `StdinTexts` re-run on a clean tree: 4 OK. Codex's mutations, one per section, each red.
+  **Security review (Opus) on `86b3396`:** two highs, both seen in its own in-process probes: a fence walked
+  first is guarded only by the later fence's written spelling, so `[D/o/lnk2/z, D/b/deep]` (`lnk2 -> D/r2`,
+  `b -> D/r2/z/s1/s2/s3`, `s3 -> D/elsewhere`) **loads** after three `lstat`s and one `readlink` inside
+  `D/r2/z`; and `[D/real/x/y, D/a/lnk/x]` (`lnk -> D/real`, `D/real/x` a link) readlinks the fenced link,
+  against rule (b). A medium (looks grow with depth), and lows (the home walk guarded by spellings only;
+  control characters in the other messages and in the TODO text).
+  **Repeat Verifier (Opus) on `86b3396`: FAIL.** Must-fix: nothing pins the resolved-forms guard that closes
+  her (3) (mutant M9 survives every non-tripwire test). Should-fixes: "at most two such looks" is false (4
+  looks for `["~/secret", "~/real/a/b/c"]`, the same since fix-up 2); with `follow: ["~"]` a link inside
+  another fence's target is read; an R2 list with `follow: ["~"]` loads when home has a second spelling (the
+  nesting check compares `/var` with `/private/var`); the R1 home-link pin uses `assertIn` only; the home-link
+  case is not one the owner accepted. Closed with teeth: (1), (2), the missing home, the follow checks.
+- **Owed:** V-Q31's answer, then its fix-up (with the M9 test and the should-fixes it keeps), the full three
+  suites (never beside a Verifier in the same worktree), the repeat Verifier on Opus, the full gate and the land.
+  The DECISIONS draft marks the open points "V-Q31".
+
 ## VF30: `pending --compartment` refuses an unknown name, and keeps compartments apart (2026-11-19, lane: V1)
 
 - **Status: landed** on `main` at `9c1ed52` (2026-11-19, `ci-local.sh` all passed); the private half merged as ai-personas PR #43 (`9cd5936`). Branch `lane-v1/VF30` (removed): `c7f32eb` brief, `e28eb6e` tests, `cc20fb9` code,

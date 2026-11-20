@@ -604,16 +604,24 @@ for this one key (V-Q15 answer 2, 2026-11-09).
   reads it, and the message names the link and the two fixes (add its folder to `follow`, or write the
   fence by its real path). With no `follow`, no such link is followed. Voice never builds in a folder
   layout, and a member never has to regroup their folders.
-- **Links on the home folder's own path stay free:** the ones the system puts there (such as `/var`
-  and `/tmp` on a Mac). For a fence outside the home folder, links at or above the fences' common
-  folder stay free too, as before.
-- **Follow folders are compared by spelling, never probed:** write one by its real path or under `~/`.
-  A follow folder inside a fence is refused, since a fence's links are never followed.
+- **Where a link sits decides, not how the fence is spelled:** a link counts as below the home folder
+  when its path is, or when one of the folders above it is the home folder itself (the same folder on
+  disk), so a fence written by another spelling of home is held to the same rule. Links on the home
+  folder's own path (such as `/var` on a Mac) and links outside it are followed freely. A home folder
+  that doesn't exist holds nothing, so only the spelling counts then.
+- **Follow folders are compared by spelling, never probed:** part by part and exactly (no case
+  folding), written by their real path or under `~/`. A follow folder inside a fence, by either
+  spelling of the fence, is refused, since a fence's links are never followed.
 - **Two leftovers are accepted, refused with one look (the owner's pick, V-Q30 A):** R1, a fenced link
   plus a fence inside the folder it points to; R2, a fence written through a link into another fence.
   In both, the load is still refused (exit 2), and before it is, Voice may look once at one folder's
-  name, size and dates inside the other fence (at most two such looks), never its files. Avoiding it would mean reading the
+  name, size and dates inside the other fence, never its files. **Open (V-Q31):** the looks are not
+  bounded at two (one per folder down to the inner fence), and some lists in this family still load or
+  read a link inside the other fence; the owner decides the bound before this lands. Avoiding it would mean reading the
   fenced link first, which the 2026-11-19 rule forbids. Both need a fence list that contradicts
-  itself. Tests pin both.
+  itself. Tests pin both. **Not yet accepted (V-Q31):** when the home folder is itself a link into a
+  fenced link's target, Voice's look at the home folder's own path comes before the refusal, however
+  that fence is written; the load is still refused. Checking the plain fences first would close it
+  but adds looks before the nesting refusals, so it was not taken.
 - **Rule (b) is unchanged:** a fenced folder that is itself a link refuses the map, and Voice never
   reads that link.
