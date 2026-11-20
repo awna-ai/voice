@@ -2,6 +2,41 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF35: a fence in a Mac alias spelling refuses the compartment map (2026-11-20, lane: V1)
+
+- **Status: built, Verifier FAIL on `a544282`, fix-up 1 built (unreviewed), not landed.** Stacked on `lane-v1/VF31` (`34c4e1a`), so it
+  lands only after VF31 does.
+- **Decision (made at pickup, as the spec allows):** refuse the alias spellings instead of comparing them. A
+  `fenced` or `follow` value written under `/System/Volumes/Data` is refused before any look on disk, and so is a
+  fence whose resolved path lands there. `.ai/DECISIONS.md` § 2026-11-20 (VF35).
+- **Commits:** brief `7c78494` (with amendment 1), code and tests `a241efe`, decision `a544282`. All code by Codex.
+  Amendment 1 was a planning miss: VF31 fix-up 7's backstop test went into the data-volume spelling and stayed
+  there, so VF35 refused it first. Its fixture now climbs back out with `..` to a plain folder, the case only the
+  backstop catches.
+- **Verification (measured):** the four VF35 tests are green, FenceLinks 73 OK (6 skips) and Compartments 83 OK
+  (2 skips) in Codex's run. The six mutations each went red, and the backstop test stays green with check 2
+  removed. I re-ran the four tests and the check-2 mutation myself.
+- **Security review (Opus) on `a544282`:** one medium: the Mac also reaches every folder through `/.nofollow/…`
+  and `/.resolve/1/…` (checked: same device and inode as the plain path), which all three checks miss.
+- **Verifier (Fable) on `a544282`: FAIL.** Must-fix: the same `/.nofollow` hole (and `/.vol/<dev>/<ino>` as a
+  written fence). Should-fix for this slice: (1) a regression that fails closed: a folder that exists only on the
+  data volume (stock macOS `/home -> /System/Volumes/Data/home`) can no longer be fenced by any spelling, and the
+  two messages point at each other. (2) The decision's three sentences that runs contradict. (3) Tests: a lower-case
+  link target for check 2, "before any look" pinned as zero probes, a lower-case follow subtest, and `~/f` with
+  HOME in the alias spelling. (4) With HOME a link into the data volume, a follow folder inside a fence is not
+  refused (no read found). Nits: `/System/Volumes` as a fence loads, the skip raises off the data volume, and the
+  backstop test keeps its own copy of the skip.
+- **Filed, older than VF35:** VF37 `snk4if8r` (a `--dir` that holds a fence, in an alias spelling or `//`, reads
+  the fenced file) and VF38 `ev0Lbm5y` (a `--dir` written `/.vol/<dev>/<ino>` reads it). The Verifier's `//` link
+  target case belongs to VF36: VF36 must cover link targets too, with check 2 after it.
+- **Fix-up 1 (`plans/briefs/VF35-fixup-1.md`):** refuse any path whose first folder after `/` starts with a dot, as
+  well as the data-volume spelling. Built by Codex (measured in her run: FenceLinks 74 OK, 6 skips; Compartments 83
+  OK, 2 skips). The dot-rule mutation went red. The "data-volume check first" mutation survives by design: a
+  `/.nofollow/System/Volumes/Data` path never matches `DATA_VOLUME`, so the order can't matter (the brief was
+  wrong). Not yet reviewed by a Verifier, and the full suites have not run. The next run must first weigh
+  the `/home` regression: keep refusing and say how to fence a data-volume-only folder, or compare spellings
+  instead. Then come the test should-fixes, and a repeat Verifier on Opus.
+
 ## VF31: a fenced folder that is a link refuses the compartment map (2026-11-19, lane: V1)
 
 - **Status:** Verifier PASS on `47a938b` (fix-up 7), landing from `lane-v1/VF31` (run `014927-r1`); the earlier parks (V-Q29, V-Q30, V-Q31) are answered. Commits: `790139e` brief, `960cda7` tests, `974a18f` code, `d1bd709`
