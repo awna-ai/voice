@@ -111,6 +111,11 @@ def tripwire_crew(h, member, fences, *args, allow_root_metadata=False):
                           cwd=h.root, env={**os.environ, "HOME": str(TEST_HOME)}, timeout=60)
 
 
+def claude_name(path):
+    """Name a folder as Claude Code does (no normalization)."""
+    return re.sub(r"[^A-Za-z0-9]", "-", str(Path(path).expanduser()))
+
+
 def ada_fixture(h):
     h.session(ENCODED_HOME + "-projects-app", "s1",
               reply("2026-09-01T09:59:00Z", "Shall I keep two copies of the review queue?"),
@@ -2120,6 +2125,59 @@ class Compartments(unittest.TestCase):
         sys.path.insert(0, str(SCRIPTS))
         import crew_decisions
         self.c = crew_decisions
+
+    def test_folder_with_a_dash_for_a_folded_letter_is_fenced(self):
+        self.config["fenced"] = ["~/garden-club", "~/secret-notes", "~/glass-jar", "~/kite-box", "~/fine-print"]
+        c = self.c.check_compartments(self.config)
+        for path in ("~/ſecret-notes", "~/glaß-jar", "~/\u212aite-box", "~/ﬁne-print"):
+            name = claude_name(path)
+            for folder in (name, "-System-Volumes-Data" + name, name + "--claude-worktrees-x"):
+                with self.subTest(path=path, folder=folder):
+                    self.assertEqual(self.c.folder_compartment(c, folder), "fenced")
+
+    def test_folder_dash_rule_leaves_ordinary_folders_routed(self):
+        self.config["fenced"] = ["~/garden-club", "~/secret-notes", "~/glass-jar", "~/kite-box", "~/fine-print"]
+        c = self.c.check_compartments(self.config)
+        for path, expected in (("~/projects/work", "work"), ("~/ecret-notes", "p:ecret-notes"),
+                               ("~/xecret-notes", "p:xecret-notes")):
+            with self.subTest(path=path):
+                self.assertEqual(self.c.folder_compartment(c, self.c.encode(path)), expected)
+
+    def test_folder_dash_rule_accepted_over_match(self):
+        self.config["fenced"] = ["~/secret-notes"]
+        c = self.c.check_compartments(self.config)
+        self.assertEqual(self.c.folder_compartment(c, self.c.encode("~/.ecret-notes")), "fenced")
+
+    def test_mine_skips_a_no_cwd_record_in_a_dash_spelled_fence_folder(self):
+        self.config["fenced"] = ["~/secret-notes"]
+        m = self.save_config()
+        name = claude_name("~/ſecret-notes")
+        for folder in (name, "-System-Volumes-Data" + name):
+            record = said("2026-09-01T00:00:00Z", "never read this")
+            del record["cwd"]
+            self.h.session(folder, "s", record)
+        with patch.object(self.c, "read_session", side_effect=AssertionError("read fenced transcript")):
+            args = self.c.parser_for(m, "test").parse_args([
+                "mine", "--projects", str(self.h.projects), "--out", str(self.h.root / "mine.jsonl")])
+            self.assertEqual(self.c.cmd_mine(m, args), 0)
+        proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "out.jsonl")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("2 fenced folders", proc.stdout)
+        self.assertEqual(self.h.read("out.jsonl"), "")
+
+    def test_record_project_with_a_dash_for_a_folded_letter_is_fenced(self):
+        self.config["fenced"] = ["~/secret-notes"]
+        c = self.c.check_compartments(self.config)
+        self.assertEqual(self.c.record_compartment(c, {"project": self.c.project_name(
+            claude_name("~/ſecret-notes"))}), "fenced")
+        self.assertEqual(self.c.record_compartment(c, {"project": self.c.project_name(
+            self.c.encode("~/projects/work"))}), "work")
+
+    def test_folds_to_ascii_covers_every_code_point(self):
+        folded = {value for cp in range(0x80, 0x110000)
+                  if (value := self.c.fold(chr(cp))) and value.isascii() and value.isalnum()}
+        self.assertTrue(hasattr(self.c, "FOLDS_TO_ASCII"), "FOLDS_TO_ASCII is missing")
+        self.assertEqual(folded - self.c.FOLDS_TO_ASCII, set())
 
     def test_fence_with_folded_letters_matches_folder_and_record(self):
         self.config["fenced"] = ["~/garden-club", "~/ſecret-notes"]
