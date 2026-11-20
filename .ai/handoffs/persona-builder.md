@@ -4,8 +4,8 @@ One record per slice, newest first. Paraphrase only; no real person.
 
 ## VF35: a fence in a Mac alias spelling refuses the compartment map (2026-11-20, lane: V1)
 
-- **Status: built, Verifier FAIL on `a544282`, fix-up 1 built (unreviewed), not landed.** Stacked on `lane-v1/VF31` (`34c4e1a`), so it
-  lands only after VF31 does.
+- **Status: landed** on `main` at `cd27883` (2026-11-20, `ci-local.sh` all passed under Python 3.12.14; see the
+  gate note below). VF31 landed first (`34c4e1a`), so the stack question is closed.
 - **Decision (made at pickup, as the spec allows):** refuse the alias spellings instead of comparing them. A
   `fenced` or `follow` value written under `/System/Volumes/Data` is refused before any look on disk, and so is a
   fence whose resolved path lands there. `.ai/DECISIONS.md` § 2026-11-20 (VF35).
@@ -36,10 +36,32 @@ One record per slice, newest first. Paraphrase only; no real person.
   wrong). Not yet reviewed by a Verifier, and the full suites have not run. The next run must first weigh
   the `/home` regression: keep refusing and say how to fence a data-volume-only folder, or compare spellings
   instead. Then come the test should-fixes, and a repeat Verifier on Opus.
+- **Fix-up 2** (`8019954` brief, `3670e10` code): keep refusing the alias spellings, and both refusals now end in
+  a fix that works (move the folder into home). A folder that exists only on the data volume is an accepted
+  fail-closed cost (`.ai/DECISIONS.md` § 2026-11-20, VF35, rewritten in `3429a1e`, which also corrects the three
+  sentences the Verifier disproved). Zero looks before the refusal are pinned; the lower-case, `HOME` and
+  data-volume-only cases are tested; the skip is shared.
+- **Fix-up 3** (`2e848ef` brief, `ae03979` code): a home folder reached through a link into an alias spelling
+  refuses the map, so a follow folder inside a fence can't hide behind it (the Verifier's should-fix 4, reproduced
+  on `3670e10`). One test line was Claude-direct: the no-look roots missed the `/private/var` spelling.
+- **Fix-up 4** (`97d7c69` brief, `0a9f62a` code): a `/.resolve/<n>` spelling is named whole in the refusal, so
+  following the message can't leave `/<n>/<path>`, which fences nothing. `cd27883` names the `//` home and
+  link-target case as VF36's and files the long-s gap as VF39.
+- **Repeat Verifier (Opus) on `ae03979`: PASS.** Her two should-fixes are fix-up 4 and the `//` note above.
+- **Security review (Opus) on `ae03979`:** nothing in the diff. One older high, filed as **VF39** `zvZmIBbn`: a
+  long s or a Kelvin sign inside an alias spelling slips past `matches_fence`, because `encode` runs before `fold`.
+- **Verified (measured, Python 3.12.14 on Mimi):** FenceLinks 87 OK (1 skip) at `cd27883`, Compartments 85 OK at
+  `3670e10`. Codex's sandbox can't write the git index, so I committed her work.
+- **The gate, and VF40:** the first full-gate land (09:51 EST) failed on a 60 s subprocess timeout in an unchanged
+  `crew_decisions` test at load 30 to 40; the call takes about 1.5 s alone. The second failed two subtests of
+  `test_member_and_private_bad_encoding_or_nesting` because `python3` was Homebrew's 3.15.0 there. `main` fails the
+  same way under 3.15 (measured at `34c4e1a`): a 10,000-deep list parses on 3.15 and exits 1, where 3.12's
+  `RecursionError` exits 2. Filed as **VF40** `dgkjwFzf`. The third land ran with pyenv's 3.12.14 first on `PATH`,
+  the interpreter VF35's own measurements used, and passed.
 
 ## VF31: a fenced folder that is a link refuses the compartment map (2026-11-19, lane: V1)
 
-- **Status:** Verifier PASS on `47a938b` (fix-up 7), landing from `lane-v1/VF31` (run `014927-r1`); the earlier parks (V-Q29, V-Q30, V-Q31) are answered. Commits: `790139e` brief, `960cda7` tests, `974a18f` code, `d1bd709`
+- **Status: landed** on `main` at `34c4e1a` (2026-11-20), after a Verifier PASS on `47a938b` (fix-up 7); the earlier parks (V-Q29, V-Q30, V-Q31) are answered. The private half merged as the private repo's PR #46 (`07850aa`): the skill's exit-2 line, `todo_command`, and a migrate-test fix that allows voice's one `lstat` of each fence root. Its security review (Opus) found no high or medium and four lows: the TODO tool splits the `add` text on whitespace and reads `--priority`, `--when` and `#<n>` inside it, so a fence path holding those tokens could change the item or break the dedupe (same user, no injection); the TODO tool gets voice's whole environment; the TODO tool is now on the member's run path; the migrate test exempts `stat` too and doesn't count calls. Commits: `790139e` brief, `960cda7` tests, `974a18f` code, `d1bd709`
   fix-up 1 brief, `741a705` fix-up 1, `e9374ba` this record, `97e1300` fix-up 2 brief, `bc53a24` its amendment,
   `621c61f` fix-up 2, then this record's update. The owner picked V-Q28 (b). Code by Codex from every brief.
 - **What it does:** `load_member` checks each `fenced` path with one `lstat` of the path itself, never anything
