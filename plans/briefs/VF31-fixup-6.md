@@ -206,3 +206,21 @@ Both failures are the brief's planning miss: the walk meets paths by the spellin
 - Then finish: section 5's exact list as you found it (`[data, data/me, data, data/me, data/me/secret]`,
   resolved spelling) is right; keep it. Run one mutation per section, then the three full suites (section
   6), and summarise. Any other failure: stop and report.
+
+## Amendment 3 (after the third pass stopped on three test-plumbing failures)
+
+All three are exempt, changed only as follows:
+
+- `test_common_link_outside_home_needs_follow` (yours): both fences have the same length, so the first
+  in config order is walked first and named. Assert the full unfollowed message for `via/f` directly
+  (not through `assert_unfollowed`, which names the last fence), with the link `str(root.resolve() / "via")`.
+- `test_each_parent_walk_has_predicate_and_fails_closed`: it tells the home walk from the fence walks by
+  empty kwargs, and the home walk now passes `looked`. Tell them apart by `"may_follow" in call.kwargs`
+  (fence walks) versus not (home walk), in both places (the two list comprehensions and the `walk`
+  wrapper's `if path == root and kwargs`). Nothing else changes.
+- `test_unencodable_fence_fails_closed`: its `/tmp` fence now meets the follow rule first where `/tmp` is a
+  link. Add `self.config["follow"] = ["/tmp"]` so it still reaches the unencodable path; nothing else
+  changes.
+
+Then: `FenceLinks` green, one mutation per section (sections 1 to 4) with its result, and **skip the three
+full suites**: the Claude reviewer runs them outside your sandbox. Summarise.
