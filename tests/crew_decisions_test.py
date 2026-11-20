@@ -761,6 +761,128 @@ class FenceLinks(unittest.TestCase):
                 self.config["follow"] = follow
                 self.load()
 
+    def test_r4_resolved_home_spelling_refused(self):
+        resolved = self.home.resolve()
+        if resolved == self.home:
+            self.skipTest("fixture home has no distinct resolved spelling")
+        (self.home / "hop").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = [str(resolved / "hop/f")]
+        with patch.object(os, "readlink", wraps=os.readlink) as readlink:
+            self.assert_unfollowed("~/hop")
+        self.assertNotIn(resolved / "hop", [Path(c.args[0]) for c in readlink.call_args_list])
+
+    def test_r4_outside_link_into_home_refused(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        (outside / "lnk").symlink_to(self.home, target_is_directory=True)
+        (self.home / "hop").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = [str(outside / "lnk/hop/f")]
+        with patch.object(os, "readlink", wraps=os.readlink) as readlink:
+            self.assert_unfollowed("~/hop")
+        self.assertNotIn(self.home.resolve() / "hop",
+                         [Path(c.args[0]) for c in readlink.call_args_list])
+
+    def test_r3_resolved_alias_refused_before_target_probe(self):
+        (self.home / "sealed").symlink_to(self.home / "real", target_is_directory=True)
+        (self.home / "alias").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = ["~/sealed", str(self.home.resolve() / "alias/inner/deep")]
+        roots = (self.home / "real", self.home.resolve() / "real")
+        with patch.object(os, "lstat", wraps=os.lstat) as probe, \
+                patch.object(os, "readlink", wraps=os.readlink) as readlink:
+            self.assert_unfollowed("~/alias")
+        self.assertFalse(any(self.c.under(Path(c.args[0]), root)
+                             for c in probe.call_args_list for root in roots))
+        self.assertNotIn(self.home.resolve() / "alias",
+                         [Path(c.args[0]) for c in readlink.call_args_list])
+
+    def test_home_identity_refuses_when_spelling_misses(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        (outside / "lnk").symlink_to(self.home, target_is_directory=True)
+        (self.home / "hop").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = [str(outside / "lnk/hop/f")]
+        homes = (self.home, self.home.resolve())
+        original = self.c.under
+
+        def miss_home(path, root):
+            if root in homes and len(path.parts) > len(root.parts):
+                return False
+            return original(path, root)
+
+        with patch.object(self.c, "under", side_effect=miss_home), \
+                patch.object(os, "stat", wraps=os.stat) as probe, \
+                patch.object(os, "readlink", wraps=os.readlink) as readlink:
+            with self.assertRaisesRegex(self.c.CompartmentConfigError, 'not in a "follow" folder'):
+                self.load()
+        self.assertGreaterEqual([Path(c.args[0]) for c in probe.call_args_list].count(homes[1]), 2)
+        self.assertNotIn(homes[1] / "hop", [Path(c.args[0]) for c in readlink.call_args_list])
+
+    def test_home_stat_error_fails_closed(self):
+        self.config["fenced"] = ["~/real/inner"]
+        with patch.object(os, "stat", side_effect=OSError("invented denial")):
+            with self.assertRaisesRegex(self.c.CompartmentConfigError,
+                                        "cannot check whether the fenced folder ~/real/inner is a link"):
+                self.load()
+
+    def test_ancestor_stat_error_requires_follow(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        (outside / "lnk").symlink_to(self.home / "real", target_is_directory=True)
+        self.config["fenced"] = [str(outside / "lnk/f")]
+        resolved = outside.resolve()
+        original = os.stat
+
+        def denied(path, *args, **kwargs):
+            if Path(path) == resolved:
+                raise OSError("invented denial")
+            return original(path, *args, **kwargs)
+
+        with patch.object(os, "stat", side_effect=denied), \
+                patch.object(os, "readlink", wraps=os.readlink) as readlink:
+            self.assert_unfollowed(str(resolved / "lnk"))
+        self.assertNotIn(resolved / "lnk", [Path(c.args[0]) for c in readlink.call_args_list])
+
+    def test_two_outside_fences_stay_free(self):
+        roots = [Path(tempfile.mkdtemp(dir="/tmp")), Path(tempfile.mkdtemp())]
+        for root in roots:
+            self.addCleanup(shutil.rmtree, root)
+        (roots[0] / "a/f").mkdir(parents=True)
+        (roots[1] / "b/g").mkdir(parents=True)
+        self.config["fenced"] = [str(roots[0] / "a/f"), str(roots[1] / "b/g")]
+        self.load()
+
+    def test_follow_does_not_ignore_case(self):
+        (self.home / "shared").mkdir()
+        (self.home / "shared/l").symlink_to(self.home / "real", target_is_directory=True)
+        self.config.update(follow=["~/SHARED"], fenced=["~/shared/l/f"])
+        self.assert_unfollowed("~/shared/l")
+
+    def test_follow_does_not_casefold(self):
+        (self.home / "strasse").mkdir()
+        other = self.home / "straße"
+        other.mkdir(exist_ok=True)
+        if os.path.samefile(other, self.home / "strasse"):
+            self.skipTest("fixture volume folds the two folder names")
+        (other / "l").symlink_to(self.home / "real", target_is_directory=True)
+        self.config.update(follow=["~/strasse"], fenced=["~/straße/l/f"])
+        self.assert_unfollowed("~/straße/l")
+
+    def test_unfollowed_message_replaces_control_characters(self):
+        target = self.home / "escape\x1b"
+        target.mkdir()
+        (target / "l").symlink_to(self.home / "real", target_is_directory=True)
+        (self.home / "via").symlink_to(target, target_is_directory=True)
+        self.config.update(follow=["~/via"], fenced=["~/via/l/f"])
+        with self.assertRaises(self.c.CompartmentConfigError) as caught:
+            self.load()
+        self.assertIn("~/escape?/l", str(caught.exception))
+        self.assertNotIn("\x1b", str(caught.exception))
+        self.config.update(follow=[], fenced=["~/escape\x1b/l/f"])
+        with self.assertRaises(self.c.CompartmentConfigError) as caught:
+            self.load()
+        self.assertIn("the fenced folder ~/escape?/l/f", str(caught.exception))
+        self.assertNotIn("\x1b", str(caught.exception))
+
     def test_linked_parent_without_follow_refused(self):
         (self.home / "elsewhere/secret").mkdir(parents=True)
         (self.home / "links").symlink_to(self.home / "elsewhere", target_is_directory=True)
@@ -828,11 +950,11 @@ class FenceLinks(unittest.TestCase):
         (root / "via").symlink_to(root / "top", target_is_directory=True)
         self.config["fenced"] = [str(root / "via/f"), str(root / "via/g")]
         self.load()
-        # An under-home fence must not shorten the outside fences' free prefix.
+        # An under-home fence must not restrict links outside home.
         self.config["fenced"].append("~/real/inner")
         self.load()
 
-    def test_outside_start_resolved_once_and_fails_closed(self):
+    def test_each_parent_walk_has_predicate_and_fails_closed(self):
         outside = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, outside)
         root = Path(outside)
@@ -841,18 +963,23 @@ class FenceLinks(unittest.TestCase):
         with patch.object(self.c, "walk_resolve", wraps=original) as walk:
             self.load()
         starts = [call.args[0] for call in walk.call_args_list if not call.kwargs]
-        self.assertEqual(starts, [self.home, root])
+        self.assertEqual(starts, [self.home])
+        checked = [call for call in walk.call_args_list if call.kwargs]
+        self.assertEqual([call.args[0] for call in checked], [root, root, self.home / "real"])
+        self.assertTrue(all(callable(call.kwargs["may_follow"]) for call in checked))
         for failure in (OSError("invented"), ValueError("invented"), None):
             def walk(path, roots, **kwargs):
-                if path == root and not kwargs:
+                if path == root and kwargs:
                     if failure is not None:
                         raise failure
                     return root, True
                 return original(path, roots, **kwargs)
 
             with self.subTest(failure=failure), patch.object(self.c, "walk_resolve", side_effect=walk):
-                with self.assertRaisesRegex(self.c.CompartmentConfigError,
-                                            f"cannot check whether the fenced folder {root}/f is a link"):
+                message = (f"cannot check whether the fenced folder {root}/f is a link"
+                           if failure is not None else
+                           f"the fenced folder {root}/f is reached through another fenced folder")
+                with self.assertRaisesRegex(self.c.CompartmentConfigError, message):
                     self.load()
 
     def test_r1_fenced_link_and_fence_inside_its_target_refused_one_look_accepted(self):
@@ -1031,7 +1158,7 @@ class FenceLinks(unittest.TestCase):
         self.config["fenced"] = ["~/real", str(resolved_home / "real/inner")]
         with patch.object(os, "lstat", wraps=os.lstat) as probe:
             with self.assertRaisesRegex(self.c.CompartmentConfigError,
-                                        f"cannot check whether the fenced folder {resolved_home}/real/inner is a link"):
+                                        f"the fenced folder {resolved_home}/real/inner is reached through another fenced folder"):
                 self.load()
         self.assertEqual([Path(call.args[0]) for call in probe.call_args_list
                           if Path(call.args[0]).is_relative_to(resolved_home / "real")], [])
@@ -1219,11 +1346,11 @@ class FenceLinks(unittest.TestCase):
         self.assertNotIn(self.home.resolve() / "top/b",
                          [Path(call.args[0]) for call in probe.call_args_list])
 
-    def test_commonpath_errors_fail_closed_naming_first_fence(self):
+    def test_home_walk_errors_fail_closed_naming_first_fence(self):
         self.config["fenced"] = ["~/secret", "~/missing"]
         for failure in (ValueError("invented"), OSError("invented")):
             with self.subTest(failure=type(failure).__name__), \
-                    patch.object(os.path, "commonpath", side_effect=failure), \
+                    patch.object(self.c, "walk_resolve", side_effect=failure), \
                     patch.object(os, "lstat", wraps=os.lstat) as probe:
                 with self.assertRaisesRegex(self.c.CompartmentConfigError,
                                             "cannot check whether the fenced folder ~/secret is a link"):
