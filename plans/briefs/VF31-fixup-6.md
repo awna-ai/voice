@@ -162,3 +162,25 @@ failure left is a skip of that kind, and list each skipped test by name. One mut
 aside, mutate, run the one test, restore with `cp`, check with `cmp`). Summarise the diff, each red you
 saw first, each mutation and its result, each exempt test and what changed in it, and the three suites'
 final counts and exit codes.
+
+## Amendment (after the first pass stopped at section 2)
+
+Planning miss: four tests pin the home `stat`s that section 2 removes, not only
+`test_home_stat_error_fails_closed`. Section 2 stands (remove `inside_home`, `home_identity` and the home
+`os.stat`). These tests are exempt, changed only as follows:
+
+- `test_missing_home_has_no_identity`: rename `test_missing_home_loads`. Drop the `os.stat` patch, the
+  `error` loop and the `stat` list assertion; keep `HOME` pointing at the missing folder, the
+  `walk_resolve` not-blocked check, and assert `self.load()` succeeds.
+- `test_home_identity_refuses_when_spelling_misses`: rename
+  `test_home_spelling_miss_still_refuses_by_follow`. Keep the fixture, the `under` patch, the refusal
+  regex and the `readlink` assertion; replace the `assertGreaterEqual(... count(homes[1]), 2)` line with an
+  assertion that no `os.stat` call is at `homes[1]` (the identity check is gone).
+- `test_home_failure_message_names_home`: patch `os.lstat` (not `os.stat`) with the `PermissionError`, so
+  the home walk fails; the exact message assertion is unchanged.
+- `test_home_stat_error_fails_closed`: delete, as section 2 says.
+
+Rule for any further case: a test that fails **only** because it counts, patches or expects the removed
+home or identity `stat`s keeps its outcome assertions (loads, or refused with its message) and loses only
+the `stat` part; where its purpose is "the home check fails closed", move the injected failure onto
+`os.lstat`. Name each such test in the summary. Any other failure: stop and report.
