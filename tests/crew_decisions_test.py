@@ -697,6 +697,64 @@ class FenceLinks(unittest.TestCase):
         probes["open"] = stack.enter_context(patch.object(builtins, "open", wraps=builtins.open))
         return probes
 
+    def data_volume_folder(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, outside)
+        if not (Path("/System/Volumes/Data").is_dir()
+                and os.path.samefile("/System/Volumes/Data" + str(outside.resolve()), outside.resolve())):
+            self.skipTest("temporary folder has no /System/Volumes/Data spelling")
+        (outside / "real/a/f").mkdir(parents=True)
+        (outside / "L").symlink_to(
+            "/System/Volumes/Data" + str(outside.resolve() / "real"), target_is_directory=True)
+        return outside
+
+    def test_data_volume_spelling_refused_before_any_look(self):
+        for kind, value in (
+                ("fenced", "/System/Volumes/Data" + str(self.home / "real/inner")),
+                ("fenced", "/system/volumes/data" + str(self.home / "real/inner")),
+                ("follow", "/System/Volumes/Data" + str(self.home))):
+            with self.subTest(kind=kind, value=value):
+                self.config["fenced"] = [value] if kind == "fenced" else ["~/real/inner"]
+                self.config["follow"] = [value] if kind == "follow" else []
+                with ExitStack() as stack:
+                    probes = self.fence_looks(stack)
+                    with self.assertRaises(self.c.CompartmentConfigError) as caught:
+                        self.load()
+                self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+                self.assertEqual(str(caught.exception),
+                                 f"compartments: the {kind} folder {value} starts with /System/Volumes/Data, "
+                                 "the Mac's second name for the same folder; write it without /System/Volumes/Data")
+                for name, probe in probes.items():
+                    for call in probe.call_args_list:
+                        try:
+                            path = Path(call.args[0])
+                        except TypeError:
+                            continue
+                        self.assertFalse(self.c.under(path, Path("/System/Volumes/Data")), (name, path))
+
+    def test_fence_through_link_into_data_volume_refused(self):
+        outside = self.data_volume_folder()
+        self.config["follow"] = [str(outside.resolve())]
+        self.config["fenced"] = [str(outside / "L/a/f")]
+        with self.assertRaises(self.c.CompartmentConfigError) as caught:
+            self.load()
+        self.assertNotIsInstance(caught.exception, self.c.FenceLinkError)
+        self.assertEqual(str(caught.exception),
+                         f"compartments: the fenced folder {outside / 'L/a/f'} is reached through a link "
+                         "into /System/Volumes/Data, the Mac's second name for the same folder; "
+                         "write the fence by its path without /System/Volumes/Data")
+
+    def test_plain_fence_still_fences_data_volume_spelling(self):
+        outside = self.data_volume_folder()
+        self.config["follow"] = [str(outside.resolve())]
+        self.config["fenced"] = [str(outside.resolve() / "real/a/f")]
+        member = self.load()
+        c = member.compartments
+        for path in (outside / "L/a/f/notes.md", outside.resolve() / "real/a/f/notes.md",
+                     Path("/System/Volumes/Data" + str(outside.resolve() / "real/a/f/notes.md"))):
+            with self.subTest(path=path):
+                self.assertIs(self.c.safe_resolve(c, path, os.getcwd())[1], True)
+
     def test_backstop_refuses_look_inside_later_resolved_fence(self):
         outside = self.outside_backstop_fences()
         self.config["follow"] = [str(outside.resolve())]
@@ -729,9 +787,12 @@ class FenceLinks(unittest.TestCase):
         (outside / "fol").mkdir()
         (outside / "l1").mkdir()
         (outside / "real/f1/sub").mkdir(parents=True)
+        (outside / "out").mkdir()
         (outside / "l1/l2").symlink_to(outside / "real", target_is_directory=True)
+        n = len(Path("/System/Volumes/Data" + str(outside.resolve() / "real/f1/sub")).parts)
         (outside / "fol/al").symlink_to(
-            "/System/Volumes/Data" + str(outside.resolve() / "real/f1/sub"), target_is_directory=True)
+            "/System/Volumes/Data" + str(outside.resolve() / "real/f1/sub") + "/"
+            + "../" * n + str(outside.resolve() / "out").lstrip("/"), target_is_directory=True)
         self.config["follow"] = [str(outside.resolve())]
         self.config["fenced"] = [str(outside / "fol/al/x"), str(outside / "l1/l2/f1")]
         with self.assertRaises(self.c.CompartmentConfigError) as caught:

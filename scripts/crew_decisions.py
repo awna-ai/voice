@@ -659,12 +659,19 @@ def shown(text):
     return "".join("?" if unicodedata.category(ch)[0] == "C" else ch for ch in text)
 
 
+DATA_VOLUME = Path("/System/Volumes/Data")
+
+
 def refuse_fence_links(c):
     for value in c.get("follow", []):
         if ".." in Path(value).expanduser().parts:
             raise CompartmentConfigError(
                 f'compartments: the follow folder {shown(value)} has a ".." part; write it without ".."')
         follow = Path(os.path.abspath(absolute_path(value, Path.cwd())))
+        if under(follow, DATA_VOLUME):
+            raise CompartmentConfigError(
+                f"compartments: the follow folder {shown(value)} starts with /System/Volumes/Data, "
+                "the Mac's second name for the same folder; write it without /System/Volumes/Data")
         for fence_value in c["fenced"]:
             fence = Path(os.path.abspath(absolute_path(fence_value, Path.cwd())))
             if under(follow, fence):
@@ -675,6 +682,11 @@ def refuse_fence_links(c):
         if ".." in Path(value).expanduser().parts:
             raise CompartmentConfigError(
                 f'compartments: the fenced folder {shown(value)} has a ".." part; write it without ".."')
+        fence = Path(os.path.abspath(absolute_path(value, Path.cwd())))
+        if under(fence, DATA_VOLUME):
+            raise CompartmentConfigError(
+                f"compartments: the fenced folder {shown(value)} starts with /System/Volumes/Data, "
+                "the Mac's second name for the same folder; write it without /System/Volumes/Data")
     values = c["fenced"]
     lexical = [Path(os.path.abspath(absolute_path(value, Path.cwd()))) for value in values]
     if not lexical:
@@ -731,6 +743,11 @@ def refuse_fence_links(c):
                 f"compartments: the fenced folder {shown(values[i])} is reached through another fenced folder; "
                 "fence only that folder")
         resolved[i] = parent / lexical[i].name
+        if under(resolved[i], DATA_VOLUME):
+            raise CompartmentConfigError(
+                f"compartments: the fenced folder {shown(values[i])} is reached through a link "
+                "into /System/Volumes/Data, the Mac's second name for the same folder; "
+                "write the fence by its path without /System/Volumes/Data")
     for i, inner in enumerate(values):
         for j, outer in enumerate(values):
             if i == j or inner == outer:
