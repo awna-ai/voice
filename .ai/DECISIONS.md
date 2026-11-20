@@ -638,23 +638,37 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **Rule (b), outside that limit:** a fenced folder that is itself a link refuses the map, and Voice
   never reads that link, except in the cases the accepted limit above names.
 - **Not covered here, filed separately:** a fence reached through a link into the `/System/Volumes/Data`
-  spelling, or written in it, is fenced after the load only by that spelling (VF35), and a fence written with two leading
-  slashes fences nothing (VF36). Both predate VF31.
+  spelling, or written in it, was fenced after the load only by that spelling; VF35 (below) now refuses it. A
+  fence written with two leading slashes fences nothing (VF36). Both predate VF31.
 
-## 2026-11-20: a fence or follow folder in the Mac's data-volume spelling refuses the map (VF35)
+## 2026-11-20: a fence or follow folder in a Mac alias spelling refuses the map (VF35)
 
 - **The rule:** a `fenced` or `follow` value that starts with `/System/Volumes/Data` (any case), or whose first
   folder after `/` starts with a dot (`/.nofollow`, `/.resolve`, `/.vol`), refuses the compartment map (exit 2)
-  before Voice looks at anything on disk. So does a fence whose path, once its links are followed, lands in either.
-  Each message names the value and the fix: write it without that start. It is a plain config error, never the
-  fenced-link error, so no TODO item is added.
+  before Voice looks at anything on disk. So does a fence whose path, once its links are followed, lands in either,
+  and, when there is a fence, a home folder whose path, once its links are followed, lands in either. Each is a
+  plain config error, never the fenced-link error, so no TODO item is added.
+- **What the messages say:** a value written in an alias spelling: write its path without that start, or, if it
+  has no path without it, move the folder into the home folder. A fence reached through a link into one: Voice can
+  only fence a folder it can name without that start, so move the folder into the home folder or fence the folder
+  the link stands in for. Neither message sends the reader to the other spelling.
+- **Accepted cost (fails closed):** a folder that exists only on the data volume, such as stock macOS `/home`
+  (`/home -> /System/Volumes/Data/home`), cannot be fenced by any spelling: written `/home/x`, it is reached through
+  a link into the data volume; written `/System/Volumes/Data/home/x`, it starts with it. The fix is to move the
+  folder into the home folder. Root links made by `synthetic.conf` meet the same refusal (reasoned, not run). Such
+  fences are rare, and refusing is the safe side, like rule (b) for a fence that is a link.
 - **Why refuse, not compare spellings:** on a Mac, `/System/Volumes/Data/<path>`, `/.nofollow/<path>` and
   `/.resolve/1/<path>` are all the same folder as `<path>` (checked: same device and inode), and Voice compares
-  spellings. A plainly written fence already catches a look by those spellings, since its name appears inside
-  theirs, but a fence written in one of them is never matched by a plain look. Refusing them leaves only plain
-  fences, which match both ways. It fails closed, like rule (b) for a fence that is a link. The dot rule needs no
-  list of the Mac's alias names, since no real fence sits in a dot folder directly under `/`. The checks are by
-  spelling only, so they run the same on every system.
+  spellings. A plainly written fence catches a look by those spellings at or inside the fence, since its name
+  appears inside theirs, but a fence written in one of them is never matched by a plain look. Refusing them means
+  every fence that loads is plain, written and resolved. The dot rule covers the aliases rooted in a dot folder
+  directly under `/` without listing them, since no real fence sits in one. The checks are by spelling only, so
+  they run the same on every system.
+- **Not covered here, filed separately:** a plain fence does not catch a look at a folder that holds it (an
+  ancestor) written in an alias spelling or with `//`, so such a `--dir` can read a fenced file (VF37); a look
+  written `/.vol/<dev>/<ino>` matches no spelling (VF38); a fence or link target with two leading slashes keeps its
+  `//` (VF36). Those three predate VF35. Left as it is: a fence that holds the data volume (`/System/Volumes`)
+  loads but does not fence the plain spellings inside it; no real fence holds a system folder.
 - **What still needs the backstop's one-way match:** a link that enters an alias spelling inside a fence and climbs
   back out with `..` ends at a plain path, so this rule lets it through. The backstop still refuses that list for
   its look inside the fence. A test pins it.
