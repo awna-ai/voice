@@ -647,7 +647,9 @@ for this one key (V-Q15 answer 2, 2026-11-09).
   folder after `/` starts with a dot (`/.nofollow`, `/.resolve`, `/.vol`), refuses the compartment map (exit 2)
   before Voice looks at anything on disk. So does a fence whose path, once its links are followed, lands in either,
   and, when there is a fence, a home folder whose path, once its links are followed, lands in either. Each is a
-  plain config error, never the fenced-link error, so no TODO item is added.
+  plain config error, never the fenced-link error, so no TODO item is added. A `/.resolve` spelling is named with
+  its number (`/.resolve/1`), since dropping only `/.resolve` leaves `/1/<path>`, which fences nothing. A value or
+  link target that starts with two slashes (`//System/Volumes/Data/...`) is not caught yet: VF36.
 - **What the messages say:** a value written in an alias spelling: write its path without that start, or, if it
   has no path without it, move the folder into the home folder. A fence reached through a link into one: Voice can
   only fence a folder it can name without that start, so move the folder into the home folder or fence the folder
@@ -660,14 +662,17 @@ for this one key (V-Q15 answer 2, 2026-11-09).
 - **Why refuse, not compare spellings:** on a Mac, `/System/Volumes/Data/<path>`, `/.nofollow/<path>` and
   `/.resolve/1/<path>` are all the same folder as `<path>` (checked: same device and inode), and Voice compares
   spellings. A plainly written fence catches a look by those spellings at or inside the fence, since its name
-  appears inside theirs, but a fence written in one of them is never matched by a plain look. Refusing them means
+  appears inside theirs (except when the look also spells a letter of the name with a long s or a Kelvin sign,
+  VF39), but a fence written in one of them is never matched by a plain look. Refusing them means
   every fence that loads is plain, written and resolved. The dot rule covers the aliases rooted in a dot folder
   directly under `/` without listing them, since no real fence sits in one. The checks are by spelling only, so
   they run the same on every system.
 - **Not covered here, filed separately:** a plain fence does not catch a look at a folder that holds it (an
   ancestor) written in an alias spelling or with `//`, so such a `--dir` can read a fenced file (VF37); a look
   written `/.vol/<dev>/<ino>` matches no spelling (VF38); a fence or link target with two leading slashes keeps its
-  `//` (VF36). Those three predate VF35. Left as it is: a fence that holds the data volume (`/System/Volumes`)
+  `//` (VF36); a look in an alias spelling that writes an `s` or `k` of the fence's name as a long s or a Kelvin
+  sign is not matched, because the match encodes before it folds (VF39, from VF35's security review). Those four
+  predate VF35. Left as it is: a fence that holds the data volume (`/System/Volumes`)
   loads but does not fence the plain spellings inside it; no real fence holds a system folder.
 - **What still needs the backstop's one-way match:** a link that enters an alias spelling inside a fence and climbs
   back out with `..` ends at a plain path, so this rule lets it through. The backstop still refuses that list for
