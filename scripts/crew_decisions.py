@@ -12,7 +12,7 @@ member and the principal, the state dir, the gate mark word (`(Recommended · <N
 principal's pronouns, and the privacy filters (excluded folders, personal topics, secrets, pasted prompts).
 A fenced folder that is itself a link refuses the whole compartment map (exit 2).
 "follow" lists the folders whose links Voice may follow on a fenced folder's path; any other link
-below the home folder stops the load before Voice reads it.
+outside the home folder's own path stops the load before Voice reads it.
 The optional `todo_command` (an argv list whose first element is an absolute or ~/ path) gets one
 TODO item per linked fence, never two open at once: `<todo_command> list --json` prints a JSON
 object whose `"open"` is a list of objects with string `"text"`, and `<todo_command> add <text>`
@@ -329,7 +329,7 @@ def lexical_fences(c, cwd):
     return cached
 
 
-def walk_resolve(path, roots, *, may_follow=None):
+def walk_resolve(path, roots, *, may_follow=None, looked=None):
     """Resolve links, checking the next component before any filesystem probe."""
     prefix = Path(path.anchor)
     remaining = list(path.parts[1:])
@@ -346,6 +346,8 @@ def walk_resolve(path, roots, *, may_follow=None):
         candidate = prefix / name
         if matches_fence(candidate, roots):
             return candidate, True
+        if looked is not None:
+            looked.append(candidate)
         try:
             mode = os.lstat(candidate).st_mode
         except FileNotFoundError:
@@ -653,36 +655,38 @@ def validate_config(config, source):
         raise Failed(f"member config: {source}: queue_answerer must be a non-empty string")
 
 
+def shown(text):
+    return "".join("?" if unicodedata.category(ch)[0] == "C" else ch for ch in text)
+
+
 def refuse_fence_links(c):
     for value in c.get("follow", []):
         if ".." in Path(value).expanduser().parts:
             raise CompartmentConfigError(
-                f'compartments: the follow folder {value} has a ".." part; write it without ".."')
+                f'compartments: the follow folder {shown(value)} has a ".." part; write it without ".."')
         follow = Path(os.path.abspath(absolute_path(value, Path.cwd())))
         for fence_value in c["fenced"]:
             fence = Path(os.path.abspath(absolute_path(fence_value, Path.cwd())))
             if under(follow, fence):
                 raise CompartmentConfigError(
-                    f"compartments: the follow folder {value} is inside the fenced folder {fence_value}; "
+                    f"compartments: the follow folder {shown(value)} is inside the fenced folder {shown(fence_value)}; "
                     "a fenced folder's links are never followed")
     for value in c["fenced"]:
         if ".." in Path(value).expanduser().parts:
             raise CompartmentConfigError(
-                f'compartments: the fenced folder {value} has a ".." part; write it without ".."')
+                f'compartments: the fenced folder {shown(value)} has a ".." part; write it without ".."')
     values = c["fenced"]
     lexical = [Path(os.path.abspath(absolute_path(value, Path.cwd()))) for value in values]
     if not lexical:
         return
+    looked = []
+    home_path = []
     try:
         home = Path(os.path.abspath(Path.home()))
-        home_resolved, home_blocked = walk_resolve(home, FenceRoots(lexical))
+        home_resolved, home_blocked = walk_resolve(home, FenceRoots(lexical), looked=home_path)
+        looked.extend(home_path)
         if home_blocked:
             raise ValueError("home is fenced")
-        try:
-            home_info = os.stat(home_resolved)
-            home_identity = (home_info.st_dev, home_info.st_ino)
-        except (FileNotFoundError, NotADirectoryError):
-            home_identity = None
     except (OSError, ValueError):
         raise CompartmentConfigError(
             "compartments: cannot check the home folder, so the fenced folders cannot be checked")
@@ -693,51 +697,38 @@ def refuse_fence_links(c):
         if under_follow(path, home):
             follow_forms[home_resolved.joinpath(*path.parts[len(home.parts):])] = value
 
-    def inside_home(candidate):
-        if any(len(candidate.parts) > len(root.parts) and under(candidate, root)
-               for root in (home, home_resolved)):
-            return True
-        if home_identity is not None:
-            try:
-                for ancestor in candidate.parents:
-                    info = os.stat(ancestor)
-                    if (info.st_dev, info.st_ino) == home_identity:
-                        return True
-            except OSError:
-                return True
-        return False
+    home_parts = {tuple(map(fold, path.parts)) for path in home_path}
 
     def may_follow(candidate):
-        if inside_home(candidate) and not any(under_follow(candidate, folder) for folder in follow_forms):
-            return False
-        if not (len(candidate.parts) < len(home.parts) and under(home, candidate)):
-            linked[i] = True
-        return True
+        if (tuple(map(fold, candidate.parts)) in home_parts
+                or any(under_follow(candidate, folder) for folder in follow_forms)):
+            if not (len(candidate.parts) < len(home.parts) and under(home, candidate)):
+                linked[i] = True
+            return True
+        return False
 
     resolved, linked = {}, {}
     for i in sorted(range(len(values)), key=lambda i: len(lexical[i].parts)):
         guards = FenceRoots([path for j, path in enumerate(lexical) if j != i] + list(resolved.values()))
         linked[i] = False
         try:
-            parent, blocked = walk_resolve(lexical[i].parent, guards, may_follow=may_follow)
+            parent, blocked = walk_resolve(lexical[i].parent, guards, may_follow=may_follow, looked=looked)
         except UnfollowedLink as exc:
-            shown = exc.args[0]
+            link = exc.args[0]
             for root in (home_resolved, home):
-                if under(shown, root):
-                    shown = Path("~").joinpath(*shown.parts[len(root.parts):])
+                if under(link, root):
+                    link = Path("~").joinpath(*link.parts[len(root.parts):])
                     break
-            shown = "".join("?" if unicodedata.category(ch)[0] == "C" else ch for ch in str(shown))
-            value = "".join("?" if unicodedata.category(ch)[0] == "C" else ch for ch in values[i])
             raise CompartmentConfigError(
-                f'compartments: the fenced folder {value} is reached through the link {shown}, '
+                f'compartments: the fenced folder {shown(values[i])} is reached through the link {shown(str(link))}, '
                 'which is not in a "follow" folder; add the folder that holds the link to "follow", '
                 'or write the fence by its real path')
         except (OSError, ValueError):
             raise CompartmentConfigError(
-                f"compartments: cannot check whether the fenced folder {values[i]} is a link")
+                f"compartments: cannot check whether the fenced folder {shown(values[i])} is a link")
         if blocked:
             raise CompartmentConfigError(
-                f"compartments: the fenced folder {values[i]} is reached through another fenced folder; "
+                f"compartments: the fenced folder {shown(values[i])} is reached through another fenced folder; "
                 "fence only that folder")
         resolved[i] = parent / lexical[i].name
     for i, inner in enumerate(values):
@@ -748,13 +739,13 @@ def refuse_fence_links(c):
                    for inner_path in (lexical[i], resolved[i])
                    for outer_path in (lexical[j], resolved[j])):
                 raise CompartmentConfigError(
-                    f"compartments: the fenced folder {inner} is inside the fenced folder {outer}; "
-                    f"fence only {outer}")
+                    f"compartments: the fenced folder {shown(inner)} is inside the fenced folder {shown(outer)}; "
+                    f"fence only {shown(outer)}")
     for path, value in follow_forms.items():
         for j, fence_value in enumerate(values):
             if under(path, resolved[j]):
                 raise CompartmentConfigError(
-                    f"compartments: the follow folder {value} is inside the fenced folder {fence_value}; "
+                    f"compartments: the follow folder {shown(value)} is inside the fenced folder {shown(fence_value)}; "
                     "a fenced folder's links are never followed")
     found, identities = {}, set()
     for linked_parent in (False, True):
@@ -767,7 +758,7 @@ def refuse_fence_links(c):
                 continue
             except (OSError, ValueError):
                 raise CompartmentConfigError(
-                    f"compartments: cannot check whether the fenced folder {value} is a link")
+                    f"compartments: cannot check whether the fenced folder {shown(value)} is a link")
             identity = (info.st_dev, info.st_ino)
             if stat.S_ISLNK(info.st_mode) and identity not in identities:
                 identities.add(identity)
@@ -776,10 +767,16 @@ def refuse_fence_links(c):
                 found[k] = values[k]
         if found:
             links = [Path(found[k]).expanduser() for k in sorted(found)]
-            clauses = [f'compartments: the fenced folder {found[k]} is a link; '
+            clauses = [f'compartments: the fenced folder {shown(found[k])} is a link; '
                        'put the folder it points to in "fenced" instead, or remove the link'
                        for k in sorted(found)]
             raise FenceLinkError("; ".join(clauses), links)
+
+    for j, value in enumerate(values):
+        if any(under(path, root) for path in looked for root in (resolved[j], lexical[j])):
+            raise CompartmentConfigError(
+                f"compartments: checking the fenced folders looked inside the fenced folder {shown(value)}, "
+                "because another path leads into it through a link; write each fenced folder by its real path")
 
 
 def post_fence_link_todos(argv, links):
@@ -808,7 +805,7 @@ def post_fence_link_todos(argv, links):
     texts = [" ".join(item["text"].split()) for item in data["open"]
              if isinstance(item, dict) and isinstance(item.get("text"), str)]
     for link in links:
-        text = (f"Voice refused a compartment map: the fenced folder {link} is a link. "
+        text = (f"Voice refused a compartment map: the fenced folder {shown(str(link))} is a link. "
                 'Put the folder it points to in "fenced" instead, or remove the link.')
         if " ".join(text.split()) in texts:
             continue
