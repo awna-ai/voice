@@ -43,8 +43,9 @@ shell_suites='crew_install mac_install fetch_radio build_mac_app ci_local verify
 shellcheck_line='shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/build_mac_app_test.sh tests/ci_local_test.sh scripts/verify-main.sh scripts/release-check.sh tests/verify_main_test.sh'
 cargo_present=false
 if command -v cargo >/dev/null 2>&1; then cargo_present=true; fi
+host_os=$(uname -s)
 test_prefix='VOICE_REQUIRE_PARITY=1 '
-if [ "$(uname -s)" = Darwin ]; then test_prefix+='VOICE_REQUIRE_SANDBOX=1 '; fi
+if [ "$host_os" = Darwin ]; then test_prefix+='VOICE_REQUIRE_SANDBOX=1 '; fi
 
 # Each feature assertion remains a separate cargo tree step, including equal labels.
 feature_check() {
@@ -323,14 +324,17 @@ if $list; then
   printf '%s\n' "${labels[@]}"
   exit 0
 fi
-# The agent tests run Claude Code inside the Mac's own sandbox, so cargo test passes only on a
-# Mac. Elsewhere, refuse before running anything with 75, which remote-gate.sh reads as "could
-# not run here", so a Mac takes the gate.
-host_os=$(uname -s)
+# The agent tests need the Mac's sandbox. Off a Mac, refuse before any step if cargo is
+# missing or the gate would run cargo test. Exit 75 means "this host can't run the gate",
+# so a caller can move the gate to a Mac.
 if [ "$host_os" != Darwin ]; then
+  if ! $cargo_present; then
+    note "ci-local: cargo is missing and this host is $host_os, so the Rust checks can't run here and a Mac must run the gate; exiting 75 (this host can't run the gate) before any step"
+    exit 75
+  fi
   for label in "${labels[@]+"${labels[@]}"}"; do
     if [[ "$label" == *'cargo test '* ]]; then
-      note "ci-local: cargo test needs a Mac (the agent tests run Claude Code in the Mac's own sandbox) and this host is $host_os; exit 75 tells remote-gate.sh to try the next host"
+      note "ci-local: cargo test needs a Mac (the agent tests run Claude Code in the Mac's own sandbox) and this host is $host_os; exiting 75 (this host can't run the gate) before any step"
       exit 75
     fi
   done

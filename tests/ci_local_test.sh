@@ -136,7 +136,8 @@ echo 'ci_local_test: full golden list passed'
 # Off a Mac, a gate holding a cargo test refuses with 75 before any step runs; a Mac, or a gate
 # with no cargo test, runs its steps.
 mkdir "$tmp/os"
-# The screen version probe builds the step list; only screen steps mark execution.
+# The stub answers pnpm --version without marking, because building the step list asks for it
+# before any step runs.
 cat > "$tmp/os/pnpm" <<'STUB'
 #!/bin/bash
 if [ "${1:-}" = --version ]; then
@@ -154,11 +155,22 @@ gate_on() { # <what uname -s prints> <ci-local args...>
   status=0
   PATH="$tmp/os:$PATH" bash scripts/ci-local.sh "$@" > "$tmp/out" 2> "$tmp/err" || status=$?
 }
+mkdir "$tmp/bin-nocargo"
+cp "$tmp/bin/shellcheck" "$tmp/bin/pnpm" "$tmp/bin-nocargo/"
+if PATH="$tmp/os:$tmp/bin-nocargo:/usr/bin:/bin" command -v cargo >/dev/null 2>&1; then
+  echo 'ci_local_test: cargo found on the no-cargo PATH, skipping the off-Mac missing-cargo case'
+else
+  PATH="$tmp/os:$tmp/bin-nocargo:/usr/bin:/bin" gate_on Linux
+  [ "$status" = 75 ] || fail "off-Mac full gate without cargo: expected exit 75, got $status"
+  [ ! -s "$CI_LOCAL_MARKER" ] || fail 'off-Mac full gate without cargo executed a step'
+  grep -Fx "ci-local: cargo is missing and this host is Linux, so the Rust checks can't run here and a Mac must run the gate; exiting 75 (this host can't run the gate) before any step" "$tmp/err" >/dev/null || fail 'off-Mac full gate without cargo missing refusal note'
+  echo 'ci_local_test: off-Mac missing-cargo refusal passed'
+fi
 if [ -n "$real_cargo" ]; then
   gate_on Linux
   [ "$status" = 75 ] || fail "off-Mac full gate: expected exit 75, got $status"
   [ ! -s "$CI_LOCAL_MARKER" ] || fail 'off-Mac full gate executed a step'
-  grep -Fx "ci-local: cargo test needs a Mac (the agent tests run Claude Code in the Mac's own sandbox) and this host is Linux; exit 75 tells remote-gate.sh to try the next host" "$tmp/err" >/dev/null || fail 'off-Mac full gate missing refusal note'
+  grep -Fx "ci-local: cargo test needs a Mac (the agent tests run Claude Code in the Mac's own sandbox) and this host is Linux; exiting 75 (this host can't run the gate) before any step" "$tmp/err" >/dev/null || fail 'off-Mac full gate missing refusal note'
 
   gate_on Linux --list
   [ "$status" = 0 ] || fail "off-Mac list: expected exit 0, got $status"
