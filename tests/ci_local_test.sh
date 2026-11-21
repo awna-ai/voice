@@ -133,6 +133,57 @@ else
 fi
 echo 'ci_local_test: full golden list passed'
 
+# Off a Mac, a gate holding a cargo test refuses with 75 before any step runs; a Mac, or a gate
+# with no cargo test, runs its steps.
+mkdir "$tmp/os"
+# The screen version probe builds the step list; only screen steps mark execution.
+cat > "$tmp/os/pnpm" <<'STUB'
+#!/bin/bash
+if [ "${1:-}" = --version ]; then
+  echo 10.0.0
+else
+  printf '%s\n' pnpm >> "$CI_LOCAL_MARKER"
+fi
+STUB
+chmod +x "$tmp/os/pnpm"
+gate_on() { # <what uname -s prints> <ci-local args...>
+  printf '#!/bin/bash\necho %s\n' "$1" > "$tmp/os/uname"
+  chmod +x "$tmp/os/uname"
+  shift
+  : > "$CI_LOCAL_MARKER"
+  status=0
+  PATH="$tmp/os:$PATH" bash scripts/ci-local.sh "$@" > "$tmp/out" 2> "$tmp/err" || status=$?
+}
+if [ -n "$real_cargo" ]; then
+  gate_on Linux
+  [ "$status" = 75 ] || fail "off-Mac full gate: expected exit 75, got $status"
+  [ ! -s "$CI_LOCAL_MARKER" ] || fail 'off-Mac full gate executed a step'
+  grep -Fx "ci-local: cargo test needs a Mac (the agent tests run Claude Code in the Mac's own sandbox) and this host is Linux; exit 75 tells remote-gate.sh to try the next host" "$tmp/err" >/dev/null || fail 'off-Mac full gate missing refusal note'
+
+  gate_on Linux --list
+  [ "$status" = 0 ] || fail "off-Mac list: expected exit 0, got $status"
+  grep -F 'cargo test --locked' "$tmp/out" >/dev/null || fail 'off-Mac list missing cargo test'
+
+  gate_on Darwin
+  [ "$status" != 75 ] || fail 'Mac full gate refused with exit 75'
+  [ -s "$CI_LOCAL_MARKER" ] || fail 'Mac full gate ran no steps'
+
+  change tests/slack_mine_test.py
+  gate_on Linux --tier touched --base HEAD~1
+  reset
+  [ "$status" != 75 ] || fail 'off-Mac touched gate without crates refused with exit 75'
+  [ -s "$CI_LOCAL_MARKER" ] || fail 'off-Mac touched gate without crates ran no steps'
+
+  change builder/agent/src/egress.rs
+  gate_on Linux --tier touched --base HEAD~1
+  reset
+  [ "$status" = 75 ] || fail "off-Mac touched gate with a crate: expected exit 75, got $status"
+  [ ! -s "$CI_LOCAL_MARKER" ] || fail 'off-Mac touched gate with a crate executed a step'
+  echo 'ci_local_test: off-Mac refusal passed'
+else
+  echo 'ci_local_test: cargo missing, skipping the off-Mac refusal'
+fi
+
 # Report every new regression before failing, so each missing mapping has a red.
 regressions=0
 expect_step() {
