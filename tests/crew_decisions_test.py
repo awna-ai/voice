@@ -2182,6 +2182,42 @@ class Compartments(unittest.TestCase):
         c = self.c.check_compartments(self.config)
         self.assertEqual(self.c.record_compartment(c, {"project": "claude.ai"}), "fenced")
 
+    def test_record_hidden_fence_matches_a_project_that_kept_its_home(self):
+        self.config["fenced"] = ["~/garden-club", "~/.ssh"]
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            c = self.c.check_compartments(self.config)
+            for folder in ("-System-Volumes-Data" + self.c.encode("~/.ssh"),
+                           claude_name("/Users/ſam/.ssh"),
+                           "-System-Volumes-Data-Users-smith--ssh",
+                           self.c.encode("~/code/.ssh")):
+                project = self.c.project_name(folder)
+                with self.subTest(project=project):
+                    self.assertEqual(self.c.record_compartment(c, {"project": project}), "fenced")
+
+    def test_record_hidden_fence_still_leaves_lookalikes_routed(self):
+        self.config["fenced"] = ["~/garden-club", "~/.ssh"]
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            c = self.c.check_compartments(self.config)
+            for project in ("open-ssh", "ssh", self.c.project_name(self.c.encode("~/projects/openssh"))):
+                with self.subTest(project=project):
+                    self.assertEqual(self.c.record_compartment(c, {"project": project}), "p:" + project)
+
+    def test_record_full_fence_spelling_matches_a_data_volume_project(self):
+        self.config["fenced"] = ["~/garden-club"]
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            c = self.c.check_compartments(self.config)
+            project = self.c.project_name("-System-Volumes-Data" + self.c.encode("~/garden-club"))
+            self.assertEqual(self.c.record_compartment(c, {"project": project}), "fenced")
+            project = self.c.project_name(self.c.encode("~/projects/work"))
+            self.assertEqual(self.c.record_compartment(c, {"project": project}), "work")
+
+    def test_record_fold_letter_fence_matches_a_double_dash_project(self):
+        self.config["fenced"] = ["~/garden-club", "~/s"]
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            c = self.c.check_compartments(self.config)
+            self.assertEqual(self.c.record_compartment(c, {"project": "a--b"}), "fenced")
+            self.assertEqual(self.c.record_compartment(c, {"project": ".foo"}), "p:.foo")
+
     def test_record_dash_for_last_letters(self):
         self.config["fenced"] = ["~/garden-club", "~/clients"]
         c = self.c.check_compartments(self.config)
