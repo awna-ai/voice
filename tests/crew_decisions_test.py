@@ -2211,6 +2211,21 @@ class Compartments(unittest.TestCase):
             project = self.c.project_name(self.c.encode("~/projects/work"))
             self.assertEqual(self.c.record_compartment(c, {"project": project}), "work")
 
+    def test_record_full_fence_spelling_matches_a_project_outside_home(self):
+        self.config["fenced"] = ["~/garden-club", "/opt/vault", "/Volumes/Secret"]
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            c = self.c.check_compartments(self.config)
+            for project in (self.c.project_name("-System-Volumes-Data" + self.c.encode("/opt/vault")),
+                            "my-opt-vault", "code--opt-vault", "backup-volumes-secret"):
+                with self.subTest(project=project):
+                    self.assertEqual(self.c.record_compartment(c, {"project": project}), "fenced")
+            project = self.c.project_name(self.c.encode("/opt/other"))
+            with self.subTest(project=project):
+                self.assertEqual(self.c.record_compartment(c, {"project": project}), "p:" + project)
+            project = self.c.project_name(self.c.encode("~/projects/work"))
+            with self.subTest(project=project):
+                self.assertEqual(self.c.record_compartment(c, {"project": project}), "work")
+
     def test_record_fold_letter_fence_matches_a_double_dash_project(self):
         self.config["fenced"] = ["~/garden-club", "~/s"]
         with patch.dict(os.environ, {"HOME": "/Users/sam"}):

@@ -716,7 +716,10 @@ On a stored record's project only the project's leading `.` may stand for `-`; a
 or `--`, which is how the fence reads after a home that `project_name` could not strip (a data-volume folder,
 `.System-Volumes-Data-Users-<u>--ssh`, or a home typed with ſ, `.Users--am--ssh`). A fence's full spelling, its
 home included, is matched against the project too. So `~/.ssh` also fences a record of a hidden `.ssh` below
-any other folder (`code--ssh`); that over-match is accepted.
+any other folder (`code--ssh`); that over-match is accepted. A fence outside home has no home to strip, so its
+full spelling matches any project that holds it: `/opt/vault` fences a data-volume record
+(`.System-Volumes-Data-opt-vault`) and also `my-opt-vault` and `code--opt-vault`, and `/Volumes/Secret` fences
+`backup-volumes-secret`; that over-match is accepted too.
 The accepted over-match: `~/secret-notes` fences the folder of a real `~/.ecret-notes`, whose name is identical.
 `~/projects/clients` fences the worktrees (`…-client--claude-worktrees-…`) and hidden children
 (`~/projects/client/.git`) of `~/projects/client`, whose folder names equal those of `~/projects/clientſ/…`.
