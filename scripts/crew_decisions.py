@@ -624,16 +624,23 @@ def folded_project_name(folder):
     return "." + name[1:] if name.startswith("-") else name
 
 
+def fence_parts(fence):
+    """Fold the fence's absolute path parts and this home's parts without reading either folder."""
+    parts = [fold(p) for p in Path(os.path.abspath(Path(fence).expanduser())).parts[1:]]
+    home = [fold(p) for p in Path.home().parts[1:]]
+    return parts, home
+
+
 def fence_strips_from_names(fence):
     """True when project_name may drop this fence's whole folder from a record's name: the fence is the
-    home folder, ~/projects, another Mac's /Users/<name> or /home/<name>, whatever the name holds
-    (or its projects), or a folder above one of them. Such a fence leaves no letter of itself in the names
-    of the records under it."""
-    parts = [fold(p) for p in Path(os.path.abspath(Path(fence).expanduser())).parts[1:]]
+    home folder, ~/projects, ~/.claude, ~/.claude/projects, another Mac's /Users/<name> or /home/<name>,
+    whatever the name holds (or its projects), or a folder above one of them. Such a fence leaves no letter
+    of itself in the names of the records under it."""
+    parts, home = fence_parts(fence)
     if parts[:3] == ["system", "volumes", "data"]:
         parts = parts[3:]
-    home = [fold(p) for p in Path.home().parts[1:]]
-    return (any(target[:len(parts)] == parts for target in (home, home + ["projects"])) or
+    return (any(target[:len(parts)] == parts for target in
+                (home, home + ["projects"], home + [".claude"], home + [".claude", "projects"])) or
             bool(parts and parts[0] in ("users", "home") and
                  (len(parts) <= 2 or (len(parts) == 3 and parts[2] == "projects"))))
 
@@ -644,6 +651,7 @@ def fence_name_spellings(c):
     if cached is not None:
         return cached
     def spellings(f):
+        parts, home = fence_parts(f)
         full_plain = fold(encode(f))
         full_folded = fold(fence_encode(f))
         for spelling in (folded_project_name(encode(f)), folded_project_name(fence_encode(f))):
@@ -657,10 +665,15 @@ def fence_name_spellings(c):
                 yield spelling
                 if spelling.startswith("."):
                     yield "--" + spelling[1:]
+        if len(parts) > len(home) + 2 and parts[:len(home) + 2] == home + [".claude", "projects"]:
+            spelling = folded_project_name(Path(f).expanduser().parts[len(home) + 3])
+            yield spelling
+            if spelling.startswith("."):
+                yield "--" + spelling[1:]
         yield full_plain
         yield full_folded
-    result = (tuple(dict.fromkeys(s for f in c["fenced"] for s in spellings(f))),
-              any(fence_strips_from_names(f) for f in c["fenced"]))
+    spellings = tuple(dict.fromkeys(s for f in c["fenced"] for s in spellings(f)))
+    result = (spellings, any(fence_strips_from_names(f) for f in c["fenced"]) or "" in spellings)
     if isinstance(c, CompartmentMap):
         c._name_spellings = result
     return result

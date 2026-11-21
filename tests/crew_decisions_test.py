@@ -2187,7 +2187,8 @@ class Compartments(unittest.TestCase):
         with patch.dict(os.environ, {"HOME": "/Users/sam"}):
             for fence in ("~/projects", "~/PROJECTS", "~/Projects", "/Users", "/Users/sam", "/",
                           "/Users/other", "/home/other/projects", "/System/Volumes/Data/Users/sam/projects",
-                          "/Users/jo.doe", "/Users/jo.doe/projects", "/Users/sam-x", "/home/first_last"):
+                          "/Users/jo.doe", "/Users/jo.doe/projects", "/Users/sam-x", "/home/first_last",
+                          "~/.claude", "~/.claude/projects", "~/projects-"):
                 self.config["fenced"] = ["~/garden-club", fence]
                 c = self.c.check_compartments(self.config)
                 for project in (self.c.project_name(self.c.encode("~/projects/work2")),
@@ -2198,6 +2199,26 @@ class Compartments(unittest.TestCase):
                             record["compartment"] = "work"
                         with self.subTest(fence=fence, project=project, stored=stored):
                             self.assertEqual(self.c.record_compartment(c, record), "fenced")
+
+    def test_record_fence_on_one_transcript_folder_fences_its_records(self):
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            self.config["fenced"] = ["~/garden-club", "~/.claude/projects/-Users-sam-projects-secret-lab"]
+            c = self.c.check_compartments(self.config)
+            for record, expected in (({"project": "secret-lab"}, "fenced"),
+                                     ({"project": "secret-lab", "compartment": "p:secret-lab"}, "fenced"),
+                                     ({"project": "work"}, "work")):
+                with self.subTest(record=record):
+                    self.assertEqual(self.c.record_compartment(c, record), expected)
+
+    def test_record_fence_inside_another_macs_home_fences_its_records(self):
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            self.config["fenced"] = ["~/garden-club", "/Users/other/work/secret-lab"]
+            c = self.c.check_compartments(self.config)
+            for record, expected in (({"project": "work-secret-lab"}, "fenced"),
+                                     ({"project": "work-secret-lab", "compartment": "p:work-secret-lab"}, "fenced"),
+                                     ({"project": "work"}, "work")):
+                with self.subTest(record=record):
+                    self.assertEqual(self.c.record_compartment(c, record), expected)
 
     def test_record_fence_on_projects_fences_every_record_on_a_home_outside_users(self):
         self.assertFalse(str(Path.home()).startswith(("/Users/", "/home/")))
@@ -2284,9 +2305,10 @@ class Compartments(unittest.TestCase):
         row = {"id": "work", "kind": "message", "timestamp": "2026-09-01T00:00:00Z",
                "project": "work", "compartment": "work", "text": text, "context": "", "split": "train"}
         (self.h.root / "d.jsonl").write_text(json.dumps(row) + "\n")
-        for fenced in (False, True):
+        for fence in (None, "~/projects", "~/projects-"):
+            fenced = fence is not None
             with self.subTest(fenced=fenced):
-                self.config["fenced"] = ["~/garden-club"] + (["~/projects"] if fenced else [])
+                self.config["fenced"] = ["~/garden-club"] + ([fence] if fenced else [])
                 self.save_config()
                 proc = self.h.crew(self.member, "similar", "--compartment", "all", "--corpus", "d.jsonl",
                                    "--query", text, "--json")

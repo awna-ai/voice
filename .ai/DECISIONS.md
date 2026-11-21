@@ -734,8 +734,10 @@ too, in case it ever reaches the replace unnormalized.
 A stored `compartment` is kept only when the record's project passes today's fences; a stored `p:`
 compartment is re-checked like a project name, covering live records saved under one.
 A fence on home, `~/projects`, another Mac's home or a folder above one fences every stored record;
-`similar` says so on stderr. The accepted over-fence includes records from `~/notes` and a fence spelling
-found anywhere in a project name. A fence spelled in another case, or on a project's `.claude` or
-`.claude/worktrees` folder, fences that project's records. The check reads no file or folder.
-A record whose message was in a later fence but whose transcript folder was not, and a live record saved
-under a declared compartment, are dropped only by mining again after the fence is added (filed as its own card).
+`similar` says so on stderr, including for an empty fence spelling. A fence on `~/.claude`, `~/.claude/projects`
+or one transcript folder fences the records mined from it. The accepted over-fence includes records from
+`~/notes` and a fence spelling found anywhere in a project name. A fence spelled in another case, or on a
+project's `.claude` or `.claude/worktrees` folder, fences that project's records. The check reads no file or folder.
+A record whose message was in a later fence but whose transcript folder was not is dropped only by mining again.
+A live record saved under a declared compartment is not dropped even then, since the live log's `work` path
+is never re-checked; both gaps are VF48.
