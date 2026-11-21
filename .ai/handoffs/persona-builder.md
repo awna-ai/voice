@@ -23,6 +23,72 @@ One record per slice, newest first. Paraphrase only; no real person.
   method under its new name, nothing to flag.
 - **Not verified:** the rest of `ci-local.sh` on 1.99 until the land's gate runs it.
 
+## VF43: a "-" in a transcript folder's name may stand for a folded letter (2026-11-20 to 21, lane: V1)
+
+- **Status: built, verified through fix-up 2; fix-up 3 (two Verifier should-fixes) and the land owed.**
+- **The gap (from VF39's security review):** Claude Code names a session's folder by replacing every character of
+  its cwd outside `[a-zA-Z0-9]` with `-`, so a name on disk holding ſ, ß or a ligature leaves a lone `-`
+  (`~/ſecret-notes` gives `…--ecret-notes`). `folder_compartment` routed such a folder as a project, and `mine`
+  read its records that carry no `cwd`.
+- **Commits:** brief `2e58f85`, code `7f3870e` (`FOLDS_TO_ASCII`, `dashed_in`, used in `folder_compartment` and
+  `record_compartment`). Fix-up 1: brief `2ca6f74`, code `183df4f`. Fix-up 2: brief `33a8d28`, code `8e84c61`.
+  Code by Codex (fix-up 2 committed by Claude: Codex's sandbox could not write the worktree's git index).
+  Claude Code 2.1.311's folder naming was read from its own binary.
+- **Verifier (Fable) on `7f3870e`: FAIL.** Must-fix: a fence whose last name ends in a fold letter fenced its
+  stem's siblings and children (`~/clients` fenced `~/client-portal` and `~/client/acme`). Should-fixes: a hidden
+  fence's `.` matched any `-` in a stored project (`~/.ssh` fenced `open-ssh`); `claude.ai` under `~/.ai` lost the
+  old substring match; the decision text named neither Claude Code's NFC step nor the gaps left open. Fix-up 1:
+  a `-` that stands for a fence's last letters counts only at the end of the name or before another `-`; the
+  fence side of the record check stays raw, and only the project's leading `.` may stand for `-`; the decision
+  entry rewritten.
+- **Repeat Verifier (Opus) on `183df4f`:** PASS. Each new test goes red against `7f3870e` (11 subtests);
+  `dashed_in` keeps every plain substring (200k random pairs); 34,485 Claude Code folder names from 600 respelled
+  fences, all fenced. Should-fixes: (1) a hidden fence misses a data-volume or other-Mac record project
+  (`~/.ssh` against `.System-Volumes-Data-<home>--ssh`; `main` has the same gap), the security review's low too;
+  (2) the decision must name the end rule's over-match: `~/projects/clients` fences the worktrees and hidden
+  children of `~/projects/client`, whose folder names equal those of `~/projects/clientſ/…`; (3) the `~/s` line
+  is stale. Her test run hit three 60-second subprocess timeouts at load near 27 that pass alone.
+- **Security review (Opus):** on `7f3870e`, nothing new failed open; one low (a crafted long, dash-heavy name
+  against a fence of repeated fold letters is slow, measured up to 24 s); older gaps filed as VF44 and VF45. On
+  `183df4f`: no regression against `d0d873a` (100k random pairs: `dashed_in` keeps every plain substring;
+  ~24k fuzzed folder and record checks, every branch miss also missed by base). One low, older than the branch:
+  a stored record whose project keeps a home prefix (`.System-Volumes-Data-Users-<u>--ssh`, or `.Users--am--ssh`
+  from a cwd typed with ſ in the home) is not fenced by a hidden fence such as `~/.ssh`; mining is safe, since
+  `folder_compartment` fences those folders. Cost: the end rule leaves the worst case unchanged (measured 760 ms
+  for a 250-character fold-letter fence against 255 dashes).
+- **Fix-up 2 (`8e84c61`), for should-fixes 1 to 3:** `record_compartment` also tries, per fence, each hidden
+  project spelling with its `.` written as `--` and the fence's two full encodings (home included), so
+  `~/.ssh` fences the data-volume, ſ-home and other-Mac record projects; `open-ssh`, `ssh` and `openssh` stay
+  routed. The accepted over-match, `~/.ssh` fencing `code--ssh`, is pinned by a test and named in DECISIONS, with
+  the end rule's `~/projects/clients` over-match and the measured `~/s` reach. My red check: the four newly covered
+  record projects fail on `183df4f` and pass on `8e84c61` (measured, Python 3.15.0). Codex's runs at `8e84c61`:
+  Compartments and FenceLinks 194 run, 8 skipped, and the whole file 265 run, 8 skipped, the only failures load
+  timeouts in `test_filter_override_grid_only_adds_its_own_records`, which passed alone. Her mutations: without
+  the `--` variant the other-Mac case goes red; without the full spellings the ſ-home case still passes through
+  `--`.
+- **Security review (Opus) on `8e84c61`:** no fail-open (30,000-case differential fuzz against `183df4f`: none
+  fenced before and unfenced after, 5,641 newly fenced, no exceptions; edge fences `/`, `~/`, the home, very long
+  fences, none crash). Low: each fence now yields up to 8 spellings, so a record check costs more (measured
+  3.5 s → 5.7 s CPU for 3,000 calls with 10 fences, linear). Medium, older than VF43 and the same on `183df4f`: a
+  fence that is an ancestor of home or `~/projects` (`/`, `~/`, the home) fails open for stored records, since
+  `project_name` strips the home; added to VF45's card as more cases of its root cause.
+- **Repeat Verifier (Opus) on `8e84c61`: PASS.** 15,000-pair fuzz against `183df4f`: no fenced-to-unfenced
+  change and no routing change among unfenced records; the decision's clients and `~/s` lines match measured
+  behaviour; the four new record cases red on `183df4f`, Compartments green at `8e84c61`. Should-fixes, for
+  fix-up 3: (1) the full spellings have no test of their own; their only own reach is a fence outside home
+  (`/opt/vault` now fences the record `.System-Volumes-Data-opt-vault`, missed on `183df4f`): pin it; (2) the
+  decision names only the hidden `.ssh` over-match, not the out-of-home one (`/opt/vault` fences `my-opt-vault`
+  and `code--opt-vault`, `/Volumes/Secret` fences `backup-volumes-secret`): add one clause.
+- **Verified (measured, Python 3.12.14 on Mimi):** at `183df4f`, Compartments and FenceLinks 182 passed with
+  8 skips the file already had, and the whole file 253 passed with the same 8 skips (Codex's runs). Mutations:
+  my own, in a scratch copy, letting a last-letters `-` match whatever follows turned 9 subtests in 3 tests red
+  while the real-folder test stayed green; Codex's put the `.`-to-`-` step back on the fence side and turned the
+  `open-ssh` test red. On `7f3870e`, my plain-substring mutation turned 14 subtests in 3 tests red.
+- **Not verified:** Python 3.9 (not on PATH on Mimi); `mine` against a real Claude Code folder made by a real ſ
+  cwd (invented folders only); whether Claude Code's NFC step ever lets a Kelvin sign through.
+- **Left open:** VF44 (a character outside the BMP becomes `--`; names cut at 200 characters), VF45 (stored
+  records are not re-checked against the fences; it now also names the ancestor-of-home fences).
+
 ## VF39: a fence's spelling folds before it is encoded (2026-11-20, lane: V1)
 
 - **Status: built, verified, land started** (full `ci-local.sh`, detached; V-Q26's rule). Rebased on `33e2bbd`
