@@ -786,6 +786,10 @@ fn the_helper_runs_only_while_signing_in() {
     }
 }
 
+// A Keychain file of the test's own avoids every person's Keychain and works where the login
+// Keychain is locked, as in an ssh session. The sandboxed security's default search list (the
+// login Keychain, no path given) is not exercised here; the Library/Keychains and *.keychain-db
+// canaries in denies_every_secret_in_both_letter_cases cover its files.
 struct TestKeychain {
     _scratch: Scratch,
     path: PathBuf,
@@ -799,12 +803,7 @@ impl TestKeychain {
             _scratch: scratch,
             path,
         };
-        let mut random = [0u8; 16];
-        fs::File::open("/dev/urandom")
-            .unwrap()
-            .read_exact(&mut random)
-            .unwrap();
-        let password = format!("{:032x}", u128::from_ne_bytes(random));
+        let password = random_hex();
         let created = Command::new("/usr/bin/security")
             .args(["create-keychain", "-p", &password])
             .arg(&keychain.path)
@@ -837,13 +836,13 @@ impl Drop for TestKeychain {
     }
 }
 
-fn random_service() -> String {
+fn random_hex() -> String {
     let mut random = [0u8; 16];
     fs::File::open("/dev/urandom")
         .unwrap()
         .read_exact(&mut random)
         .unwrap();
-    format!("voice-sandbox-test-{:032x}", u128::from_ne_bytes(random))
+    format!("{:032x}", u128::from_ne_bytes(random))
 }
 
 #[test]
@@ -853,9 +852,7 @@ fn the_keychain_stays_closed() {
     }
     let sb = Sandbox::new();
     let keychain = TestKeychain::new();
-    // A Keychain file of our own avoids every person's Keychain and works when the
-    // login Keychain is locked, as in an ssh session.
-    let readable = random_service();
+    let readable = format!("voice-sandbox-test-{}", random_hex());
     let created = Command::new("/usr/bin/security")
         .args([
             "add-generic-password",
@@ -871,7 +868,7 @@ fn the_keychain_stays_closed() {
         .unwrap()
         .status;
     assert!(created.success(), "couldn't create the test Keychain item");
-    let unreadable = random_service();
+    let unreadable = format!("voice-sandbox-test-{}", random_hex());
     let added = sb
         .command("/bin/bash", 1, "no", None)
         .args([
