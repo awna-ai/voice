@@ -161,22 +161,33 @@ FOLDS_TO_ASCII = frozenset({"ff", "ffi", "ffl", "fi", "fl", "k", "s", "ss", "st"
 @functools.lru_cache(maxsize=4096)
 def dashed_in(spelling, name):
     """True when spelling occurs in name, where a "-" in name may stand for any run of spelling in
-    FOLDS_TO_ASCII: Claude Code writes ſ in a cwd as a lone "-". Both arguments are already folded."""
+    FOLDS_TO_ASCII: Claude Code writes ſ in a cwd as a lone "-". Both arguments are already folded.
+    A "-" that stands for the spelling's last letters must end the name or be followed by "-", since
+    ~/clientſ and its children are spelled …-client- and …-client--…."""
     if not spelling:
         return True
     positions = set()
+    pending = False
     for char in name:
+        if pending and char == "-":
+            return True
+        pending = False
         positions.add(0)
         reached = set()
         for i in positions:
             if spelling[i] == char:
                 reached.add(i + 1)
             if char == "-":
-                reached.update(i + len(t) for t in FOLDS_TO_ASCII if spelling.startswith(t, i))
+                for t in FOLDS_TO_ASCII:
+                    if spelling.startswith(t, i):
+                        if i + len(t) == len(spelling):
+                            pending = True
+                        else:
+                            reached.add(i + len(t))
         if len(spelling) in reached:
             return True
         positions = reached
-    return False
+    return pending
 
 
 class CompartmentMap(dict):
@@ -607,11 +618,10 @@ def record_compartment(c, record):
     def matches(folder):
         prefix = fold(project_name(encode(folder)))
         return fold(project) == prefix or fold(project).startswith(prefix + "-")
-    def comparable(project):
-        project = fold(project)
-        return "-" + project[1:] if project.startswith(".") else project
-    if any(dashed_in(comparable(project_name(encode(f))), comparable(project)) or
-           dashed_in(comparable(project_name(fence_encode(f))), comparable(project)) for f in c["fenced"]):
+    folded = fold(project)
+    dotless = "-" + folded[1:] if folded.startswith(".") else folded
+    if any(dashed_in(spelling, folded) or dashed_in(spelling, dotless) for f in c["fenced"]
+           for spelling in (fold(project_name(encode(f))), fold(project_name(fence_encode(f))))):
         return "fenced"
     found = [(len(project_name(encode(folder))), name) for name, folder in declared_folders(c) if matches(folder)]
     return max(found)[1] if found else "p:" + project

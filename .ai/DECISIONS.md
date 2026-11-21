@@ -706,9 +706,15 @@ The Kelvin sign stays fenced through the existing NFC normalization.
 
 ## 2026-11-20: a "-" in a transcript folder's name may stand for a folded letter (VF43)
 
-Claude Code names folders with `e.replace(/[^a-zA-Z0-9]/g, "-")`, without normalization and on UTF-16 units,
-so ſ and the Kelvin sign leave a lone `-`; names over 200 characters are cut and given a hash.
-A folder's `-` may stand for any non-ASCII character's fold to ASCII letters; fence checks fail closed.
-The accepted over-match fences a real `~/.ecret-notes` under `~/secret-notes`, since its folder name is identical;
-a fence whose last name is only fold letters, such as `~/s`, fences every hidden folder in home.
-VF39's Kelvin line holds for looks, but not for folder names; this rule covers those names.
+Claude Code 2.1.311 resolves the cwd, normalizes it to NFC, then replaces each UTF-16 unit outside
+`[a-zA-Z0-9]` with `-` (`e.replace(/[^a-zA-Z0-9]/g, "-")`); a name over 200 characters is cut and given a hash.
+So a name on disk holding ſ, ß or a ligature leaves a lone `-` in the folder name, with no letter of it left.
+A `-` in a folder name may stand for any non-ASCII character whose fold is ASCII letters (`FOLDS_TO_ASCII`).
+A `-` that stands for a fence's last letters counts only at the end of the name or before another `-`, so
+`~/clients` still fences `~/clientſ` and its children but not `~/client-portal` or `~/client/acme`.
+On a stored record's project only the project's leading `.` may stand for `-`; a hidden fence's `.` matches a `.`.
+The accepted over-match: `~/secret-notes` fences the folder of a real `~/.ecret-notes`, whose name is identical,
+and a fence whose last name is only fold letters, such as `~/s`, fences every hidden folder in home.
+This fails closed only for those letters: a character outside the BMP becomes `--`, and a cut name is not
+matched; both are VF44. VF39's Kelvin line holds for looks; for folder names this rule covers the Kelvin sign
+too, in case it ever reaches the replace unnormalized.
