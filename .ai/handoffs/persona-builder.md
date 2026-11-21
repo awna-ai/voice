@@ -4,7 +4,7 @@ One record per slice, newest first. Paraphrase only; no real person.
 
 ## VF43: a "-" in a transcript folder's name may stand for a folded letter (2026-11-20 to 21, lane: V1)
 
-- **Status: built, verified through fix-up 2; fix-up 3 (two Verifier should-fixes) and the land owed.**
+- **Status: built and verified through fix-up 3; land started** (full `ci-local.sh`, detached; V-Q26's rule).
 - **The gap (from VF39's security review):** Claude Code names a session's folder by replacing every character of
   its cwd outside `[a-zA-Z0-9]` with `-`, so a name on disk holding ſ, ß or a ligature leaves a lone `-`
   (`~/ſecret-notes` gives `…--ecret-notes`). `folder_compartment` routed such a folder as a project, and `mine`
@@ -58,6 +58,17 @@ One record per slice, newest first. Paraphrase only; no real person.
   (`/opt/vault` now fences the record `.System-Volumes-Data-opt-vault`, missed on `183df4f`): pin it; (2) the
   decision names only the hidden `.ssh` over-match, not the out-of-home one (`/opt/vault` fences `my-opt-vault`
   and `code--opt-vault`, `/Volumes/Secret` fences `backup-volumes-secret`): add one clause.
+- **Fix-up 3 (brief `9ddcc1e`, test and decision `81d1fe5`), for the repeat Verifier's two should-fixes:** a
+  test pins the full spellings on fences outside home (`/opt/vault`, `/Volumes/Secret`): the data-volume record
+  `.System-Volumes-Data-opt-vault` and the accepted over-match `my-opt-vault`, `code--opt-vault` and
+  `backup-volumes-secret` are fenced; `.opt-other` and `work` stay routed. DECISIONS names that over-match in one
+  clause. No change to `scripts/crew_decisions.py`. Before briefing I reproduced every row on `183df4f` and
+  `8e84c61` (measured). My mutation, deleting the two full-spelling `yield`s in a scratch-backed copy: three
+  subtests red (the data-volume record, `my-opt-vault`, `backup-volumes-secret`), the routed two green;
+  `code--opt-vault` stays fenced through the `--` variant as well. File restored, `cmp` clean. Compartments 106
+  passed at `81d1fe5` (mine); Codex's runs: Compartments and FenceLinks 195 run, 8 skipped; the whole file 266 run,
+  8 skipped, no timeouts. Test and decision text only, 19 added lines in files the Verifier saw, so her pass holds;
+  security review on this delta (inline, Claude): no code path changes, invented paths only, nothing to flag.
 - **Verified (measured, Python 3.12.14 on Mimi):** at `183df4f`, Compartments and FenceLinks 182 passed with
   8 skips the file already had, and the whole file 253 passed with the same 8 skips (Codex's runs). Mutations:
   my own, in a scratch copy, letting a last-letters `-` match whatever follows turned 9 subtests in 3 tests red
