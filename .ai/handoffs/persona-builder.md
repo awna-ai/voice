@@ -2,6 +2,40 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF47: the sandbox's Keychain test makes its own throwaway Keychain (2026-11-21, lane: V1)
+
+- **Status: built and verified; land started** (full `ci-local.sh`, detached; V-Q26's rule), stacked on VF46 and
+  VF43 (this branch starts from the local VF43 head `4d3ea82`, not `origin/main`, so one gate lands all three).
+- **The gap (from VF43's second land):** voice's gate runs on Teo over ssh since 2026-11-21, where the login
+  Keychain is locked, so `the_keychain_stays_closed` failed at its setup (`add-generic-password` exit 36, "User
+  interaction is not allowed"). On Teo at `4d3ea82` it was the only failing test in the workspace (measured,
+  `--no-fail-fast`); Python, shell, shellcheck, fmt and clippy all passed.
+- **Commits:** brief `44a0595`, test `fca1fcb` (Codex; committed by Claude). `TestKeychain` creates and unlocks
+  `test.keychain-db` in a scratch folder with a random password and deletes it on drop; the readable item goes
+  there, the sandboxed add and read must fail, and the item checks that `KeychainCleanup`'s drop made move into the
+  test. The profile is unchanged.
+- **Verified (measured):** before briefing, create, unlock, add, find and delete on a throwaway Keychain file
+  worked on Mimi and on Teo over ssh, with `security list-keychains -d user` unchanged. Red: Teo at `4d3ea82`.
+  Green: Teo at `fca1fcb`, `sandbox_profile` 19 passed, no `voice-agent` Keychain in the search list, fmt and
+  `voice-agent` clippy clean; Mimi, 19 passed, nothing left in the temp folder. Mutations (mine, `cp` backup and
+  `cmp` restore): running both sandboxed calls unsandboxed turned it red ("the sandbox wrote a Keychain item");
+  running only the read unsandboxed turned it red ("the sandbox found the test Keychain item"). A profile mutation
+  allowing `com.apple.SecurityServer` and `com.apple.securityd` lookups plus all file access stayed green, so
+  those two names alone don't open the Keychain to the sandboxed `security`; `(allow default)` hung on a Keychain
+  prompt and was stopped (profile restored, its leftover Keychain file deleted).
+- **Verifier (Opus) on `fca1fcb`: PASS.** The claim holds for a Keychain reached through securityd; a positive
+  control (the same add and find under an inline `(allow default)` sandbox) exits 0, so the denial comes from the
+  profile; the search list and default Keychain are unchanged before and after a green and a panicking run; drop
+  order and cleanup checked. Should-fixes, all in fix-up 1 (brief `fae1955`, test `9a653ff`): one `random_hex()`
+  for the password and both services, and a comment on `TestKeychain` naming the accepted gap: the sandboxed
+  `security`'s default search list is not exercised here, and the `Library/Keychains` and `*.keychain-db` canaries
+  cover its files. 9 added lines in the file she saw, so her pass holds; `sandbox_profile` 19 passed after it
+  (mine, Mimi). Security review (inline, Claude): test-only, the password never printed, no user Keychain state
+  touched (measured).
+- **Not verified:** which profile rule closes the Keychain (the test proves the sandboxed `security` can't reach a
+  Keychain file, not why); the login Keychain path itself, which the old test used (`Library/Keychains` stays in
+  the secret-path test).
+
 ## VF46: voice builds clean on Rust 1.99 (2026-11-21, lane: V1)
 
 - **Status: built and verified; land started** (full `ci-local.sh`, detached; V-Q26's rule), with VF43 stacked
