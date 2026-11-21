@@ -2,6 +2,49 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF45: a stored record is re-checked against the fences when it is read (2026-11-21, lane: V1)
+
+- **Status: built and verified; land started** (full `ci-local.sh` on Teo, detached; V-Q26's rule).
+- **The gap (from VF43's security review):** `record_compartment` returned a stored `compartment` key as it was,
+  so a record mined before a fence was added stayed reachable through `similar`; and `project_name` drops the
+  home and `projects-` from a name, so a fence on `~/projects` (or home, or above) left no spelling of itself in
+  the names of the records under it.
+- **The fix:** every read re-checks the record's project name against today's fences before a stored
+  compartment is kept, and a stored `p:` compartment is re-checked the same way (so live records saved under
+  one are covered). A fence on home, `~/projects`, another Mac's `/Users/<name>` or `/home/<name>`, or a folder
+  above one fences every stored record, and `similar` says so on stderr. Fence spellings are folded (a fence
+  `~/PROJECTS/x` counts), cover a project's `.claude` and `.claude/worktrees` folders, and are computed once per
+  compartment map. No file or folder is read.
+- **Commits (Codex; committed by Claude, the sandbox can't write this worktree's index):** brief `a9e3b2b`,
+  tests `1b8f8cd`, code `eff22de`; fix-up 1 (a mutation survivor: the `~/projects` target was only exercised
+  under a `/Users` home) brief `71c61c5`, test `54b3b60`; fix-up 2 (the Verifier's and the security review's
+  findings) brief `11c6ac3`, tests `7e33fe7`, code `58528f1`; fix-up 3 (the repeat Verifier's should-fixes: a
+  fence on `~/.claude`, the transcript root or one transcript folder; an empty fence spelling sets the notice;
+  the other-home strip tested; the live-record gap worded exactly) brief `3a25953`, code and tests `da41260`.
+- **Verified (measured):** red on the unfixed code, 66 assertion failures (mine, `cp` backup and `cmp`
+  restore); fix-up 2's tests red on `54b3b60`, 46 failures. Mutations, all red: trusting the stored compartment,
+  no every-record rule, no other-Mac rule, no `~/projects` target (after fix-up 1; it survived before), no
+  data-volume strip (mine); case-folded strips, worktree spellings, `p:` re-check, the short-path branch and
+  the cache (Codex's, fix-up 2); the `.claude` targets, the transcript-folder spelling, the other-home strip and
+  the empty-spelling term (Codex's, fix-up 3; I re-ran the last, red). `crew_decisions_test.py` (278), `crew_hardening_test.py` and
+  `crew_documents_test.py` green, each run on its own as the gate runs them. Live seam: the CLI `similar` in a
+  subprocess, with a stored record a later fence covers, returns only the other record.
+- **Verifier (Fable) on `eff22de`: FAIL**, two must-fixes (case-variant fences; live records' `p:`
+  compartments) and five should-fixes (worktree fences, other-Mac homes with a non-alphanumeric name, about
+  75 µs per record per fence, a silent every-record fence, an over-claim in DECISIONS), all in fix-up 2.
+  **Repeat Verifier (Opus) on `58528f1`: PASS**, every claimed fix held (performance measured 81 µs to 5.5 µs per
+  record per fence on 2000 records and 30 fences; no file call under a trap on stat, open and listing), with four
+  should-fixes, all in fix-up 3 (53 added lines in files she saw, so her pass holds).
+  **Security review (sub-agent, Opus) on `eff22de`:** the worktree and live findings (both in fix-up 2) and an
+  older one, a `//` fence that matches nothing (already VF36).
+- **Not done here, filed:** VF48 `9NkRj2jZ` (a message whose cwd was in a later fence while its transcript
+  folder was not is dropped only by mining again, and a live record saved under a declared compartment not even
+  then, since `live_record` never re-checks the line's `work` path);
+  VF49 `tigsKzYE` (`merge`, `chunk`, `tally`, `split` and `shingle` apply no fence to stored records).
+- **Accepted:** a fence spelling found anywhere in a project name fences it, now for stored records too (a
+  fence `~/projects/app` fences a stored `webapp` record), and a fence on `~/projects` fences records from
+  `~/notes`; both fail closed.
+
 ## VF47: the sandbox's Keychain test makes its own throwaway Keychain (2026-11-21, lane: V1)
 
 - **Status: built and verified; land started** (full `ci-local.sh`, detached; V-Q26's rule), stacked on VF46 and
