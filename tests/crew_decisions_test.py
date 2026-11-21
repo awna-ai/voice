@@ -2170,6 +2170,67 @@ class Compartments(unittest.TestCase):
                 with self.subTest(path=path, folder=folder):
                     self.assertEqual(self.c.folder_compartment(c, folder), "fenced")
 
+    def test_record_stored_compartment_is_rechecked_against_fences(self):
+        self.config["fenced"] = ["~/garden-club", "~/projects/secret-lab"]
+        c = self.c.check_compartments(self.config)
+        for record, expected in (
+                ({"project": self.c.project_name(self.c.encode("~/projects/secret-lab")),
+                  "compartment": "p:secret-lab"}, "fenced"),
+                ({"project": "secret-lab-app", "compartment": "work"}, "fenced"),
+                ({"project": "work", "compartment": "work"}, "work"),
+                ({"project": "live", "compartment": "client"}, "client"),
+                ({"compartment": "hub-mixed"}, "hub-mixed")):
+            with self.subTest(record=record):
+                self.assertEqual(self.c.record_compartment(c, record), expected)
+
+    def test_record_fence_on_home_or_projects_fences_every_record(self):
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            for fence in ("~/projects", "~/PROJECTS", "/Users", "/Users/sam", "/",
+                          "/Users/other", "/home/other/projects", "/System/Volumes/Data/Users/sam/projects"):
+                self.config["fenced"] = ["~/garden-club", fence]
+                c = self.c.check_compartments(self.config)
+                for project in (self.c.project_name(self.c.encode("~/projects/work2")),
+                                "work", ".config", "client-portal"):
+                    for stored in (False, True):
+                        record = {"project": project}
+                        if stored:
+                            record["compartment"] = "work"
+                        with self.subTest(fence=fence, project=project, stored=stored):
+                            self.assertEqual(self.c.record_compartment(c, record), "fenced")
+
+    def test_record_lookalikes_of_home_and_projects_fences_still_route(self):
+        with patch.dict(os.environ, {"HOME": "/Users/sam"}):
+            for fence in ("~/projectsx", "~/proj", "/Users/sam/proj", "/Users/sam-x", "/home2"):
+                self.config["fenced"] = ["~/garden-club", fence]
+                c = self.c.check_compartments(self.config)
+                for record, expected in (({"project": "work"}, "work"),
+                                         ({"project": "work", "compartment": "work"}, "work"),
+                                         ({"project": "notes-app"}, "p:notes-app")):
+                    with self.subTest(fence=fence, record=record):
+                        self.assertEqual(self.c.record_compartment(c, record), expected)
+
+    def test_similar_drops_a_stored_record_a_later_fence_covers(self):
+        text = "keep every review queue verdict for later scoring"
+        rows = [{"id": ident, "kind": "message", "timestamp": "2026-09-01T00:00:00Z",
+                 "project": project, "compartment": compartment, "text": text, "context": "", "split": "train"}
+                for ident, project, compartment in (
+                    ("secret", self.c.project_name(self.c.encode("~/projects/secret-lab")), "p:secret-lab"),
+                    ("work", "work", "work"))]
+        (self.h.root / "d.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        self.config["fenced"].append("~/projects/secret-lab")
+        self.save_config()
+        for compartment, expected in (("all", ["work"]), ("p:secret-lab", [])):
+            with self.subTest(compartment=compartment):
+                proc = self.h.crew(self.member, "similar", "--compartment", compartment,
+                                   "--corpus", "d.jsonl", "--query", text, "--json")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                hits = json.loads(proc.stdout)
+                # similar's message output omits ids; the projects identify these two fixtures.
+                self.assertEqual([r["id"] for hit in hits for r in rows if r["project"] == hit["project"]],
+                                 expected)
+                self.assertEqual(hits, [{"kind": "message", "date": "2026-09-01", "project": "work",
+                                         "text": text}] if expected else [])
+
     def test_record_hidden_fence_dot_matches_only_a_dot(self):
         self.config["fenced"] = ["~/garden-club", "~/.ssh"]
         c = self.c.check_compartments(self.config)
