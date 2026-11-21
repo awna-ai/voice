@@ -2,6 +2,27 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF46: voice builds clean on Rust 1.99 (2026-11-21, lane: V1)
+
+- **Status: built and verified; land started** (full `ci-local.sh`, detached; V-Q26's rule), with VF43 stacked
+  on it so one gate lands both.
+- **The gap (from VF43's land):** voice's gate runs on Teo first, and Teo now has Rust 1.99.1 (Mimi 1.98.0). On
+  1.99 `AtomicUsize::fetch_update` is deprecated (renamed `try_update`), and `-D warnings` made
+  `builder/agent/src/egress.rs:406` an error, so every code land went red at the first clippy step. VF43's land
+  at `891419c` stopped there.
+- **Commits:** brief `39f123b`, code `8d197b1` (Codex; committed by Claude: her sandbox can't write the worktree's
+  git index). One call renamed; `try_update` is stable since 1.95.0 with the same arguments and result (read
+  from the 1.98 std source on Mimi).
+- **Verified (measured):** red: on Teo at `891419c`, `cargo clippy --keep-going --all-targets --locked -- -D
+  warnings` failed on that call alone, the crates behind `voice-agent` unchecked. Green: on Teo at `8d197b1`, the
+  gate's three clippy commands (all targets; the subscription set; `voice-cli` and `voice-app`) all passed, and
+  `cargo fmt --check` passed on 1.99 at `891419c`. On Mimi: `-p voice-agent` clippy and `cargo fmt --check`
+  passed (Codex), and the egress tests 19 passed, 1 ignored (mine; Codex's sandbox refuses loopback binds, so her
+  run failed 14 on `PermissionDenied`).
+- **Review:** no Verifier (one call renamed, not a trigger path); security review inline (Claude): the same
+  method under its new name, nothing to flag.
+- **Not verified:** the rest of `ci-local.sh` on 1.99 until the land's gate runs it.
+
 ## VF39: a fence's spelling folds before it is encoded (2026-11-20, lane: V1)
 
 - **Status: built, verified, land started** (full `ci-local.sh`, detached; V-Q26's rule). Rebased on `33e2bbd`
