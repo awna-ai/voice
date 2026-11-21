@@ -30,7 +30,10 @@ pub fn chunk(name: &str, records: &Records, size: usize) -> Result<Chunks> {
     let mut train = Vec::new();
     for r in Record::all(name, records) {
         if r.get("split")? == "train" {
-            train.push(r.map.clone());
+            let mut record = r.map.clone();
+            record
+                .retain(|key, _| !matches!(key.as_str(), "fence_folder" | "fence_folder_resolved"));
+            train.push(record);
         }
     }
     let mut held = Vec::new();

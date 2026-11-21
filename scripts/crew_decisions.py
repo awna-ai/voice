@@ -348,9 +348,16 @@ def under_follow(path, root):
 
 
 def absolute_path(path, cwd):
-    path = Path(path).expanduser()
+    def expand(value):
+        value = str(value)
+        if value == "~":
+            return Path.home()
+        if value.startswith("~/"):
+            return Path.home() / value[2:].lstrip("/")
+        return Path(value)
+    path = expand(path)
     if not path.is_absolute():
-        path = Path(cwd).expanduser() / path
+        path = expand(cwd) / path
     return path
 
 
@@ -740,11 +747,12 @@ def record_compartment(c, record):
     stored = record.get("compartment")
     if isinstance(stored, str) and stored.startswith("p:") and len(stored) > 2 and project_fenced(c, stored[2:]):
         return "fenced"
-    if "fence_folder" in record:
-        folder = record["fence_folder"]
-        if (not isinstance(folder, str) or not re.fullmatch(r"-[a-z0-9-]*", folder) or
-                stored_folder_fenced(c, folder)):
-            return "fenced"
+    for key in ("fence_folder", "fence_folder_resolved"):
+        if key in record:
+            folder = record[key]
+            if (not isinstance(folder, str) or not re.fullmatch(r"-[a-z0-9-]*", folder) or
+                    stored_folder_fenced(c, folder)):
+                return "fenced"
     if "compartment" in record:
         return record["compartment"]
     def matches(folder):
@@ -2051,7 +2059,7 @@ def lexical_path(path, cwd):
         if value == "~":
             return Path.home()
         if value.startswith("~/"):
-            return Path.home() / value[2:]
+            return Path.home() / value[2:].lstrip("/")
         return Path(value)
     p = expand(path)
     if not p.is_absolute():
@@ -2084,19 +2092,18 @@ def cmd_record(m, args):
     compartment = None
     spelling_path = lexical_path(values["work"], cwd_of(args))
     if m.compartments is not None:
-        # Unknown tilde names are ordinary relative names, including during the fenced walk.
-        work = values["work"]
-        if work.startswith("~") and work != "~" and not work.startswith("~/"):
-            work = spelling_path
-        compartment = path_compartment(m.compartments, work, cwd_of(args))
+        compartment = path_compartment(m.compartments, spelling_path, "/")
         if compartment == "fenced":
             raise Fenced("refusing: fenced")
-        spelling_path = safe_resolve(m.compartments, work, cwd_of(args))[0]
+        resolved_path = safe_resolve(m.compartments, spelling_path, "/")[0]
     line = {"timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "work": values["work"],
             "kind": values["kind"], "category": values["category"], "tier": values["tier"], "question": values["question"],
             m.pick_field: values["pick"], "rule": values.get("rule"), m.answer_field: values.get("answer"),
             "fence_folder": fold(encode(spelling_path))}
     if m.compartments is not None:
+        resolved_spelling = fold(encode(resolved_path))
+        if resolved_spelling != line["fence_folder"]:
+            line["fence_folder_resolved"] = resolved_spelling
         line["compartment"] = compartment
     log = Path(args.log or m.state("live.jsonl")).expanduser()
     previous = log.read_text() if log.exists() else ""
@@ -3104,17 +3111,21 @@ def live_record(m, line):
     is the one recommended option; the principal's answer is that pick or their own words."""
     if not isinstance(line, dict):
         return "unreadable lines"
-    spelling = line.get("fence_folder")
-    valid = isinstance(spelling, str) and re.fullmatch(r"-[a-z0-9-]*", spelling)
-    if "fence_folder" in line and not valid and m.compartments is not None:
-        return "in a fenced folder"
+    spellings = {}
+    for key in ("fence_folder", "fence_folder_resolved"):
+        value = line.get(key)
+        if isinstance(value, str) and re.fullmatch(r"-[a-z0-9-]*", value):
+            spellings[key] = value
+        elif key in line and m.compartments is not None:
+            return "in a fenced folder"
     work = line.get("work")
     work_path = lexical_path(work, None) if isinstance(work, str) and work else None
     work_spelling = fold(encode(work_path)) if work_path is not None else None
-    spelling = spelling if valid else work_spelling
+    spelling = spellings.get("fence_folder", work_spelling)
     if m.compartments is not None:
-        if (any(stored_folder_fenced(m.compartments, s) for s in (spelling, work_spelling) if s is not None) or
-                (spelling is None and m.compartments["fenced"])):
+        if (any(stored_folder_fenced(m.compartments, s)
+                for s in (*spellings.values(), work_spelling) if s is not None) or
+                (not spellings and work_spelling is None and m.compartments["fenced"])):
             return "in a fenced folder"
     answer = line.get(m.answer_field)
     if not isinstance(answer, str) or not answer.strip():
@@ -3131,6 +3142,8 @@ def live_record(m, line):
     record = {"id": record_id("question", "live", when, question), "kind": "question", "timestamp": when,
               "project": "live",
               **({"fence_folder": spelling} if spelling is not None else {}),
+              **({"fence_folder_resolved": spellings["fence_folder_resolved"]}
+                 if "fence_folder_resolved" in spellings else {}),
               **({"compartment": line["compartment"]}
                  if isinstance(line.get("compartment"), str) and line["compartment"] else {}),
               "header": "", "question": question, "multiSelect": False,
@@ -3395,7 +3408,8 @@ def codebook(m):
 
 def cmd_chunk(m, args):
     corpus = read_jsonl(args.corpus)
-    train = [{k: v for k, v in r.items() if k != "fence_folder"} for r in corpus if r["split"] == "train"]
+    train = [{k: v for k, v in r.items() if k not in ("fence_folder", "fence_folder_resolved")}
+             for r in corpus if r["split"] == "train"]
     held = [{"kind": "question", **{k: r[k] for k in QUESTION_FIELDS}}
             for r in corpus if r["split"] == "heldout" and r["kind"] == "question"]
     out = Path(args.out_dir)

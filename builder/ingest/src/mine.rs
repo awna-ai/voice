@@ -544,11 +544,9 @@ pub fn fence_folder(path: &str, home: &Path, base: Option<&Path>) -> Option<Stri
         if path == "~" {
             home.to_string_lossy().into_owned()
         } else if let Some(rest) = path.strip_prefix("~/") {
-            if rest.starts_with('/') {
-                rest.to_owned()
-            } else {
-                format!("{}/{rest}", home.to_string_lossy().trim_end_matches('/'))
-            }
+            home.join(rest.trim_start_matches('/'))
+                .to_string_lossy()
+                .into_owned()
         } else {
             path.to_owned()
         }

@@ -745,9 +745,10 @@ is never re-checked; both gaps are VF48.
 ## 2026-11-21: a stored record keeps its folder spelling, re-checked against the fences when it is read (VF48)
 
 Python and Rust mine and `voice record` keep `fence_folder`, the folded encoding of the normalised absolute
-path; `~text` other than `~` and `~/` is an ordinary name. Under a compartment map, recorded `work` is stored
-resolved, so a link cannot hide it. Stored spellings also match a `~` fence under any home, a fail-closed
-over-fence like VF45's; they must match `-[a-z0-9-]*` or the record is fenced. Re-checks read no file or folder,
-so a later fence hides stored records and drops live lines. `chunk` leaves the spelling out of labeling files.
+path; `~text` other than `~` and `~/` is an ordinary name. Under a compartment map, recorded `work` keeps its
+resolved spelling beside the written one and both are checked, so neither a link nor a fence written through
+one can hide it. Stored spellings also match a `~` fence under any home, a fail-closed over-fence like VF45's;
+they must match `-[a-z0-9-]*` or the record is fenced. Re-checks read no file or folder, so a later fence hides
+stored records and drops live lines. `chunk` leaves the spelling out of labeling files.
 Pre-VF48 records gain the spelling on re-mine; older relative-work live lines are dropped under any fence.
 The full path spelling, home included, stays in the member's private state. Rust writes the same spelling.
