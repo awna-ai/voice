@@ -2134,6 +2134,98 @@ class Compartments(unittest.TestCase):
         return {"timestamp": "2026-10-20T10:00:00Z", "work": "~/projects/work/notes/x.md",
                 "question": "Keep the review queue?", "ada_pick": "Keep it", "sam_answer": "Keep it", **changes}
 
+    def test_record_keeps_both_spellings_and_a_link_fence_hides_it(self):
+        home = self.h.root / "home"
+        target = home / "projects/acme"
+        target.mkdir(parents=True)
+        link = home / "work"
+        link.symlink_to(target, target_is_directory=True)
+        self.config["follow"] = ["~"]
+        self.h.write("private.json", {"sources": [{"name": "live", "kind": "live", "consent": "2026-10-20"}]})
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            self.save_config()
+            def cli(*args):
+                return self.h.run(CREW, "--member", self.member, *args, env={"HOME": str(home)})
+            proc = cli("record", "--work", "~/work/secret/x.md", "--kind", "escalated",
+                       "--category", "scope", "--tier", "low", "--question", "Keep the review queue?",
+                       "--ada-pick", "Keep it", "--sam-answer", "Keep it")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            line = json.loads((self.h.root / "state/live.jsonl").read_text())
+            lexical = self.c.fold(self.c.encode(home / "work/secret/x.md"))
+            resolved = self.c.fold(self.c.encode(target.resolve() / "secret/x.md"))
+            proc = cli("sources", "mine")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            [record] = [json.loads(row) for row in self.h.read("state/decisions-live.jsonl").splitlines()]
+            self.config["fenced"].append("~/work/secret")
+            self.save_config()
+            proc = cli("similar", "--compartment", "all", "--corpus", "state/decisions-live.jsonl",
+                       "--query", "Keep the review queue?", "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout), [])
+            for stored in (line, record):
+                self.assertEqual(stored["fence_folder"], lexical)
+                self.assertEqual(stored["fence_folder_resolved"], resolved)
+                keys = list(stored)
+                self.assertEqual(keys.index("fence_folder_resolved"), keys.index("fence_folder") + 1)
+            proc = cli("sources", "mine")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("kept 0 answers", proc.stdout)
+
+    def test_resolved_folder_spelling_is_validated_and_rechecked(self):
+        self.config["fenced"].append("~/projects/client/secret")
+        m = self.save_config()
+        clear = self.c.fold(self.c.encode("~/projects/work"))
+        fenced = self.c.fold(self.c.encode("~/projects/client/secret/x.md"))
+        for spelling in ("", None, 3, ["x"], "x", " ", "~/projects/client/secret", "-Users-Sam", fenced):
+            with self.subTest(spelling=spelling, seam="record"):
+                self.assertEqual(self.c.record_compartment(m.compartments,
+                                 {"project": "work", "compartment": "work", "fence_folder": clear,
+                                  "fence_folder_resolved": spelling}), "fenced")
+            with self.subTest(spelling=spelling, seam="live"):
+                self.assertEqual(self.c.live_record(m, self.live_line(fence_folder=clear,
+                                 fence_folder_resolved=spelling)), "in a fenced folder")
+        record = self.c.live_record(m, self.live_line(fence_folder=clear, fence_folder_resolved=clear))
+        self.assertEqual(record.get("fence_folder_resolved"), clear)
+        self.assertEqual(self.c.record_compartment(m.compartments, record), "p:live")
+        no_map = self.c.load_member({**ADA, "state_dir": str(self.h.root / "state")})
+        record = self.c.live_record(no_map, self.live_line(fence_folder=clear, fence_folder_resolved="x"))
+        self.assertNotIn("fence_folder_resolved", record)
+
+    def test_record_relative_cwd_keeps_the_absolute_spelling_and_line(self):
+        self.save_config()
+        proc = self.h.crew(self.member, "record", "--cwd", "work", "--work", "notes/x.md", "--kind", "escalated",
+                           "--category", "scope", "--tier", "low", "--question", "Keep the review queue?",
+                           "--ada-pick", "Keep it", "--sam-answer", "Keep it")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        line = json.loads((self.h.root / "state/live.jsonl").read_text())
+        spelling = self.c.fold(self.c.encode(self.h.root.resolve() / "work/notes/x.md"))
+        self.assertEqual(line["fence_folder"], spelling)
+        self.assertNotIn("fence_folder_resolved", line)
+        self.h.write("private.json", {"sources": [{"name": "live", "kind": "live", "consent": "2026-10-20"}]})
+        proc = self.h.crew(self.member, "sources", "mine")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("kept 1 answers", proc.stdout)
+        [record] = [json.loads(row) for row in self.h.read("state/decisions-live.jsonl").splitlines()]
+        self.assertEqual(record["fence_folder"], spelling)
+
+    def test_record_repeated_home_slashes_keep_the_home_spelling(self):
+        for work in ("~//x", "~///x"):
+            with self.subTest(work=work):
+                proc = self.h.crew(self.member, "record", "--work", work, "--kind", "escalated",
+                                   "--category", "scope", "--tier", "low", "--question", "Keep the review queue?",
+                                   "--ada-pick", "Keep it", "--sam-answer", "Keep it")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                line = json.loads((self.h.root / "state/live.jsonl").read_text().splitlines()[-1])
+                self.assertEqual(line["fence_folder"], self.c.fold(self.c.encode(TEST_HOME / "x")))
+
+    def test_record_tilde_cwd_under_a_map_is_an_ordinary_name(self):
+        proc = self.h.crew(self.member, "record", "--cwd", "~5", "--work", "x", "--kind", "escalated",
+                           "--category", "scope", "--tier", "low", "--question", "Keep the review queue?",
+                           "--ada-pick", "Keep it", "--sam-answer", "Keep it")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        line = json.loads((self.h.root / "state/live.jsonl").read_text())
+        self.assertEqual(line["fence_folder"], self.c.fold(self.c.encode(self.h.root.resolve() / "~5/x")))
+
     def test_record_and_live_line_with_a_tilde_name_do_not_crash(self):
         no_map = self.h.member(ADA, "no-map.json")
         self.h.write("private.json", {"sources": [{"name": "live", "kind": "live", "consent": "2026-10-20"}]})
@@ -2193,7 +2285,8 @@ class Compartments(unittest.TestCase):
                            "--ada-pick", "Keep it", "--sam-answer", "Keep it")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         line = json.loads((self.h.root / "state/live.jsonl").read_text())
-        self.assertEqual(line["fence_folder"], self.c.fold(self.c.encode(target.resolve() / "x.md")))
+        self.assertEqual(line["fence_folder"], self.c.fold(self.c.encode(link / "x.md")))
+        self.assertEqual(line["fence_folder_resolved"], self.c.fold(self.c.encode(target.resolve() / "x.md")))
         self.config["fenced"].append("~/projects/client/secret")
         self.save_config()
         self.h.write("private.json", {"sources": [{"name": "live", "kind": "live", "consent": "2026-10-20"}]})
@@ -2244,13 +2337,16 @@ class Compartments(unittest.TestCase):
 
     def test_chunk_drops_the_stored_folder_spelling(self):
         records = [{"id": "message-1", "kind": "message", "split": "train", "text": "keep the review queue",
-                    "fence_folder": self.c.fold(self.c.encode("~/projects/work"))},
+                    "fence_folder": self.c.fold(self.c.encode("~/projects/work")),
+                    "fence_folder_resolved": self.c.fold(self.c.encode("~/projects/real"))},
                    {"id": "message-2", "kind": "message", "split": "train", "text": "keep the scope small"}]
         (self.h.root / "corpus.jsonl").write_text("".join(json.dumps(row) + "\n" for row in records))
         proc = self.h.crew(self.member, "chunk", "--corpus", "corpus.jsonl", "--out-dir", "chunks", "--size", "2")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         chunk = [json.loads(row) for row in self.h.read("chunks/train-01.jsonl").splitlines()]
-        self.assertEqual(chunk, [{k: v for k, v in row.items() if k != "fence_folder"} for row in records])
+        expected = [{k: v for k, v in row.items() if k not in ("fence_folder", "fence_folder_resolved")} for row in records]
+        self.assertEqual(chunk, expected)
+        self.assertEqual([list(row) for row in chunk], [list(row) for row in expected])
 
     def test_record_stored_folder_spelling_is_rechecked_against_fences(self):
         spelling = self.c.fold(self.c.encode("~/projects/work/secret-sub/notes"))
@@ -2350,7 +2446,7 @@ class Compartments(unittest.TestCase):
                            "--ada-pick", "Keep it", "--sam-answer", "Keep it")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         line = json.loads((self.h.root / "state/live.jsonl").read_text())
-        self.assertEqual(line.get("fence_folder"), self.c.fold(self.c.encode(cwd.resolve() / "notes/x")))
+        self.assertEqual(line.get("fence_folder"), self.c.fold(self.c.encode(cwd / "notes/x")))
         self.assertEqual(line["work"], "notes/x")
 
     def test_fence_folder_spellings_are_computed_once_per_map(self):

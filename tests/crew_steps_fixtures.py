@@ -195,6 +195,11 @@ def round_files(state):
 
 def base_case(m, word, state):
     records = corpus(m, word)
+    for record in records:
+        if record['split'] == 'train':
+            record['fence_folder'] = '-home-sam-work'
+            record['fence_folder_resolved'] = '-home-sam-real'
+            break
     write_jsonl(state / 'decisions.jsonl', records)
     labels = labels_for(records)
     (state / 'labels.json').write_text(json.dumps(labels, ensure_ascii=False))

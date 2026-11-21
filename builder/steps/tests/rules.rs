@@ -142,6 +142,20 @@ fn json_inputs_are_checked_whole() {
 }
 
 #[test]
+fn chunk_drops_both_folder_spellings_and_keeps_other_keys_in_order() {
+    let input = r#"{"id":"message:a","fence_folder":"-home-sam-work","kind":"message","fence_folder_resolved":"-home-sam-real","split":"train","text":"keep the queue","extra":7}"#;
+    let records = read_records("c.jsonl", input.as_bytes()).unwrap();
+    let chunks = chunk("c.jsonl", &records, 3).unwrap();
+    assert_eq!(
+        chunks.files(),
+        vec![(
+            "train-01.jsonl".into(),
+            "{\"id\": \"message:a\", \"kind\": \"message\", \"split\": \"train\", \"text\": \"keep the queue\", \"extra\": 7}\n".into(),
+        )]
+    );
+}
+
+#[test]
 fn chunk_refuses_a_record_without_a_split_and_a_size_of_zero() {
     let mut bad = question("question:a", "train");
     bad.as_object_mut().unwrap().remove("split");
