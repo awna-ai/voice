@@ -786,38 +786,64 @@ fn the_helper_runs_only_while_signing_in() {
     }
 }
 
-// This guard always removes only the fresh test service, including on an assertion failure.
-struct KeychainCleanup(String, bool);
+struct TestKeychain {
+    _scratch: Scratch,
+    path: PathBuf,
+}
 
-impl KeychainCleanup {
-    fn new(expect_item: bool) -> Self {
+impl TestKeychain {
+    fn new() -> Self {
+        let scratch = Scratch::new("keychain");
+        let path = scratch.0.join("test.keychain-db");
+        let keychain = Self {
+            _scratch: scratch,
+            path,
+        };
         let mut random = [0u8; 16];
         fs::File::open("/dev/urandom")
             .unwrap()
             .read_exact(&mut random)
             .unwrap();
-        Self(
-            format!("voice-sandbox-test-{:032x}", u128::from_ne_bytes(random)),
-            expect_item,
-        )
-    }
-    fn delete(&self) -> bool {
-        Command::new("/usr/bin/security")
-            .args(["delete-generic-password", "-s", &self.0])
+        let password = format!("{:032x}", u128::from_ne_bytes(random));
+        let created = Command::new("/usr/bin/security")
+            .args(["create-keychain", "-p", &password])
+            .arg(&keychain.path)
             .output()
-            .expect("clean up the test service")
-            .status
-            .success()
+            .unwrap()
+            .status;
+        assert!(created.success(), "couldn't create the test Keychain");
+        let unlocked = Command::new("/usr/bin/security")
+            .args(["unlock-keychain", "-p", &password])
+            .arg(&keychain.path)
+            .output()
+            .unwrap()
+            .status;
+        assert!(unlocked.success(), "couldn't unlock the test Keychain");
+        keychain
     }
 }
 
-impl Drop for KeychainCleanup {
+impl Drop for TestKeychain {
     fn drop(&mut self) {
-        let found = self.delete();
+        let deleted = Command::new("/usr/bin/security")
+            .arg("delete-keychain")
+            .arg(&self.path)
+            .output()
+            .expect("delete the test Keychain")
+            .status;
         if !std::thread::panicking() {
-            assert_eq!(found, self.1, "unexpected test Keychain item at cleanup");
+            assert!(deleted.success(), "couldn't delete the test Keychain");
         }
     }
+}
+
+fn random_service() -> String {
+    let mut random = [0u8; 16];
+    fs::File::open("/dev/urandom")
+        .unwrap()
+        .read_exact(&mut random)
+        .unwrap();
+    format!("voice-sandbox-test-{:032x}", u128::from_ne_bytes(random))
 }
 
 #[test]
@@ -826,23 +852,26 @@ fn the_keychain_stays_closed() {
         return;
     }
     let sb = Sandbox::new();
-    // A random, throwaway service avoids reading any person's existing Keychain item.
-    let readable = KeychainCleanup::new(true);
+    let keychain = TestKeychain::new();
+    // A Keychain file of our own avoids every person's Keychain and works when the
+    // login Keychain is locked, as in an ssh session.
+    let readable = random_service();
     let created = Command::new("/usr/bin/security")
         .args([
             "add-generic-password",
             "-a",
             "voice-test",
             "-s",
-            &readable.0,
+            &readable,
             "-w",
             "unused",
         ])
+        .arg(&keychain.path)
         .output()
         .unwrap()
         .status;
     assert!(created.success(), "couldn't create the test Keychain item");
-    let cleanup = KeychainCleanup::new(false);
+    let unreadable = random_service();
     let added = sb
         .command("/bin/bash", 1, "no", None)
         .args([
@@ -851,10 +880,11 @@ fn the_keychain_stays_closed() {
             "-a",
             "voice-test",
             "-s",
-            &cleanup.0,
+            &unreadable,
             "-w",
             "unused",
         ])
+        .arg(&keychain.path)
         .output()
         .unwrap()
         .status;
@@ -864,11 +894,32 @@ fn the_keychain_stays_closed() {
             "/usr/bin/security",
             "find-generic-password",
             "-s",
-            &readable.0,
+            &readable,
         ])
+        .arg(&keychain.path)
         .output()
         .unwrap()
         .status;
     assert!(!added.success(), "the sandbox wrote a Keychain item");
     assert!(!found.success(), "the sandbox found the test Keychain item");
+    let readable_found = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", &readable])
+        .arg(&keychain.path)
+        .output()
+        .unwrap()
+        .status;
+    assert!(
+        readable_found.success(),
+        "the test Keychain item went missing"
+    );
+    let unreadable_found = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", &unreadable])
+        .arg(&keychain.path)
+        .output()
+        .unwrap()
+        .status;
+    assert!(
+        !unreadable_found.success(),
+        "the sandbox's item is in the test Keychain"
+    );
 }
