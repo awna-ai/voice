@@ -728,3 +728,12 @@ A fence whose last name is only fold letters, such as `~/s`, fences what is spel
 This fails closed only for those letters: a character outside the BMP becomes `--`, and a cut name is not
 matched; both are VF44. VF39's Kelvin line holds for looks; for folder names this rule covers the Kelvin sign
 too, in case it ever reaches the replace unnormalized.
+
+## 2026-11-21: a stored record is re-checked against the fences when it is read (VF45)
+
+A stored `compartment` is kept only when the record's project passes today's fences, so a fence added
+after mining hides the records it covers.
+A record keeps only its project name, so a fence on home, `~/projects`, another Mac's home or a folder
+above one fences every stored record: the name cannot say where it came from.
+The accepted over-fence includes `~/projects` fencing records from `~/notes`, and a fence spelling found
+anywhere in a project name fencing it, as before, now for stored records too. The check reads no file or folder.

@@ -611,13 +611,24 @@ def path_compartment(c, path, cwd, *, resolve=True, follow_last=True):
     return fallback_compartment(c, directory, cwd)
 
 
-def record_compartment(c, record):
-    if "compartment" in record:
-        return record["compartment"]
-    project = record["project"]
-    def matches(folder):
-        prefix = fold(project_name(encode(folder)))
-        return fold(project) == prefix or fold(project).startswith(prefix + "-")
+def fence_strips_from_names(fence):
+    """True when project_name may drop this fence's whole folder from a record's name: the fence is the
+    home folder, ~/projects, another Mac's /Users/<name> or /home/<name> (or its projects), or a folder
+    above one of them. Such a fence leaves no letter of itself in the names of the records under it."""
+    for s in (fold(encode(fence)), fold(fence_encode(fence))):
+        if s.startswith("-system-volumes-data-"):
+            s = s[len("-system-volumes-data"):]
+        if (s == "-" or any(t == s or t.startswith(s + "-") for t in
+                            (fold(encode(Path.home())), fold(encode(Path.home() / "projects"))))
+                or re.fullmatch(r"-(users|home)(-[a-z0-9]+(-projects)?)?", s)):
+            return True
+    return False
+
+
+def project_fenced(c, project):
+    """True when a record's project name may come from a fenced folder. The name is all a stored record
+    keeps, so a fence on a folder project_name drops from every name (home, ~/projects, or above one)
+    fences every record."""
     folded = fold(project)
     dotless = "-" + folded[1:] if folded.startswith(".") else folded
     def spellings(f):
@@ -631,7 +642,21 @@ def record_compartment(c, record):
         yield full_folded
     if any(dashed_in(spelling, folded) or dashed_in(spelling, dotless) for f in c["fenced"]
            for spelling in spellings(f)):
+        return True
+    return any(fence_strips_from_names(f) for f in c["fenced"])
+
+
+def record_compartment(c, record):
+    """Re-check every read record's project against today's fences, so a record mined before a fence was
+    added never routes past it; a stored compartment is kept only when the project is clear."""
+    project = record.get("project") if "compartment" in record else record["project"]
+    if isinstance(project, str) and project_fenced(c, project):
         return "fenced"
+    if "compartment" in record:
+        return record["compartment"]
+    def matches(folder):
+        prefix = fold(project_name(encode(folder)))
+        return fold(project) == prefix or fold(project).startswith(prefix + "-")
     found = [(len(project_name(encode(folder))), name) for name, folder in declared_folders(c) if matches(folder)]
     return max(found)[1] if found else "p:" + project
 
