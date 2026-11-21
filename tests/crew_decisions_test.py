@@ -215,8 +215,11 @@ class ExampleMember(unittest.TestCase):
         line = json.loads(h.read("live.jsonl"))
         self.assertTrue(line.pop("timestamp"))
         self.assertEqual(list(line), ["work", "kind", "category", "tier", "question", "ada_pick", "rule",
-                                     "sam_answer"])
-        self.assertEqual(list(line.values()), ["plan.md", "escalated", "scope", "low", "Q?", "A", "below-high", "B"])
+                                     "sam_answer", "fence_folder"])
+        sys.path.insert(0, str(SCRIPTS))
+        import crew_decisions
+        self.assertEqual(list(line.values()), ["plan.md", "escalated", "scope", "low", "Q?", "A", "below-high", "B",
+                                              crew_decisions.fold(crew_decisions.encode(h.root.resolve() / "plan.md"))])
 
 
 HOSTILE = "$(touch pwned-dollar) `touch pwned-tick` ${HOME} \"double\" 'single' back\\slash café\nEND_OF_TEXT\ntext"
@@ -255,7 +258,7 @@ class StdinTexts(unittest.TestCase):
                 expected.pop("timestamp")
                 self.assertEqual(actual, expected)
                 self.assertEqual(list(actual), ["work", "kind", "category", "tier", "question", "ari_pick",
-                                                "rule", "robin_answer"])
+                                                "rule", "robin_answer", "fence_folder"])
                 self.assertEqual(actual["question"], HOSTILE)
 
     def test_similar_stdin_matches_query_with_both_output_forms(self):
@@ -2126,6 +2129,112 @@ class Compartments(unittest.TestCase):
         import crew_decisions
         self.c = crew_decisions
 
+    def test_record_stored_folder_spelling_is_rechecked_against_fences(self):
+        spelling = self.c.fold(self.c.encode("~/projects/work/secret-sub/notes"))
+        for fence in ("~/projects/work/secret-sub", "~/Projects/Work/Secret-Sub"):
+            self.config["fenced"] = ["~/garden-club", fence]
+            c = self.c.check_compartments(self.config)
+            for compartment in ({"compartment": "work"}, {}):
+                with self.subTest(fence=fence, compartment=compartment):
+                    record = {"project": "work", **compartment, "fence_folder": spelling}
+                    self.assertEqual(self.c.record_compartment(c, record), "fenced")
+            for record in ({"project": "work", "compartment": "work"},
+                           {"project": "work", "compartment": "work",
+                            "fence_folder": self.c.fold(self.c.encode("~/projects/work"))}):
+                self.assertEqual(self.c.record_compartment(c, record), "work")
+
+    def test_record_malformed_folder_spelling_fails_closed(self):
+        c = self.c.check_compartments(self.config)
+        for folder in ("", None, 3, ["x"]):
+            with self.subTest(folder=folder):
+                self.assertEqual(self.c.record_compartment(c, {"project": "work", "compartment": "work",
+                                                              "fence_folder": folder}), "fenced")
+
+    def test_record_stored_live_record_folder_is_rechecked(self):
+        record = {"project": "live", "compartment": "client",
+                  "fence_folder": self.c.fold(self.c.encode("~/projects/client/secret/x.md"))}
+        for fenced in (True, False):
+            with self.subTest(fenced=fenced):
+                self.config["fenced"] = ["~/garden-club"] + (["~/projects/client/secret"] if fenced else [])
+                c = self.c.check_compartments(self.config)
+                self.assertEqual(self.c.record_compartment(c, record), "fenced" if fenced else "client")
+
+    def test_mine_keeps_the_message_folder_spelling_and_a_later_fence_hides_it(self):
+        cwd = str(TEST_HOME / "projects/work/secret-sub")
+        text = "keep every review queue verdict for later scoring"
+        self.h.session(self.c.encode("~/projects/work"), "s1",
+                       {**said("2026-09-01T00:00:00Z", text), "cwd": cwd})
+        proc = self.h.crew(self.member, "mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        records = [json.loads(line) for line in self.h.read("mined.jsonl").splitlines()]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].get("fence_folder"), self.c.fold(self.c.encode(cwd)))
+        for fenced in (False, True):
+            with self.subTest(fenced=fenced):
+                self.config["fenced"] = ["~/garden-club"] + ([cwd] if fenced else [])
+                self.save_config()
+                proc = self.h.crew(self.member, "similar", "--compartment", "all", "--corpus", "mined.jsonl",
+                                   "--query", text, "--json")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(len(json.loads(proc.stdout)), 0 if fenced else 1)
+
+    def test_mine_live_drops_a_line_a_later_fence_covers(self):
+        state = self.h.root / "state"
+        state.mkdir()
+        line = {"timestamp": "2026-10-20T10:00:00Z", "work": "~/projects/client/secret/x.md",
+                "kind": "escalated", "category": "scope", "tier": "medium", "question": "Keep the review queue?",
+                "ada_pick": "Keep it", "rule": None, "sam_answer": "Keep it", "compartment": "client"}
+        (state / "live.jsonl").write_text(json.dumps(line) + "\n")
+        self.h.write("private.json", {"sources": [{"name": "live", "kind": "live", "consent": "2026-10-20"}]})
+        for fenced in (True, False):
+            with self.subTest(fenced=fenced):
+                self.config["fenced"] = ["~/garden-club"] + (["~/projects/client/secret"] if fenced else [])
+                self.save_config()
+                proc = self.h.crew(self.member, "sources", "mine")
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                records = [json.loads(row) for row in (state / "decisions-live.jsonl").read_text().splitlines()]
+                self.assertEqual(len(records), 0 if fenced else 1)
+                self.assertIn(f"kept {0 if fenced else 1} answers", proc.stdout)
+                if fenced:
+                    self.assertIn("1 in a fenced folder", proc.stdout)
+                else:
+                    self.assertEqual(records[0].get("fence_folder"),
+                                     self.c.fold(self.c.encode(Path(line["work"]).expanduser())))
+                    self.assertNotIn("in a fenced folder", proc.stdout)
+
+    def test_mine_live_line_without_a_folder_fails_closed_only_under_fences(self):
+        line = {"timestamp": "2026-10-20T10:00:00Z", "work": "notes/x.md", "kind": "escalated",
+                "category": "scope", "tier": "medium", "question": "Keep the review queue?",
+                "ada_pick": "Keep it", "rule": None, "sam_answer": "Keep it"}
+        m = self.save_config()
+        self.assertEqual(self.c.live_record(m, line), "in a fenced folder")
+        no_map = self.c.load_member({**ADA, "state_dir": str(self.h.root / "state")})
+        self.assertIsInstance(self.c.live_record(no_map, line), dict)
+        spelling = self.c.fold(self.c.encode("~/projects/work/notes/x.md"))
+        record = self.c.live_record(m, {**line, "fence_folder": spelling})
+        self.assertIsInstance(record, dict)
+        self.assertEqual(record["fence_folder"], spelling)
+
+    def test_record_writes_the_work_folder_spelling(self):
+        cwd = TEST_HOME / "projects/work"
+        proc = self.h.crew(self.member, "record", "--cwd", str(cwd), "--work", "notes/x", "--kind", "escalated",
+                           "--category", "scope", "--tier", "low", "--question", "Keep the review queue?",
+                           "--ada-pick", "Keep it", "--sam-answer", "Keep it")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        line = json.loads((self.h.root / "state/live.jsonl").read_text())
+        self.assertEqual(line.get("fence_folder"), self.c.fold(self.c.encode(cwd / "notes/x")))
+        self.assertEqual(line["work"], "notes/x")
+
+    def test_fence_folder_spellings_are_computed_once_per_map(self):
+        c = self.c.check_compartments(self.config)
+        record = {"project": "work", "compartment": "work",
+                  "fence_folder": self.c.fold(self.c.encode("~/projects/work"))}
+        self.assertEqual(self.c.record_compartment(c, record), "work")
+        self.assertIsNotNone(getattr(c, "_folder_spellings", None))
+        with patch.object(self.c, "fence_encode", side_effect=AssertionError):
+            for _ in range(50):
+                self.assertEqual(self.c.record_compartment(c, record), "work")
+
     def test_folder_with_a_dash_for_a_folded_letter_is_fenced(self):
         self.config["fenced"] = ["~/garden-club", "~/secret-notes", "~/glass-jar", "~/kite-box", "~/fine-print"]
         c = self.c.check_compartments(self.config)
@@ -2938,6 +3047,8 @@ class Compartments(unittest.TestCase):
                 self.assertEqual(rows[0]["project"], expected)
                 self.assertEqual(rows[0]["compartment"], "client" if expected == "b" else "work")
                 fields = {"id", "kind", "timestamp", "project", "text", "context", "compartment", "split"}
+                if cwd is not None:
+                    fields.add("fence_folder")
                 if cwd != "~/projects/b/sub":
                     fields.add("filtered_as")
                     self.assertEqual(rows[0]["filtered_as"], rows[0]["compartment"])
@@ -3390,10 +3501,12 @@ class Compartments(unittest.TestCase):
 
     def test_live_record_keeps_the_lines_compartment(self):
         m = self.save_config()
-        line = {"timestamp": "2026-09-01T00:00:00.000Z", "question": "Which queue?",
+        spelling = self.c.fold(self.c.encode("~/projects/work"))
+        line = {"timestamp": "2026-09-01T00:00:00.000Z", "question": "Which queue?", "fence_folder": spelling,
                 m.pick_field: "Keep", m.answer_field: "Keep"}
         expected = {"id": self.c.record_id("question", "live", line["timestamp"], line["question"]),
-                    "kind": "question", "timestamp": line["timestamp"], "project": "live", "header": "",
+                    "kind": "question", "timestamp": line["timestamp"], "project": "live", "fence_folder": spelling,
+                    "header": "",
                     "question": "Which queue?", "multiSelect": False,
                     "options": [{"label": "Keep (Recommended)", "description": ""}],
                     "recommended": "Keep (Recommended)", "picks": ["Keep (Recommended)"],
