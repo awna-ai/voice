@@ -403,7 +403,7 @@ fn dial(
 ) -> std::result::Result<TcpStream, u16> {
     let deadline = Instant::now() + rules.dial_time;
     resolving
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
             (count < rules.connections).then_some(count + 1)
         })
         .map_err(|_| 502u16)?;
