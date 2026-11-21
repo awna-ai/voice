@@ -513,9 +513,26 @@ def folder_children(c, folder):
     return children[folder]
 
 
+def fence_folder_spellings(c):
+    """The folded encode and fence_encode spelling of every fence, computed once per validated map."""
+    cached = getattr(c, "_folder_spellings", None)
+    if cached is not None:
+        return cached
+    spellings = tuple(dict.fromkeys(s for f in c["fenced"] for s in (fold(encode(f)), fold(fence_encode(f)))))
+    if isinstance(c, CompartmentMap):
+        c._folder_spellings = spellings
+    return spellings
+
+
+def folder_fenced(c, folded):
+    """True when a folded folder spelling (fold(encode(path)), Claude Code's transcript folder name) holds a
+    fence's spelling. Reads no file or folder."""
+    return any(dashed_in(s, folded) for s in fence_folder_spellings(c))
+
+
 def folder_compartment(c, folder_name):
     folded = fold(folder_name)
-    if any(dashed_in(fold(encode(f)), folded) or dashed_in(fold(fence_encode(f)), folded) for f in c["fenced"]):
+    if folder_fenced(c, folded):
         return "fenced"
     name = re.sub(r"--claude-worktrees-.*", "", folder_name, flags=re.I)
     hub = c.get("hub")
@@ -690,14 +707,18 @@ def project_fenced(c, project):
 
 
 def record_compartment(c, record):
-    """Re-check every read record's project against today's fences, so a record mined before a fence was
-    added never routes past it; a stored compartment is kept only when the project is clear."""
+    """Re-check every read record's project and stored folder spelling against today's fences, so a record
+    mined before a fence was added never routes past it; a stored compartment is kept only when both are clear."""
     project = record.get("project") if "compartment" in record else record["project"]
     if isinstance(project, str) and project_fenced(c, project):
         return "fenced"
     stored = record.get("compartment")
     if isinstance(stored, str) and stored.startswith("p:") and len(stored) > 2 and project_fenced(c, stored[2:]):
         return "fenced"
+    if "fence_folder" in record:
+        folder = record["fence_folder"]
+        if not isinstance(folder, str) or not folder or folder_fenced(c, folder):
+            return "fenced"
     if "compartment" in record:
         return record["compartment"]
     def matches(folder):
@@ -1537,6 +1558,8 @@ def cmd_mine(m, args):
                 records = allowed
             for h, cwd in _harvest(m, path, project, records):
                 cwd_folder = encode(cwd) if isinstance(cwd, str) and cwd else None
+                if cwd_folder is not None:
+                    h["fence_folder"] = fold(cwd_folder)
                 if m.compartments is not None:
                     h["compartment"] = session_compartment
                 own_record = (session_compartment == compartment and
@@ -2020,7 +2043,8 @@ def cmd_record(m, args):
             raise Fenced("refusing: fenced")
     line = {"timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "work": values["work"],
             "kind": values["kind"], "category": values["category"], "tier": values["tier"], "question": values["question"],
-            m.pick_field: values["pick"], "rule": values.get("rule"), m.answer_field: values.get("answer")}
+            m.pick_field: values["pick"], "rule": values.get("rule"), m.answer_field: values.get("answer"),
+            "fence_folder": fold(encode(os.path.abspath(absolute_path(values["work"], cwd_of(args)))))}
     if m.compartments is not None:
         line["compartment"] = compartment
     log = Path(args.log or m.state("live.jsonl")).expanduser()
@@ -3029,6 +3053,15 @@ def live_record(m, line):
     is the one recommended option; the principal's answer is that pick or their own words."""
     if not isinstance(line, dict):
         return "unreadable lines"
+    spelling = line.get("fence_folder")
+    if not isinstance(spelling, str) or not spelling:
+        work = line.get("work")
+        spelling = (fold(encode(os.path.abspath(Path(work).expanduser())))
+                    if isinstance(work, str) and work and Path(work).expanduser().is_absolute() else None)
+    if m.compartments is not None:
+        if ((spelling is not None and folder_fenced(m.compartments, spelling)) or
+                (spelling is None and m.compartments["fenced"])):
+            return "in a fenced folder"
     answer = line.get(m.answer_field)
     if not isinstance(answer, str) or not answer.strip():
         return "with no answer from you"
@@ -3043,6 +3076,7 @@ def live_record(m, line):
     picks, own_words = ([label], "") if answer.strip() == pick.strip() else ([], answer.strip())
     record = {"id": record_id("question", "live", when, question), "kind": "question", "timestamp": when,
               "project": "live",
+              **({"fence_folder": spelling} if spelling is not None else {}),
               **({"compartment": line["compartment"]}
                  if isinstance(line.get("compartment"), str) and line["compartment"] else {}),
               "header": "", "question": question, "multiSelect": False,
@@ -3087,7 +3121,8 @@ def mine_live(m, source):
     write_jsonl(m.state("decisions-live.jsonl"), kept)
     print(f"{name}: kept {len(kept)} answers; skipped {skipped['with no answer from you']} with no answer "
           f"from you, {skipped['already in the history']} already in the history, "
-          f"{skipped['unreadable lines']} unreadable lines")
+          f"{skipped['unreadable lines']} unreadable lines" +
+          (f", {skipped['in a fenced folder']} in a fenced folder" if skipped['in a fenced folder'] else ""))
     print(f"{name}: dropped {dropped['personal']} personal records, {dropped['secret']} secret records")
 
 
