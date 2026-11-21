@@ -167,7 +167,9 @@ def build(case, h):
                 ('//projects/app', '--projects-app'),
                 ('///projects//./app/', '-projects-app'),
                 ('/projects/STRASSE', '-projects-Straße'),
-                ('/projects/K', '-projects-K'))):
+                ('/projects/K', '-projects-K'),
+                ('/Users/p/projects/open/../secret-sub', '-Users-p-projects-secret-sub'),
+                ('~5 minute fix', 'relative-name'))):
             record = said(WHEN, f'encoded cwd {i}', cwd=cwd)
             h.session('-aaa', f'encoding-{i}', record)
             h.session(folder, f'encoding-{i}', record)

@@ -319,6 +319,14 @@ fn records_match_python_bytes_with_and_without_optional_fields() {
         (None, "--rule=keep it short", "explicit equals with a space"),
         (None, "-.5", "negative fraction"),
         (None, "-5.25", "negative decimal"),
+        (None, "~", "home path"),
+        (None, "~//notes", "home path with an absolute remainder"),
+        (None, "~/notes/../kit", "normalised home path"),
+        (None, "~5 minute fix", "ordinary tilde name"),
+        (None, "~nosuchuser/notes", "ordinary tilde directory"),
+        (None, "../open/../kit", "relative parent path"),
+        (None, "/projects/open/../kit", "absolute parent path"),
+        (None, "//projects/open/../kit", "two slash root"),
     ] {
         let f = Fixture::new();
         f.seed();
@@ -344,6 +352,7 @@ fn records_match_python_bytes_with_and_without_optional_fields() {
         );
         let python_log = f.home.join("python.jsonl");
         let python = Command::new("python3")
+            .env("HOME", &f.home)
             .arg("-I")
             .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/crew_decisions.py"))
             .arg("--member")
@@ -484,7 +493,10 @@ fn member_flags_and_choices_are_usage_errors_without_writing() {
 fn exact_line_size_limit_is_checked_before_appending() {
     let f = Fixture::new();
     f.seed();
-    let row = json!({"timestamp":"2026-10-26T12:00:00Z", "work":"kit", "kind":"decided", "category":"scope", "tier":"high", "question":"", "ari_pick":"Oui, café.", "rule":null, "robin_answer":null});
+    success(&f.run(&args()));
+    let mut row: Value = serde_json::from_slice(&fs::read(f.log()).unwrap()).unwrap();
+    row["question"] = json!("");
+    fs::write(f.log(), []).unwrap();
     let overhead = to_jsonl(&[row.as_object().unwrap().clone()]).len();
     let mut arguments = args();
     let accepted = "x".repeat(64 * 1024 - overhead);
