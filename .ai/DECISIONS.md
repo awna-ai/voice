@@ -712,9 +712,16 @@ So a name on disk holding ſ, ß or a ligature leaves a lone `-` in the folder n
 A `-` in a folder name may stand for any non-ASCII character whose fold is ASCII letters (`FOLDS_TO_ASCII`).
 A `-` that stands for a fence's last letters counts only at the end of the name or before another `-`, so
 `~/clients` still fences `~/clientſ` and its children but not `~/client-portal` or `~/client/acme`.
-On a stored record's project only the project's leading `.` may stand for `-`; a hidden fence's `.` matches a `.`.
-The accepted over-match: `~/secret-notes` fences the folder of a real `~/.ecret-notes`, whose name is identical,
-and a fence whose last name is only fold letters, such as `~/s`, fences every hidden folder in home.
+On a stored record's project only the project's leading `.` may stand for `-`; a hidden fence's `.` matches a `.`,
+or `--`, which is how the fence reads after a home that `project_name` could not strip (a data-volume folder,
+`.System-Volumes-Data-Users-<u>--ssh`, or a home typed with ſ, `.Users--am--ssh`). A fence's full spelling, its
+home included, is matched against the project too. So `~/.ssh` also fences a record of a hidden `.ssh` below
+any other folder (`code--ssh`); that over-match is accepted.
+The accepted over-match: `~/secret-notes` fences the folder of a real `~/.ecret-notes`, whose name is identical.
+`~/projects/clients` fences the worktrees (`…-client--claude-worktrees-…`) and hidden children
+(`~/projects/client/.git`) of `~/projects/client`, whose folder names equal those of `~/projects/clientſ/…`.
+A fence whose last name is only fold letters, such as `~/s`, fences what is spelled like `~/ſ` and its children
+(a real `~/-` too) and every stored record whose project holds `--`; it no longer fences every hidden folder.
 This fails closed only for those letters: a character outside the BMP becomes `--`, and a cut name is not
 matched; both are VF44. VF39's Kelvin line holds for looks; for folder names this rule covers the Kelvin sign
 too, in case it ever reaches the replace unnormalized.

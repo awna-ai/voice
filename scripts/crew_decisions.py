@@ -620,8 +620,17 @@ def record_compartment(c, record):
         return fold(project) == prefix or fold(project).startswith(prefix + "-")
     folded = fold(project)
     dotless = "-" + folded[1:] if folded.startswith(".") else folded
+    def spellings(f):
+        full_plain = fold(encode(f))
+        full_folded = fold(fence_encode(f))
+        for spelling in (fold(project_name(encode(f))), fold(project_name(fence_encode(f)))):
+            yield spelling
+            if spelling.startswith("."):
+                yield "--" + spelling[1:]
+        yield full_plain
+        yield full_folded
     if any(dashed_in(spelling, folded) or dashed_in(spelling, dotless) for f in c["fenced"]
-           for spelling in (fold(project_name(encode(f))), fold(project_name(fence_encode(f))))):
+           for spelling in spellings(f)):
         return "fenced"
     found = [(len(project_name(encode(folder))), name) for name, folder in declared_folders(c) if matches(folder)]
     return max(found)[1] if found else "p:" + project
