@@ -2,6 +2,39 @@
 
 One record per slice, newest first. Paraphrase only; no real person.
 
+## VF48: a stored record keeps its folder spelling, re-checked against the fences when it is read (2026-11-21, lane: V1)
+
+- **Status: built; fix-up 2 awaiting a repeat Verifier, then the land** (run `170424-r1` ran out of time for a
+  full `ci-local.sh`).
+- **The gap (from VF45's Verifiers):** a stored record a later fence covers was served when its project name
+  couldn't show the fence: a message whose cwd was inside the new fence while its transcript folder was not, and
+  a live record saved under a declared compartment (its project is always `live`; `live_record` never looked at
+  the line's `work` path, so even a re-mine kept it).
+- **The fix:** every mined record, every live line and every live record keeps `fence_folder`, the folded
+  spelling of the normalised absolute cwd or `work` path (`~text` other than `~` and `~/` is an ordinary name).
+  Under a compartment map a recorded `work` also keeps its resolved spelling (`fence_folder_resolved`). Reading
+  a record re-checks every spelling lexically against today's fences (a `~` fence also under another Mac's
+  home; a malformed spelling fences), and `mine` drops a fenced live line, or a pre-VF48 relative-work one
+  whenever anything is fenced. `chunk` (Python and Rust) leaves the spellings out of the labeling files. The
+  Rust `mine` and `voice record` write the same bytes. No file or folder inside a fence is read.
+- **Commits (Codex; committed by Claude, her sandbox can't write this worktree's index):** brief `f4b7444`,
+  tests `8be0180`, code `1c258a2`; fix-up 1 (the Verifier's and the security review's findings) tests
+  `aa3a20f`, code and brief `1f4e4e2`; fix-up 2 (the repeat Verifier's) tests `8ed2ab7`, code and brief `7732c4c`; Python 299 OK on it (mine).
+- **Verified (measured):** every new test red on the unfixed code on its assertion (Codex, each fix-up);
+  mutations all red (Codex: 5 then 10; Verifier: 17 of 18 on `1c258a2`, the survivor closed in fix-up 1; repeat
+  Verifier: 13 of 13 on `1f4e4e2`). `crew_decisions_test.py` 294 OK and the six other suites importing it OK;
+  `mine_parity` 5/5 and the cli record tests 20/20 under `VOICE_REQUIRE_PARITY=1`; fmt and clippy clean (repeat
+  Verifier, on `1f4e4e2`). Live seam: the CLI `mine` then `similar` in a subprocess, with a fence added after
+  mining, serves nothing (test 4); a tripwire sandbox showed `record` never reads inside a fence (repeat Verifier).
+- **Verifier (Fable) on `1c258a2`: FAIL**, four must-fixes (Rust `mine` and `voice record` parity, two crashes
+  on a `~5 minute fix` work path) and eight should-fixes, all in fix-up 1, with the security review's three
+  (another Mac's home, `..` fences, the spelling reaching the labelers). **Repeat Verifier (Opus) on `1f4e4e2`:
+  FAIL**, two must-fixes (Rust `chunk` still copied the spelling; a resolved-only spelling let a fence written
+  through a link miss) and two should-fixes (a relative `--cwd` under a map, `~//x`), in fix-up 2.
+- **Not verified:** the full `ci-local.sh`; fix-up 2 by a Verifier.
+- **Filed:** VF50 `a76xuVeE` (multi-character case folds such as U+0130 are not matched by `dashed_in`; the
+  Verifier's low finding, VF44's family).
+
 ## VF45: a stored record is re-checked against the fences when it is read (2026-11-21, lane: V1)
 
 - **Status: built and verified; land started** (full `ci-local.sh` on Teo, detached; V-Q26's rule).
