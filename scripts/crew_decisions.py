@@ -193,6 +193,7 @@ def dashed_in(spelling, name):
 class CompartmentMap(dict):
     """Validated config with lazily resolved fence roots, private to one member."""
     _fenced_roots = None
+    _name_spellings = None
     _resolved_home = None
     _lexical_fenced_roots = None
     _hub_children = None
@@ -611,18 +612,58 @@ def path_compartment(c, path, cwd, *, resolve=True, follow_last=True):
     return fallback_compartment(c, directory, cwd)
 
 
+def folded_project_name(folder):
+    """fold(project_name(folder)), with every strip matched in any case: a fence may spell ~/PROJECTS."""
+    name = re.sub(r"--claude-worktrees-.*", "", fold(folder))
+    prefix = fold(encode(Path.home())) + "-"
+    if name.startswith(prefix):
+        name = name[len(prefix):]
+    else:
+        name = re.sub(r"^-(users|home)-[a-z0-9]+-", "", name)
+    name = re.sub(r"^projects-", "", name)
+    return "." + name[1:] if name.startswith("-") else name
+
+
 def fence_strips_from_names(fence):
     """True when project_name may drop this fence's whole folder from a record's name: the fence is the
-    home folder, ~/projects, another Mac's /Users/<name> or /home/<name> (or its projects), or a folder
-    above one of them. Such a fence leaves no letter of itself in the names of the records under it."""
-    for s in (fold(encode(fence)), fold(fence_encode(fence))):
-        if s.startswith("-system-volumes-data-"):
-            s = s[len("-system-volumes-data"):]
-        if (s == "-" or any(t == s or t.startswith(s + "-") for t in
-                            (fold(encode(Path.home())), fold(encode(Path.home() / "projects"))))
-                or re.fullmatch(r"-(users|home)(-[a-z0-9]+(-projects)?)?", s)):
-            return True
-    return False
+    home folder, ~/projects, another Mac's /Users/<name> or /home/<name>, whatever the name holds
+    (or its projects), or a folder above one of them. Such a fence leaves no letter of itself in the names
+    of the records under it."""
+    parts = [fold(p) for p in Path(os.path.abspath(Path(fence).expanduser())).parts[1:]]
+    if parts[:3] == ["system", "volumes", "data"]:
+        parts = parts[3:]
+    home = [fold(p) for p in Path.home().parts[1:]]
+    return (any(target[:len(parts)] == parts for target in (home, home + ["projects"])) or
+            bool(parts and parts[0] in ("users", "home") and
+                 (len(parts) <= 2 or (len(parts) == 3 and parts[2] == "projects"))))
+
+
+def fence_name_spellings(c):
+    """Compute folded fence name spellings and the every-record rule once per validated map."""
+    cached = getattr(c, "_name_spellings", None)
+    if cached is not None:
+        return cached
+    def spellings(f):
+        full_plain = fold(encode(f))
+        full_folded = fold(fence_encode(f))
+        for spelling in (folded_project_name(encode(f)), folded_project_name(fence_encode(f))):
+            yield spelling
+            if spelling.startswith("."):
+                yield "--" + spelling[1:]
+        for enc in (encode(f), fence_encode(f)):
+            match = re.search(r"--claude(-worktrees)?$", enc, re.I)
+            if match:
+                spelling = folded_project_name(enc[:match.start()])
+                yield spelling
+                if spelling.startswith("."):
+                    yield "--" + spelling[1:]
+        yield full_plain
+        yield full_folded
+    result = (tuple(dict.fromkeys(s for f in c["fenced"] for s in spellings(f))),
+              any(fence_strips_from_names(f) for f in c["fenced"]))
+    if isinstance(c, CompartmentMap):
+        c._name_spellings = result
+    return result
 
 
 def project_fenced(c, project):
@@ -631,19 +672,8 @@ def project_fenced(c, project):
     fences every record."""
     folded = fold(project)
     dotless = "-" + folded[1:] if folded.startswith(".") else folded
-    def spellings(f):
-        full_plain = fold(encode(f))
-        full_folded = fold(fence_encode(f))
-        for spelling in (fold(project_name(encode(f))), fold(project_name(fence_encode(f)))):
-            yield spelling
-            if spelling.startswith("."):
-                yield "--" + spelling[1:]
-        yield full_plain
-        yield full_folded
-    if any(dashed_in(spelling, folded) or dashed_in(spelling, dotless) for f in c["fenced"]
-           for spelling in spellings(f)):
-        return True
-    return any(fence_strips_from_names(f) for f in c["fenced"])
+    spellings, every = fence_name_spellings(c)
+    return every or any(dashed_in(s, folded) or dashed_in(s, dotless) for s in spellings)
 
 
 def record_compartment(c, record):
@@ -651,6 +681,9 @@ def record_compartment(c, record):
     added never routes past it; a stored compartment is kept only when the project is clear."""
     project = record.get("project") if "compartment" in record else record["project"]
     if isinstance(project, str) and project_fenced(c, project):
+        return "fenced"
+    stored = record.get("compartment")
+    if isinstance(stored, str) and stored.startswith("p:") and len(stored) > 2 and project_fenced(c, stored[2:]):
         return "fenced"
     if "compartment" in record:
         return record["compartment"]
@@ -1928,9 +1961,11 @@ def cmd_similar(m, args):
     query = stdin_object(args.usage_error, ("query",))["query"] if args.stdin else args.query
     corpus = read_jsonl(args.corpus or m.state("decisions.jsonl"))
     if m.compartments is not None:
-        corpus = [r for r in corpus if record_compartment(m.compartments, r) != "fenced" and
-                  (compartment == "all" or (compartment != "hub-mixed" and
-                   record_compartment(m.compartments, r) == compartment))]
+        if fence_name_spellings(m.compartments)[1]:
+            print("similar: a fence covers the home folder, ~/projects or another Mac's home, "
+                  "so every stored record is fenced", file=sys.stderr)
+        corpus = [r for r in corpus if (stored := record_compartment(m.compartments, r)) != "fenced" and
+                  (compartment == "all" or (compartment != "hub-mixed" and stored == compartment))]
     hits = similar(m, corpus, query, args.k)
     if args.json:
         print(json.dumps(hits, indent=2, ensure_ascii=False))
