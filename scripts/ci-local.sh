@@ -323,6 +323,18 @@ if $list; then
   printf '%s\n' "${labels[@]}"
   exit 0
 fi
+# The agent tests run Claude Code inside the Mac's own sandbox, so cargo test passes only on a
+# Mac. Elsewhere, refuse before running anything with 75, which remote-gate.sh reads as "could
+# not run here", so a Mac takes the gate.
+host_os=$(uname -s)
+if [ "$host_os" != Darwin ]; then
+  for label in "${labels[@]+"${labels[@]}"}"; do
+    if [[ "$label" == *'cargo test '* ]]; then
+      note "ci-local: cargo test needs a Mac (the agent tests run Claude Code in the Mac's own sandbox) and this host is $host_os; exit 75 tells remote-gate.sh to try the next host"
+      exit 75
+    fi
+  done
+fi
 if [ "$tier" = full ]; then
   echo "ci-local: tier full, ${#labels[@]} steps"
 else
