@@ -537,6 +537,45 @@ fn encode(cwd: &str, home: &Path) -> String {
         .collect()
 }
 
+/// Encode a normalised absolute path without probing the filesystem.
+/// Only `~` and `~/` expand; other tilde names stay relative to `base`.
+pub fn fence_folder(path: &str, home: &Path, base: Option<&Path>) -> Option<String> {
+    fn expand(path: &str, home: &Path) -> String {
+        if path == "~" {
+            home.to_string_lossy().into_owned()
+        } else if let Some(rest) = path.strip_prefix("~/") {
+            if rest.starts_with('/') {
+                rest.to_owned()
+            } else {
+                format!("{}/{rest}", home.to_string_lossy().trim_end_matches('/'))
+            }
+        } else {
+            path.to_owned()
+        }
+    }
+    let mut path = expand(path, home);
+    if !path.starts_with('/') {
+        let base = expand(&base?.to_string_lossy(), home);
+        path = format!("{base}/{path}");
+    }
+    let root = if path.starts_with("//") && !path.starts_with("///") {
+        "//"
+    } else {
+        "/"
+    };
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    Some(encode(&format!("{root}{}", parts.join("/")), home).to_ascii_lowercase())
+}
+
 fn cwd_score(cwd_folder: Option<&str>, folder: &str) -> u8 {
     static WORKTREE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new("--claude-worktrees-.*").unwrap());
@@ -911,7 +950,15 @@ pub fn mine_with_progress(
                         }
                         Err(e) => return Err(e),
                     };
-                    for record in records {
+                    for mut record in records {
+                        if let Some(spelling) = r
+                            .get("cwd")
+                            .and_then(Value::as_str)
+                            .filter(|cwd| !cwd.is_empty())
+                            .and_then(|cwd| fence_folder(cwd, home, None))
+                        {
+                            record.insert("fence_folder".into(), Value::String(spelling));
+                        }
                         match privacy(filters, &Value::Object(record.clone()))? {
                             Some(Kind::Personal) => mined.personal += 1,
                             Some(Kind::Secret) => mined.secret += 1,

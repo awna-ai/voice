@@ -144,7 +144,10 @@ def fold(s):
 
 
 def encode(path):
-    return re.sub(r"[^A-Za-z0-9]", "-", unicodedata.normalize("NFC", str(Path(path).expanduser())))
+    path = Path(path)
+    if str(path) == "~" or str(path).startswith("~/"):
+        path = path.expanduser()
+    return re.sub(r"[^A-Za-z0-9]", "-", unicodedata.normalize("NFC", str(path)))
 
 
 def fence_encode(path):
@@ -194,6 +197,8 @@ class CompartmentMap(dict):
     """Validated config with lazily resolved fence roots, private to one member."""
     _fenced_roots = None
     _name_spellings = None
+    _folder_spellings = None
+    _stored_spellings = None
     _resolved_home = None
     _lexical_fenced_roots = None
     _hub_children = None
@@ -518,7 +523,9 @@ def fence_folder_spellings(c):
     cached = getattr(c, "_folder_spellings", None)
     if cached is not None:
         return cached
-    spellings = tuple(dict.fromkeys(s for f in c["fenced"] for s in (fold(encode(f)), fold(fence_encode(f)))))
+    spellings = tuple(dict.fromkeys(s for f in c["fenced"]
+                                   for path in (f, os.path.abspath(Path(f).expanduser()))
+                                   for s in (fold(encode(path)), fold(fence_encode(path)))))
     if isinstance(c, CompartmentMap):
         c._folder_spellings = spellings
     return spellings
@@ -528,6 +535,24 @@ def folder_fenced(c, folded):
     """True when a folded folder spelling (fold(encode(path)), Claude Code's transcript folder name) holds a
     fence's spelling. Reads no file or folder."""
     return any(dashed_in(s, folded) for s in fence_folder_spellings(c))
+
+
+def stored_fence_spellings(c):
+    """Fence spellings for stored records, also matched beneath another computer's home."""
+    cached = getattr(c, "_stored_spellings", None)
+    if cached is None:
+        spellings = fence_folder_spellings(c)
+        home = fold(encode(Path.home()))
+        cached = tuple(dict.fromkeys((*spellings, *(s[len(home):] for s in spellings
+                                                   if s.startswith(home + "-")))))
+        if isinstance(c, CompartmentMap):
+            c._stored_spellings = cached
+    return cached
+
+
+def stored_folder_fenced(c, folded):
+    """Check a stored spelling lexically, including fences under another home."""
+    return any(dashed_in(s, folded) for s in stored_fence_spellings(c))
 
 
 def folder_compartment(c, folder_name):
@@ -717,7 +742,8 @@ def record_compartment(c, record):
         return "fenced"
     if "fence_folder" in record:
         folder = record["fence_folder"]
-        if not isinstance(folder, str) or not folder or folder_fenced(c, folder):
+        if (not isinstance(folder, str) or not re.fullmatch(r"-[a-z0-9-]*", folder) or
+                stored_folder_fenced(c, folder)):
             return "fenced"
     if "compartment" in record:
         return record["compartment"]
@@ -1558,8 +1584,9 @@ def cmd_mine(m, args):
                 records = allowed
             for h, cwd in _harvest(m, path, project, records):
                 cwd_folder = encode(cwd) if isinstance(cwd, str) and cwd else None
-                if cwd_folder is not None:
-                    h["fence_folder"] = fold(cwd_folder)
+                spelling_path = lexical_path(cwd, None) if isinstance(cwd, str) and cwd else None
+                if spelling_path is not None:
+                    h["fence_folder"] = fold(encode(spelling_path))
                 if m.compartments is not None:
                     h["compartment"] = session_compartment
                 own_record = (session_compartment == compartment and
@@ -2016,6 +2043,24 @@ def cmd_similar(m, args):
     return 0
 
 
+def lexical_path(path, cwd):
+    """path made absolute without touching the filesystem: only "~" and a leading "~/" are this home;
+    any other "~text" is an ordinary relative name. None when it stays relative and cwd is None."""
+    def expand(value):
+        value = str(value)
+        if value == "~":
+            return Path.home()
+        if value.startswith("~/"):
+            return Path.home() / value[2:]
+        return Path(value)
+    p = expand(path)
+    if not p.is_absolute():
+        if cwd is None:
+            return None
+        p = expand(cwd) / p
+    return Path(os.path.abspath(p))
+
+
 def cmd_record(m, args):
     if cwd_compartment(m, getattr(args, "cwd", None)) == "fenced":
         raise Fenced("refusing: fenced")
@@ -2037,14 +2082,20 @@ def cmd_record(m, args):
                   "question": args.question, "pick": args.member_pick, "rule": args.rule,
                   "answer": args.principal_answer}
     compartment = None
+    spelling_path = lexical_path(values["work"], cwd_of(args))
     if m.compartments is not None:
-        compartment = path_compartment(m.compartments, values["work"], cwd_of(args))
+        # Unknown tilde names are ordinary relative names, including during the fenced walk.
+        work = values["work"]
+        if work.startswith("~") and work != "~" and not work.startswith("~/"):
+            work = spelling_path
+        compartment = path_compartment(m.compartments, work, cwd_of(args))
         if compartment == "fenced":
             raise Fenced("refusing: fenced")
+        spelling_path = safe_resolve(m.compartments, work, cwd_of(args))[0]
     line = {"timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "work": values["work"],
             "kind": values["kind"], "category": values["category"], "tier": values["tier"], "question": values["question"],
             m.pick_field: values["pick"], "rule": values.get("rule"), m.answer_field: values.get("answer"),
-            "fence_folder": fold(encode(os.path.abspath(absolute_path(values["work"], cwd_of(args)))))}
+            "fence_folder": fold(encode(spelling_path))}
     if m.compartments is not None:
         line["compartment"] = compartment
     log = Path(args.log or m.state("live.jsonl")).expanduser()
@@ -3054,12 +3105,15 @@ def live_record(m, line):
     if not isinstance(line, dict):
         return "unreadable lines"
     spelling = line.get("fence_folder")
-    if not isinstance(spelling, str) or not spelling:
-        work = line.get("work")
-        spelling = (fold(encode(os.path.abspath(Path(work).expanduser())))
-                    if isinstance(work, str) and work and Path(work).expanduser().is_absolute() else None)
+    valid = isinstance(spelling, str) and re.fullmatch(r"-[a-z0-9-]*", spelling)
+    if "fence_folder" in line and not valid and m.compartments is not None:
+        return "in a fenced folder"
+    work = line.get("work")
+    work_path = lexical_path(work, None) if isinstance(work, str) and work else None
+    work_spelling = fold(encode(work_path)) if work_path is not None else None
+    spelling = spelling if valid else work_spelling
     if m.compartments is not None:
-        if ((spelling is not None and folder_fenced(m.compartments, spelling)) or
+        if (any(stored_folder_fenced(m.compartments, s) for s in (spelling, work_spelling) if s is not None) or
                 (spelling is None and m.compartments["fenced"])):
             return "in a fenced folder"
     answer = line.get(m.answer_field)
@@ -3341,7 +3395,7 @@ def codebook(m):
 
 def cmd_chunk(m, args):
     corpus = read_jsonl(args.corpus)
-    train = [r for r in corpus if r["split"] == "train"]
+    train = [{k: v for k, v in r.items() if k != "fence_folder"} for r in corpus if r["split"] == "train"]
     held = [{"kind": "question", **{k: r[k] for k in QUESTION_FIELDS}}
             for r in corpus if r["split"] == "heldout" and r["kind"] == "question"]
     out = Path(args.out_dir)
@@ -3746,6 +3800,8 @@ def run_main(argv=None, member=None, prog="crew_decisions", description=None):
                     continue
                 value = getattr(args, name, None)
                 for path in (value if isinstance(value, list) else [value]):
+                    if name == "work" and isinstance(path, str) and path.startswith("~") and path != "~" and not path.startswith("~/"):
+                        path = lexical_path(path, cwd_of(args))
                     if path and path_compartment(m.compartments, path, cwd_of(args) if name == "work" else os.getcwd()) == "fenced":
                         raise Fenced("refusing: fenced")
         return COMMANDS[args.cmd](m, args)

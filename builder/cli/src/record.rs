@@ -130,6 +130,33 @@ pub fn run(member_dir: PathBuf, args: Vec<String>) -> Result<()> {
     ] {
         row.insert(key, value.map(Value::String).unwrap_or(Value::Null));
     }
+    let base = std::env::var_os("CLAUDE_PROJECT_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(std::env::current_dir)
+        .map_err(|source| Error::Io {
+            path: PathBuf::from("."),
+            source,
+        })?;
+    // abspath also anchors a relative CLAUDE_PROJECT_DIR in the process cwd.
+    let base = if base.is_absolute() || base.starts_with("~") {
+        base
+    } else {
+        std::env::current_dir()
+            .map_err(|source| Error::Io {
+                path: PathBuf::from("."),
+                source,
+            })?
+            .join(base)
+    };
+    row.insert(
+        "fence_folder".into(),
+        Value::String(
+            voice_ingest::mine::fence_folder(&input.work, &home, Some(&base))
+                .expect("record has an absolute base"),
+        ),
+    );
     let line = to_jsonl(&[row]);
     if line.len() > 64 * 1024 {
         return Err(Error::Invalid(
