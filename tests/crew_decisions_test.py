@@ -2198,6 +2198,22 @@ class Compartments(unittest.TestCase):
                         with self.subTest(fence=fence, project=project, stored=stored):
                             self.assertEqual(self.c.record_compartment(c, record), "fenced")
 
+    def test_record_fence_on_projects_fences_every_record_on_a_home_outside_users(self):
+        self.assertFalse(str(Path.home()).startswith(("/Users/", "/home/")))
+        for fence in ("~/projects", str(TEST_HOME / "projects")):
+            self.config["fenced"] = ["~/garden-club", fence]
+            c = self.c.check_compartments(self.config)
+            for project in (self.c.project_name(self.c.encode("~/projects/work2")), "work", "client-portal"):
+                for stored in (False, True):
+                    record = {"project": project}
+                    if stored:
+                        record["compartment"] = "work"
+                    with self.subTest(fence=fence, project=project, stored=stored):
+                        self.assertEqual(self.c.record_compartment(c, record), "fenced")
+        self.config["fenced"] = ["~/garden-club", "~/projectsx"]
+        c = self.c.check_compartments(self.config)
+        self.assertEqual(self.c.record_compartment(c, {"project": "work"}), "work")
+
     def test_record_lookalikes_of_home_and_projects_fences_still_route(self):
         with patch.dict(os.environ, {"HOME": "/Users/sam"}):
             for fence in ("~/projectsx", "~/proj", "/Users/sam/proj", "/Users/sam-x", "/home2"):
