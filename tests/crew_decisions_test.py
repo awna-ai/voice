@@ -2148,6 +2148,55 @@ class Compartments(unittest.TestCase):
         c = self.c.check_compartments(self.config)
         self.assertEqual(self.c.folder_compartment(c, self.c.encode("~/.ecret-notes")), "fenced")
 
+    def test_folder_dash_for_last_letters_does_not_fence_the_stem(self):
+        self.config["fenced"] = ["~/garden-club", "~/clients", "~/notes"]
+        with patch.dict(os.environ, {"HOME": "/home/fixture"}):
+            c = self.c.check_compartments(self.config)
+            for path, expected, data_expected in (
+                    ("~/client-portal", "p:client-portal", "p:.System-Volumes-Data-home-fixture-client-portal"),
+                    ("~/client/acme", "p:client-acme", "p:.System-Volumes-Data-home-fixture-client-acme"),
+                    ("~/note-taker", "p:note-taker", "p:.System-Volumes-Data-home-fixture-note-taker")):
+                name = self.c.encode(path)
+                for folder, value in ((name, expected), ("-System-Volumes-Data" + name, data_expected)):
+                    with self.subTest(path=path, folder=folder):
+                        self.assertEqual(self.c.folder_compartment(c, folder), value)
+
+    def test_folder_dash_for_last_letters_fences_the_real_folder_and_children(self):
+        self.config["fenced"] = ["~/garden-club", "~/clients", "~/notes"]
+        c = self.c.check_compartments(self.config)
+        for path in ("~/clientſ", "~/clientſ/acme", "~/noteſ", "~/noteſ/drafts"):
+            name = claude_name(path)
+            for folder in (name, "-System-Volumes-Data" + name, name + "--claude-worktrees-x"):
+                with self.subTest(path=path, folder=folder):
+                    self.assertEqual(self.c.folder_compartment(c, folder), "fenced")
+
+    def test_record_hidden_fence_dot_matches_only_a_dot(self):
+        self.config["fenced"] = ["~/garden-club", "~/.ssh"]
+        c = self.c.check_compartments(self.config)
+        self.assertEqual(self.c.record_compartment(c, {"project": "open-ssh"}), "p:open-ssh")
+        self.assertEqual(self.c.record_compartment(c, {"project": self.c.project_name(
+            self.c.encode("~/.ssh"))}), "fenced")
+
+    def test_record_hidden_fence_keeps_a_plain_substring_match(self):
+        self.config["fenced"] = ["~/garden-club", "~/.ai"]
+        c = self.c.check_compartments(self.config)
+        self.assertEqual(self.c.record_compartment(c, {"project": "claude.ai"}), "fenced")
+
+    def test_record_dash_for_last_letters(self):
+        self.config["fenced"] = ["~/garden-club", "~/clients"]
+        c = self.c.check_compartments(self.config)
+        self.assertEqual(self.c.record_compartment(c, {"project": "client-portal"}), "client")
+        self.assertEqual(self.c.record_compartment(c, {"project": self.c.project_name(
+            claude_name("~/clientſ"))}), "fenced")
+
+    def test_dashed_in_end_rule(self):
+        for spelling, name, expected in (("clients", "client-", True), ("clients", "client--acme", True),
+                                         ("secret", "-ecret", True), ("clients", "client-portal", False),
+                                         ("clients", "client-acme", False), ("secret", "ecret", False),
+                                         ("clients", "clients-app", True)):
+            with self.subTest(spelling=spelling, name=name):
+                self.assertEqual(self.c.dashed_in(spelling, name), expected)
+
     def test_mine_skips_a_no_cwd_record_in_a_dash_spelled_fence_folder(self):
         self.config["fenced"] = ["~/secret-notes"]
         m = self.save_config()
