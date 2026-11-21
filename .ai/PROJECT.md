@@ -36,7 +36,8 @@ member and no real person's data.
 | `builder/ui/` | The app's screens as a package another app can mount, the Ask screen (`Ask.vue`: one question to one assistant, the permissions ticked this time, where it may go, the answer) among them | `pnpm -C builder/ui test` |
 
 All of it runs with `bash scripts/ci-local.sh` (Python 3.9+ standard library and shellcheck). `--tier touched` runs only what a change touches. The
-Rust checks (fmt, clippy, tests) need stable Rust and are skipped when `cargo` is missing. The
+Rust checks (fmt, clippy, tests) need stable Rust and are skipped when `cargo` is missing on a Mac;
+off a Mac the gate exits 75 instead, and also when it would run the Rust tests. The
 screens need Node and pnpm; their checks are skipped with a printed line when pnpm is missing. The
 Windows and Linux checks of `builder/keystore` need those targets (`rustup target add
 x86_64-pc-windows-msvc x86_64-unknown-linux-gnu`) and are skipped, each with a printed line, without.
