@@ -548,7 +548,9 @@ def stored_fence_spellings(c):
     """Fence spellings for stored records, also matched beneath another computer's home."""
     cached = getattr(c, "_stored_spellings", None)
     if cached is None:
-        spellings = fence_folder_spellings(c)
+        spellings = (*fence_folder_spellings(c),
+                     *(s for root in fenced_forms(c, "/")
+                       for s in (fold(encode(root)), fold(fence_encode(root)))))
         home = fold(encode(Path.home()))
         cached = tuple(dict.fromkeys((*spellings, *(s[len(home):] for s in spellings
                                                    if s.startswith(home + "-")))))
