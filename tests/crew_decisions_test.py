@@ -2134,6 +2134,79 @@ class Compartments(unittest.TestCase):
         return {"timestamp": "2026-10-20T10:00:00Z", "work": "~/projects/work/notes/x.md",
                 "question": "Keep the review queue?", "ada_pick": "Keep it", "sam_answer": "Keep it", **changes}
 
+    def test_real_path_record_is_hidden_by_a_later_link_parent_fence(self):
+        home = self.h.root.resolve() / "home"
+        target = home / "projects/acme"
+        target.mkdir(parents=True)
+        (home / "work").symlink_to(target, target_is_directory=True)
+        self.config["follow"] = ["~"]
+        self.h.write("private.json", {"sources": [{"name": "live", "kind": "live", "consent": "2026-10-20"}]})
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            self.save_config()
+            def cli(*args):
+                return self.h.run(CREW, "--member", self.member, *args, env={"HOME": str(home)})
+            proc = cli("record", "--work", str(target / "secret/x.md"), "--kind", "escalated",
+                       "--category", "scope", "--tier", "low", "--question", "Keep the review queue?",
+                       "--ada-pick", "Keep it", "--sam-answer", "Keep it")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            proc = cli("sources", "mine")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("kept 1 answers", proc.stdout)
+            for fence, count in (("~/work/other", 1), ("~/work/secret", 0)):
+                with self.subTest(fence=fence):
+                    self.config["fenced"] = [fence]
+                    self.save_config()
+                    proc = cli("similar", "--compartment", "all", "--corpus", "state/decisions-live.jsonl",
+                               "--query", "Keep the review queue?", "--json")
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    self.assertEqual(len(json.loads(proc.stdout)), count)
+            proc = cli("sources", "mine")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("kept 0 answers", proc.stdout)
+            self.assertEqual(self.h.read("state/decisions-live.jsonl"), "")
+
+    def test_real_path_message_is_hidden_by_a_later_link_parent_fence(self):
+        home = self.h.root.resolve() / "home"
+        target = home / "projects/acme"
+        target.mkdir(parents=True)
+        (home / "work").symlink_to(target, target_is_directory=True)
+        self.config["follow"] = ["~"]
+        # macOS temp paths resolve beneath /private, outside this fixture's intended exclusions.
+        self.member = self.h.member({**ADA, "compartments": "compartments.json",
+                                     "filters": {**ADA["filters"], "excluded_folders": "garden-club"}})
+        text = "keep every review queue verdict for later scoring"
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            self.save_config()
+            self.h.session(self.c.encode(target), "s1",
+                           {**said("2026-09-01T00:00:00Z", text), "cwd": str(target / "secret")})
+            def cli(*args):
+                return self.h.run(CREW, "--member", self.member, *args, env={"HOME": str(home)})
+            proc = cli("mine", "--projects", str(self.h.projects), "--out", "mined.jsonl")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(len(self.h.read("mined.jsonl").splitlines()), 1)
+            for fence, count in (("~/work/other", 1), ("~/work/secret", 0)):
+                with self.subTest(fence=fence):
+                    self.config["fenced"] = [fence]
+                    self.save_config()
+                    proc = cli("similar", "--compartment", "all", "--corpus", "mined.jsonl",
+                               "--query", text, "--json")
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    self.assertEqual(len(json.loads(proc.stdout)), count)
+
+    def test_real_path_stored_spelling_matches_a_link_parent_fence(self):
+        home = self.h.root.resolve() / "home"
+        target = home / "projects/acme"
+        target.mkdir(parents=True)
+        (home / "work").symlink_to(target, target_is_directory=True)
+        record = {"project": "acme", "compartment": "work",
+                  "fence_folder": self.c.fold(self.c.encode(target / "secret/x.md"))}
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            for fence, compartment in (("~/work/other", "work"), ("~/work/secret", "fenced")):
+                with self.subTest(fence=fence):
+                    self.config["fenced"] = [fence]
+                    self.assertEqual(self.c.record_compartment(self.c.check_compartments(self.config), record),
+                                     compartment)
+
     def test_record_keeps_both_spellings_and_a_link_fence_hides_it(self):
         home = self.h.root / "home"
         target = home / "projects/acme"
