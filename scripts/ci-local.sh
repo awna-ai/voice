@@ -40,6 +40,7 @@ add() {
 note() { echo "$*" >&2; }
 python_suites='crew_decisions crew_sources crew_extra_sources crew_labels crew_hardening crew_documents crew_rounds slack_mine slack_select crew_personas growth_loop_spec claude_sandbox_probe read_fence_probe'
 shell_suites='crew_install mac_install fetch_radio build_mac_app ci_local verify_main'
+mac_only_suites='crew_decisions crew_documents mac_install fetch_radio build_mac_app'
 shellcheck_line='shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/build_mac_app_test.sh tests/ci_local_test.sh scripts/verify-main.sh scripts/release-check.sh tests/verify_main_test.sh'
 cargo_present=false
 if command -v cargo >/dev/null 2>&1; then cargo_present=true; fi
@@ -325,8 +326,8 @@ if $list; then
   exit 0
 fi
 # The agent tests need the Mac's sandbox. Off a Mac, refuse before any step if cargo is
-# missing or the gate would run cargo test. Exit 75 means "this host can't run the gate",
-# so a caller can move the gate to a Mac.
+# missing or the gate would run cargo test or a suite that skips checks off a Mac.
+# Exit 75 means "this host can't run the gate", so a caller can move the gate to a Mac.
 if [ "$host_os" != Darwin ]; then
   if ! $cargo_present; then
     note "ci-local: cargo is missing and this host is $host_os, so the Rust checks can't run here and a Mac must run the gate; exiting 75 (this host can't run the gate) before any step"
@@ -337,6 +338,14 @@ if [ "$host_os" != Darwin ]; then
       note "ci-local: cargo test needs a Mac (the agent tests run Claude Code in the Mac's own sandbox) and this host is $host_os; exiting 75 (this host can't run the gate) before any step"
       exit 75
     fi
+  done
+  for label in "${labels[@]+"${labels[@]}"}"; do
+    for suite in $mac_only_suites; do
+      if [ "$label" = "python3 tests/${suite}_test.py" ] || [ "$label" = "bash tests/${suite}_test.sh" ]; then
+        note "ci-local: $label needs a Mac (it skips its checks on other hosts) and this host is $host_os; exiting 75 (this host can't run the gate) before any step"
+        exit 75
+      fi
+    done
   done
 fi
 if [ "$tier" = full ]; then

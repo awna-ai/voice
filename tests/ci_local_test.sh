@@ -38,6 +38,12 @@ if [ -n "$real_cargo" ]; then
 #!/bin/bash
 if [ "${1:-}" = metadata ]; then exec "$CI_LOCAL_REAL_CARGO" "$@"; fi
 printf 'cargo %s\n' "$*" >> "$CI_LOCAL_MARKER"
+if [ "${1:-}" = tree ]; then
+  case " $* " in
+    *' --features claude-subscription '*) echo 'voice-agent feature "claude-subscription"' ;;
+    *' features,normal,build,dev '*) echo 'voice-agent feature "test-stubs"' ;;
+  esac
+fi
 STUB
   chmod +x "$tmp/bin/cargo"
 else
@@ -62,7 +68,7 @@ has() { grep -Fx -- "$1" "$tmp/out" >/dev/null || fail "missing step: $1"; }
 no_tests() { if grep -F 'cargo test ' "$tmp/out"; then fail 'unexpected cargo test'; fi; }
 change() {
   mkdir -p "$(dirname "$1")"
-  printf '\n// ci-local test\n' >> "$1"
+  printf '\n%s ci-local test\n' "${2:-//}" >> "$1"
   git add -- "$1"
   commit change
 }
@@ -133,8 +139,28 @@ else
 fi
 echo 'ci_local_test: full golden list passed'
 
-# Off a Mac, a gate holding a cargo test refuses with 75 before any step runs; a Mac, or a gate
-# with no cargo test, runs its steps.
+# Scan real suites, not the disposable stubs. Ignore the three reviewed non-host
+# decorators (Python version, system Python and the temporary directory symlink).
+mac_only_suites=$(sed -n "s/^mac_only_suites='\(.*\)'$/\1/p" "$repo/scripts/ci-local.sh")
+host_regressions=0
+skip_word=skipped
+for suite in "$repo"/tests/*_test.py "$repo"/tests/*_test.sh; do
+  [ "$suite" != "$repo/tests/ci_local_test.sh" ] || continue # its own patterns would match
+  if grep -E 'uname|Darwin|sandbox_usable|sandbox-exec|skipUnless|skipIf|skipTest|SkipTest|skipped' "$suite" |
+     grep -Fv -e "@unittest.skipIf(sys.version_info < (3, 11)," \
+       -e "@unittest.skipUnless(Path('/usr/bin/python3').exists()," \
+       -e '@unittest.skipUnless(os.path.islink("/tmp"),' |
+     grep -Eq "@.*skip(Unless|If)|skipTest\(|SkipTest|echo .*$skip_word"; then
+    name=${suite##*/}; name=${name%_test.*}
+    if [[ " $mac_only_suites " != *" $name "* ]]; then
+      echo "ci_local_test: RED Mac-only suite missing from mac_only_suites: $name" >&2
+      host_regressions=$((host_regressions + 1))
+    fi
+  fi
+done
+
+# Off a Mac, cargo tests and Mac-only suites refuse with 75 before any step runs.
+# A Mac, or a gate without either kind of test, runs its steps.
 mkdir "$tmp/os"
 # The stub answers pnpm --version without marking, because building the step list asks for it
 # before any step runs.
@@ -177,13 +203,30 @@ if [ -n "$real_cargo" ]; then
   grep -F 'cargo test --locked' "$tmp/out" >/dev/null || fail 'off-Mac list missing cargo test'
 
   gate_on Darwin
-  [ "$status" != 75 ] || fail 'Mac full gate refused with exit 75'
+  [ "$status" = 0 ] || fail "Mac full gate: expected exit 0, got $status"
+  has 'ci-local: all passed'
   [ -s "$CI_LOCAL_MARKER" ] || fail 'Mac full gate ran no steps'
 
-  change tests/slack_mine_test.py
+  for path in builder/install/radio-release.txt scripts/slack_mine.py; do
+    change "$path" '#'
+    gate_on Linux --tier touched --base HEAD~1
+    reset
+    case "$path" in
+      builder/install/*) label='bash tests/mac_install_test.sh' ;;
+      scripts/*.py) label='python3 tests/crew_decisions_test.py' ;;
+    esac
+    note="ci-local: $label needs a Mac (it skips its checks on other hosts) and this host is Linux; exiting 75 (this host can't run the gate) before any step"
+    if [ "$status" != 75 ] || [ -s "$CI_LOCAL_MARKER" ] || ! grep -Fx "$note" "$tmp/err" >/dev/null; then
+      echo "ci_local_test: RED off-Mac touched $path: expected exit 75, no steps and refusal note; got $status" >&2
+      host_regressions=$((host_regressions + 1))
+    fi
+  done
+
+  change tests/verify_main_test.sh '#'
   gate_on Linux --tier touched --base HEAD~1
   reset
-  [ "$status" != 75 ] || fail 'off-Mac touched gate without crates refused with exit 75'
+  [ "$status" = 0 ] || fail "off-Mac touched gate without crates: expected exit 0, got $status"
+  has 'ci-local: all passed'
   [ -s "$CI_LOCAL_MARKER" ] || fail 'off-Mac touched gate without crates ran no steps'
 
   change builder/agent/src/egress.rs
@@ -195,6 +238,9 @@ if [ -n "$real_cargo" ]; then
 else
   echo 'ci_local_test: cargo missing, skipping the off-Mac refusal'
 fi
+
+[ "$host_regressions" = 0 ] || fail "$host_regressions Mac-only assertions failed"
+echo 'ci_local_test: Mac-only suite coverage and touched refusals passed'
 
 # Report every new regression before failing, so each missing mapping has a red.
 regressions=0

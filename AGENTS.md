@@ -8,7 +8,7 @@ This is a public kit for building AI assistants. It ships `crew/_template/`, the
 builds lives in their own private copy. Run `bash scripts/ci-local.sh` before anything lands on
 `main` (Python 3.9+ and shellcheck; stable Rust,
 Node and pnpm for the rest, each skipped when missing); off a Mac it exits 75 instead, before
-any step, when Rust is missing or it would run the Rust tests.
+any step, when Rust is missing or it would run the Rust tests or suites that skip checks off a Mac.
 
 Gotchas, before anything else:
 
