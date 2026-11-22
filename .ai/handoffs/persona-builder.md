@@ -4,8 +4,8 @@ One record per slice, newest first. Paraphrase only; no real person.
 
 ## VF48: a stored record keeps its folder spelling, re-checked against the fences when it is read (2026-11-21, lane: V1)
 
-- **Status: built; fix-up 2 awaiting a repeat Verifier, then the land** (run `170424-r1` ran out of time for a
-  full `ci-local.sh`).
+- **Status: fix-up 4 owed** (brief `plans/briefs/VF48-fixup-4.md`), then a delta Verifier (Opus) and the full
+  `ci-local.sh` land.
 - **The gap (from VF45's Verifiers):** a stored record a later fence covers was served when its project name
   couldn't show the fence: a message whose cwd was inside the new fence while its transcript folder was not, and
   a live record saved under a declared compartment (its project is always `live`; `live_record` never looked at
@@ -31,7 +31,17 @@ One record per slice, newest first. Paraphrase only; no real person.
   (another Mac's home, `..` fences, the spelling reaching the labelers). **Repeat Verifier (Opus) on `1f4e4e2`:
   FAIL**, two must-fixes (Rust `chunk` still copied the spelling; a resolved-only spelling let a fence written
   through a link miss) and two should-fixes (a relative `--cwd` under a map, `~//x`), in fix-up 2.
-- **Not verified:** the full `ci-local.sh`; fix-up 2 by a Verifier.
+- **Not verified:** the full `ci-local.sh`; fix-up 3 by a Verifier.
+- **Run `230406-r1` (2026-11-22):** rebased on `main` `e72c949`. Security review on fix-up 2: one gap inside
+  VF48 (a fence written through a link in its parent missed a record stored by the real path), fixed in fix-up 3
+  (tests `b712a74`, code `c88c51e`: stored spellings also take each `fenced_forms` root; red 4 failures on the
+  unfixed code and green, measured), and three older gaps filed as VF51 `3YLZjXwP`, VF52 `0QNlwvea` and VF53
+  `K2eCeINJ`. DECISIONS now says only `similar` and the live mine re-check stored records (VF52). **Repeat
+  Verifier (Opus) on `3d19085`: FAIL**, two must-fixes, for fix-up 4: the Rust `check_record` refuses the new
+  `fence_folder` key (`mined_fixture_records_pass_check_record` red; a delivered history fails `sending.rs`'s
+  `fold`), and `cmd_record` resolves the lexically normalised path, so `link/..` names the wrong folder. Her
+  five fix-up 2 checks all held (each reproduced live), mutations 11 of 11 red, Python 299 OK, voice-ingest lib
+  63/64, fmt and clippy clean (provider-reported). Fix-up 3 has had no Verifier yet.
 - **Filed:** VF50 `a76xuVeE` (multi-character case folds such as U+0130 are not matched by `dashed_in`; the
   Verifier's low finding, VF44's family).
 
