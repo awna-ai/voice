@@ -40,7 +40,7 @@ add() {
 note() { echo "$*" >&2; }
 python_suites='crew_decisions crew_sources crew_extra_sources crew_labels crew_hardening crew_documents crew_rounds slack_mine slack_select crew_personas growth_loop_spec claude_sandbox_probe read_fence_probe'
 shell_suites='crew_install mac_install fetch_radio build_mac_app ci_local verify_main'
-mac_only_suites='crew_decisions crew_documents mac_install fetch_radio build_mac_app'
+mac_only_suites='crew_decisions crew_documents read_fence_probe mac_install fetch_radio build_mac_app'
 shellcheck_line='shellcheck scripts/ci-local.sh bootstrap/install.sh tests/crew_install_test.sh scripts/build-mac-app.sh builder/install/install.sh tests/mac_install_test.sh scripts/fetch-radio.sh tests/fetch_radio_test.sh tests/build_mac_app_test.sh tests/ci_local_test.sh scripts/verify-main.sh scripts/release-check.sh tests/verify_main_test.sh'
 cargo_present=false
 if command -v cargo >/dev/null 2>&1; then cargo_present=true; fi

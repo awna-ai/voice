@@ -139,21 +139,23 @@ else
 fi
 echo 'ci_local_test: full golden list passed'
 
-# Scan real suites, not the disposable stubs. Ignore the three reviewed non-host
-# decorators (Python version, system Python and the temporary directory symlink).
+# Scan real suites, not the disposable stubs. Every host term needs review,
+# even when the host guard and the skipped checks are on different lines.
 mac_only_suites=$(sed -n "s/^mac_only_suites='\(.*\)'$/\1/p" "$repo/scripts/ci-local.sh")
+host_terms_reviewed=(
+  claude_sandbox_probe # It only asserts the sandbox-exec command string; it does not run or skip it.
+  crew_hardening # Its skipIf checks the Python version, not the host.
+)
 host_regressions=0
-skip_word=skipped
+host_terms=(uname Darwin darwin sys.platform platform.system sandbox_usable sandbox-exec
+  /usr/bin/python3 'islink("/tmp")' "islink('/tmp')" skipTest SkipTest skipUnless skipIf)
 for suite in "$repo"/tests/*_test.py "$repo"/tests/*_test.sh; do
   [ "$suite" != "$repo/tests/ci_local_test.sh" ] || continue # its own patterns would match
-  if grep -E 'uname|Darwin|sandbox_usable|sandbox-exec|skipUnless|skipIf|skipTest|SkipTest|skipped' "$suite" |
-     grep -Fv -e "@unittest.skipIf(sys.version_info < (3, 11)," \
-       -e "@unittest.skipUnless(Path('/usr/bin/python3').exists()," \
-       -e '@unittest.skipUnless(os.path.islink("/tmp"),' |
-     grep -Eq "@.*skip(Unless|If)|skipTest\(|SkipTest|echo .*$skip_word"; then
+  if printf '%s\n' "${host_terms[@]}" | grep -Fq -f - "$suite"; then
     name=${suite##*/}; name=${name%_test.*}
-    if [[ " $mac_only_suites " != *" $name "* ]]; then
-      echo "ci_local_test: RED Mac-only suite missing from mac_only_suites: $name" >&2
+    if [[ " $mac_only_suites " != *" $name "* ]] &&
+       [[ " ${host_terms_reviewed[*]} " != *" $name "* ]]; then
+      echo "ci_local_test: RED host-dependent suite missing from mac_only_suites or host_terms_reviewed: $name" >&2
       host_regressions=$((host_regressions + 1))
     fi
   fi

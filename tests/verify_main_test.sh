@@ -51,6 +51,7 @@ if [ -f "$VERIFY_TEST_TMP/cover" ]; then
   git -C "$VERIFY_TEST_TMP/remote.git" update-ref refs/green/main "$(git rev-parse HEAD)"
   git -C "$VERIFY_TEST_TMP/remote.git" update-ref -d refs/green/frozen
 fi
+if [ -f "$VERIFY_TEST_TMP/host-unavailable" ]; then exit 75; fi
 if [ -f RED ]; then exit 1; fi
 if [ -f "$VERIFY_TEST_TMP/flaky" ]; then rm "$VERIFY_TEST_TMP/flaky"; exit 1; fi
 CHECK
@@ -107,6 +108,29 @@ echo 'verify_main_test: release single-dash remote passed'
 run release-check nosuchref
 [ "$status" = 2 ] && [ "$(cat "$tmp/err")" = 'release-check: nosuchref is not a commit' ] || fail 'unknown commit'
 echo 'verify_main_test: usage passed'
+# An unavailable host must neither judge main nor change an existing freeze.
+for refs_state in absent existing; do
+  before_green=
+  before_frozen=
+  if [ "$refs_state" = existing ]; then
+    before_green=$head
+    before_frozen=$head
+    git -C "$tmp/remote.git" update-ref refs/green/main "$before_green"
+    git -C "$tmp/remote.git" update-ref refs/green/frozen "$before_frozen"
+    push_commit host-unavailable
+  fi
+  : > "$tmp/host-unavailable"
+  verify
+  expect 75 "verify-main: this host can't run the check (exit 75) — nothing judged, nothing pushed"
+  runs 1
+  ref_is refs/green/main "$before_green"
+  ref_is refs/green/frozen "$before_frozen"
+  no_scratch
+  rm "$tmp/host-unavailable"
+done
+git -C "$tmp/remote.git" update-ref -d refs/green/main
+git -C "$tmp/remote.git" update-ref -d refs/green/frozen
+echo 'verify_main_test: unavailable host exits 75 once, preserves remote refs and cleans scratch passed'
 verify
 expect 0 "green $head"
 ref_is refs/green/main "$head"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Exit codes: 0 green, current, covered or already running; 1 failed (nothing judged);
-# 2 usage; 5 red with one culprit; 6 red across several commits.
+# 2 usage; 5 red with one culprit; 6 red across several commits;
+# 75 the host can't run the check (nothing judged).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 usage() {
@@ -116,6 +117,10 @@ for attempt in 1 2; do
   echo "verify-main: checking ${head:0:12} ($description)"
   result=0
   (cd "$scratch/wt" && "${check[@]}") || result=$?
+  if [ "$result" = 75 ]; then
+    echo "verify-main: this host can't run the check (exit 75) — nothing judged, nothing pushed"
+    exit 75
+  fi
   if [ "$result" = 0 ]; then passed=true; break; fi
   if [ "$attempt" = 1 ]; then
     echo "verify-main: ${head:0:12} was red (exit $result); running it once more"
