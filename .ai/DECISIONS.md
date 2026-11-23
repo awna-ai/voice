@@ -748,11 +748,11 @@ Python and Rust mine and `voice record` keep `fence_folder`, the folded encoding
 path; `~text` other than `~` and `~/` is an ordinary name. Under a compartment map, recorded `work` keeps its
 resolved spelling beside the written one and both are checked; resolution follows links before `..`, as the
 filesystem does, so neither a link nor a fence written through one can hide it. A stored spelling is also
-checked against each fence's spelling with its parent's links
-resolved, so a fence written through a link hides a record stored by the real path. Stored spellings also
-match a `~` fence under any home, a fail-closed over-fence like VF45's; they must match `-[a-z0-9-]*` or
-the record is fenced. Re-checks read no file or folder, so a later fence hides stored records from `similar`
-and drops live lines; `chunk`, `split`, `merge` and `shingle` don't re-check yet (VF52). `chunk` leaves the
-spelling out of labeling files.
+checked against each fence's spelling with its parent's links resolved, so a fence written through a link
+hides a record stored by the real path. Stored spellings also match a `~` fence under any home, a
+fail-closed over-fence like VF45's; they must match `-[a-z0-9-]*` or the record is fenced. Re-checks read no
+record's folder, only the links on each fence's parent path (once per map), so a later fence hides stored
+records from `similar` and drops live lines; `chunk`, `split`, `merge` and `shingle` don't re-check yet
+(VF52). `chunk` leaves the spelling out of labeling files.
 Pre-VF48 records gain the spelling on re-mine; older relative-work live lines are dropped under any fence.
 The full path spelling, home included, stays in the member's private state. Rust writes the same spelling.
