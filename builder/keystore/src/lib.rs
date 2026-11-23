@@ -14,9 +14,20 @@ use std::{collections::HashMap, sync::Arc};
 #[derive(Debug, PartialEq, Eq)]
 pub struct NoStore;
 
+/// What the person's password manager shows for an item Voice stores under `service`.
+/// New services should add their line here.
+pub fn label(service: &str) -> String {
+    match service {
+        "voice.github" => "Voice: GitHub sign-in".to_owned(),
+        "voice.claude-console" => "Voice: Claude Console key".to_owned(),
+        _ => format!("Voice: {service}"),
+    }
+}
+
 pub struct System {
     store: Arc<CredentialStore>,
     modifiers: &'static [(&'static str, &'static str)],
+    labelled: bool,
 }
 
 impl System {
@@ -29,6 +40,7 @@ impl System {
         Ok(Self {
             store,
             modifiers: &[("persistence", "Local")],
+            labelled: false,
         })
     }
 
@@ -39,7 +51,8 @@ impl System {
         let store = zbus_secret_service_keyring_store::Store::new().map_err(|_| NoStore)?;
         Ok(Self {
             store,
-            modifiers: &[("label", "Voice: GitHub sign-in")],
+            modifiers: &[],
+            labelled: true,
         })
     }
 
@@ -53,11 +66,81 @@ impl System {
         Self {
             store,
             modifiers: &[],
+            labelled: false,
         }
     }
 
+    fn modifiers(&self, service: &str) -> HashMap<&'static str, String> {
+        let mut modifiers: HashMap<_, _> = self
+            .modifiers
+            .iter()
+            .map(|&(key, value)| (key, value.to_owned()))
+            .collect();
+        if self.labelled {
+            modifiers.insert("label", label(service));
+        }
+        modifiers
+    }
+
     pub fn entry(&self, service: &str, user: &str) -> Result<Entry> {
-        let modifiers: HashMap<&str, &str> = self.modifiers.iter().copied().collect();
+        let owned = self.modifiers(service);
+        let modifiers: HashMap<&str, &str> = owned
+            .iter()
+            .map(|(&key, value)| (key, value.as_str()))
+            .collect();
         self.store.build(service, user, Some(&modifiers))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_match_each_service() {
+        assert_eq!(label("voice.github"), "Voice: GitHub sign-in");
+        assert_eq!(label("voice.claude-console"), "Voice: Claude Console key");
+        assert_eq!(label("voice.one"), "Voice: voice.one");
+        assert_eq!(label("other.service"), "Voice: other.service");
+    }
+
+    #[test]
+    fn labelled_modifiers_match_each_service() {
+        let system = System {
+            store: keyring_core::mock::Store::new().unwrap(),
+            modifiers: &[],
+            labelled: true,
+        };
+        assert_eq!(
+            system.modifiers("voice.github"),
+            HashMap::from([("label", "Voice: GitHub sign-in".to_owned())])
+        );
+        assert_eq!(
+            system.modifiers("voice.claude-console"),
+            HashMap::from([("label", "Voice: Claude Console key".to_owned())])
+        );
+    }
+
+    #[test]
+    fn unlabelled_modifiers_are_empty_for_both_services() {
+        let system = System::over(keyring_core::mock::Store::new().unwrap());
+        assert!(system.modifiers("voice.github").is_empty());
+        assert!(system.modifiers("voice.claude-console").is_empty());
+    }
+
+    #[test]
+    fn labels_preserve_fixed_modifiers() {
+        let system = System {
+            store: keyring_core::mock::Store::new().unwrap(),
+            modifiers: &[("persistence", "Local")],
+            labelled: true,
+        };
+        assert_eq!(
+            system.modifiers("voice.claude-console"),
+            HashMap::from([
+                ("persistence", "Local".to_owned()),
+                ("label", "Voice: Claude Console key".to_owned()),
+            ])
+        );
     }
 }
