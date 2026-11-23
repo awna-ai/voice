@@ -1205,7 +1205,7 @@ mod tests {
             check_record(&member, &record).unwrap();
             for spelling in ["-", "-users-sam-projects-work", "-a0--z9-"] {
                 record.insert("fence_folder".into(), Value::from(spelling));
-                assert_eq!(record.keys().last().unwrap(), "fence_folder");
+                assert_eq!(record.keys().next_back().unwrap(), "fence_folder");
                 check_record(&member, &record).unwrap();
             }
             for spelling in [
