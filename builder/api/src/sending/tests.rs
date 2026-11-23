@@ -565,6 +565,26 @@ fn refused_delivery_moves_the_saved_cursor_and_missing_is_skipped() {
     assert_eq!(saved.after, 8);
 }
 #[test]
+fn delivered_record_with_fence_folder_is_accepted_and_preserved() {
+    let (h, s) = prepare_delivery();
+    let mut incoming = record("new", "Keep it small.");
+    incoming["fence_folder"] = json!("-users-sam-projects-work");
+    fs::write(
+        s.join("deliveries/history-1-1.jsonl"),
+        lines(std::slice::from_ref(&incoming)),
+    )
+    .unwrap();
+    let (saved, answer) = process(&h, delivery(1, 'a', "history-1-1.jsonl"));
+    assert_eq!(answer.taken, 1);
+    assert_eq!(answer.refused, 0);
+    assert_eq!(saved.computers[&"a".repeat(64)].records, 1);
+    let stored: Value =
+        serde_json::from_slice(&fs::read(s.join("decisions-from-aaaaaaaaaaaaaaaa.jsonl")).unwrap())
+            .unwrap();
+    assert_eq!(stored, incoming);
+}
+
+#[test]
 fn file_processor_merges_two_peers_and_repeated_delivery_is_harmless() {
     let (h, s) = prepare_delivery();
     let mut saved = Received::default();

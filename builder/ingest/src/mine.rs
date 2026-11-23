@@ -1179,6 +1179,54 @@ mod tests {
     }
 
     #[test]
+    fn check_record_validates_optional_fence_folder_for_each_writer_kind() {
+        let member =
+            voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();
+        let message = message_record("session", "now", "demo", "keep it small", "");
+        let mut question = serde_json::json!({"id":"question:abcdef012345", "kind":"question",
+            "timestamp":"now", "project":"demo", "header":"Pick", "question":"Which?",
+            "multiSelect":false, "options":[], "recommended":null, "picks":[],
+            "own_words":"", "notes":"", "outcome":"no_rec"})
+        .as_object()
+        .unwrap()
+        .clone();
+        question.insert(member.pick_field(), Value::Null);
+        for mut record in [message, question] {
+            check_record(&member, &record).unwrap();
+            for spelling in ["-", "-users-sam-projects-work", "-a0--z9-"] {
+                record.insert("fence_folder".into(), Value::from(spelling));
+                assert_eq!(record.keys().last().unwrap(), "fence_folder");
+                check_record(&member, &record).unwrap();
+            }
+            for spelling in [
+                Value::Null,
+                serde_json::json!(3),
+                serde_json::json!(true),
+                serde_json::json!([]),
+                serde_json::json!({}),
+                serde_json::json!(""),
+                serde_json::json!("x"),
+                serde_json::json!("/users/sam"),
+                serde_json::json!("-Users-sam"),
+                serde_json::json!("-café"),
+                serde_json::json!("-work\n"),
+            ] {
+                record.insert("fence_folder".into(), spelling.clone());
+                assert!(
+                    check_record(&member, &record).is_err(),
+                    "invalid {spelling}"
+                );
+            }
+            record.insert("fence_folder".into(), Value::from("-work"));
+            record.insert("fence_folder_resolved".into(), Value::from("-work"));
+            assert!(
+                check_record(&member, &record).is_err(),
+                "not a history writer field"
+            );
+        }
+    }
+
+    #[test]
     fn check_record_requires_writer_id_form_for_each_kind() {
         let member =
             voice_core::member::read_member(&repo().join("crew/_template/member.json")).unwrap();

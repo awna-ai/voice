@@ -2134,6 +2134,42 @@ class Compartments(unittest.TestCase):
         return {"timestamp": "2026-10-20T10:00:00Z", "work": "~/projects/work/notes/x.md",
                 "question": "Keep the review queue?", "ada_pick": "Keep it", "sam_answer": "Keep it", **changes}
 
+    def test_record_resolves_links_before_parent_components(self):
+        home = self.h.root.resolve() / "home"
+        work = home / "projects/work"
+        work.mkdir(parents=True)
+        (home / "elsewhere/a").mkdir(parents=True)
+        secret = home / "elsewhere/secret"
+        secret.mkdir()
+        (secret / "y.md").write_text("A fictional note.")
+        (work / "link").symlink_to(home / "elsewhere/a", target_is_directory=True)
+        self.config["follow"] = ["~"]
+        self.h.write("private.json", {"sources": [{"name": "live", "kind": "live", "consent": "2026-10-20"}]})
+        with patch.dict(os.environ, {"HOME": str(home)}):
+            self.save_config()
+            def cli(*args):
+                return self.h.run(CREW, "--member", self.member, *args, env={"HOME": str(home)})
+            proc = cli("record", "--work", "~/projects/work/link/../secret/y.md", "--kind", "escalated",
+                       "--category", "scope", "--tier", "low", "--question", "Keep the review queue?",
+                       "--ada-pick", "Keep it", "--sam-answer", "Keep it")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            line = json.loads(self.h.read("state/live.jsonl"))
+            with self.subTest(field="fence_folder"):
+                self.assertEqual(line["fence_folder"], self.c.fold(self.c.encode(work / "secret/y.md")))
+            with self.subTest(field="fence_folder_resolved"):
+                self.assertEqual(line.get("fence_folder_resolved"), self.c.fold(self.c.encode(secret / "y.md")))
+            with self.subTest(field="compartment"):
+                self.assertNotEqual(line["compartment"], "work")
+            proc = cli("sources", "mine")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("kept 1 answers", proc.stdout)
+            self.config["fenced"].append("~/elsewhere/secret")
+            self.save_config()
+            proc = cli("similar", "--compartment", "all", "--corpus", "state/decisions-live.jsonl",
+                       "--query", "Keep the review queue?", "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout), [])
+
     def test_real_path_record_is_hidden_by_a_later_link_parent_fence(self):
         home = self.h.root.resolve() / "home"
         target = home / "projects/acme"
