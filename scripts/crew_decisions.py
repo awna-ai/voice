@@ -2094,10 +2094,11 @@ def cmd_record(m, args):
     compartment = None
     spelling_path = lexical_path(values["work"], cwd_of(args))
     if m.compartments is not None:
-        compartment = path_compartment(m.compartments, spelling_path, "/")
+        written_path = absolute_path(values["work"], absolute_path(cwd_of(args), os.getcwd()))
+        compartment = path_compartment(m.compartments, written_path, "/")
         if compartment == "fenced":
             raise Fenced("refusing: fenced")
-        resolved_path = safe_resolve(m.compartments, spelling_path, "/")[0]
+        resolved_path = safe_resolve(m.compartments, written_path, "/")[0]
     line = {"timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "work": values["work"],
             "kind": values["kind"], "category": values["category"], "tier": values["tier"], "question": values["question"],
             m.pick_field: values["pick"], "rule": values.get("rule"), m.answer_field: values.get("answer"),

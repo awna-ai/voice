@@ -746,8 +746,9 @@ is never re-checked; both gaps are VF48.
 
 Python and Rust mine and `voice record` keep `fence_folder`, the folded encoding of the normalised absolute
 path; `~text` other than `~` and `~/` is an ordinary name. Under a compartment map, recorded `work` keeps its
-resolved spelling beside the written one and both are checked, so neither a link nor a fence written through
-one can hide it. A stored spelling is also checked against each fence's spelling with its parent's links
+resolved spelling beside the written one and both are checked; resolution follows links before `..`, as the
+filesystem does, so neither a link nor a fence written through one can hide it. A stored spelling is also
+checked against each fence's spelling with its parent's links
 resolved, so a fence written through a link hides a record stored by the real path. Stored spellings also
 match a `~` fence under any home, a fail-closed over-fence like VF45's; they must match `-[a-z0-9-]*` or
 the record is fenced. Re-checks read no file or folder, so a later fence hides stored records from `similar`

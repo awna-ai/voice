@@ -661,11 +661,21 @@ pub fn check_record(member: &Member, record: &Map<String, Value>) -> Result<()> 
     let pick_field = member.pick_field();
     if record.keys().any(|key| {
         !strings.contains(&key.as_str())
-            && !["kind", "split"].contains(&key.as_str())
+            && !["kind", "split", "fence_folder"].contains(&key.as_str())
             && !(kind == "question"
                 && (["multiSelect", "options", "recommended", "picks", "outcome"]
                     .contains(&key.as_str())
                     || key == &pick_field))
+    }) {
+        return Err(invalid());
+    }
+    if record.get("fence_folder").is_some_and(|value| {
+        !value.as_str().is_some_and(|spelling| {
+            spelling.strip_prefix('-').is_some_and(|rest| {
+                rest.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            })
+        })
     }) {
         return Err(invalid());
     }
