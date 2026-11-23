@@ -4,8 +4,7 @@ One record per slice, newest first. Paraphrase only; no real person.
 
 ## VF48: a stored record keeps its folder spelling, re-checked against the fences when it is read (2026-11-21, lane: V1)
 
-- **Status: fix-up 4 owed** (brief `plans/briefs/VF48-fixup-4.md`), then a delta Verifier (Opus) and the full
-  `ci-local.sh` land.
+- **Status: built and verified; land started** (full `ci-local.sh`, detached; V-Q26's rule).
 - **The gap (from VF45's Verifiers):** a stored record a later fence covers was served when its project name
   couldn't show the fence: a message whose cwd was inside the new fence while its transcript folder was not, and
   a live record saved under a declared compartment (its project is always `live`; `live_record` never looked at
@@ -42,6 +41,21 @@ One record per slice, newest first. Paraphrase only; no real person.
   `fold`), and `cmd_record` resolves the lexically normalised path, so `link/..` names the wrong folder. Her
   five fix-up 2 checks all held (each reproduced live), mutations 11 of 11 red, Python 299 OK, voice-ingest lib
   63/64, fmt and clippy clean (provider-reported). Fix-up 3 has had no Verifier yet.
+- **Run `203427-r1` (2026-11-22): fix-up 4** (Codex, brief `plans/briefs/VF48-fixup-4.md`): tests `e3c59f7`,
+  code `e847a16`, a clippy fix `22f0585`. The Rust `check_record` accepts an optional `fence_folder` matching
+  `-[a-z0-9-]*`, Python's rule, and refuses any other value; `fence_folder_resolved` stays refused, since only
+  `decisions-claude-code.jsonl` (history) is ever sent and checked. `record` resolves the written path, so a link
+  is followed before `..`; the cwd is made absolute first (`absolute_path(cwd_of(args), os.getcwd())`), because
+  the brief's bare form left a relative `--cwd` relative, which `"/"` would then have resolved wrongly.
+  `fence_folder` stays the lexical spelling. Codex (provider-reported): Python 423 passed, 9 skipped; the three
+  brief mutations red; the delivery case green. **Security review on fix-ups 3 and 4:** no must-fix; the
+  DECISIONS claim "re-checks read no file or folder" was wrong after fix-up 3 (they lstat each fence's parent
+  links, once per map), reworded in `ac9d429`; the Rust `voice record` has no compartment handling (already
+  VF53); a note: `record` resolves the path twice, so a link swapped in between can only mislabel an unfenced
+  compartment, never store a fenced record unfenced (not fixed). **Delta Verifier (Opus) on `e847a16`: PASS**,
+  both must-fixes confirmed; she ran `Compartments` 143 OK and the `check_record` (7) and `delivered` (13) Rust
+  tests (measured); her mutations were reasoned, not run. Her one should-fix was the same DECISIONS wording.
+- **Not verified before the land:** the full `ci-local.sh` (the land runs it).
 - **Filed:** VF50 `a76xuVeE` (multi-character case folds such as U+0130 are not matched by `dashed_in`; the
   Verifier's low finding, VF44's family).
 
